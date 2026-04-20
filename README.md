@@ -19,10 +19,10 @@ The current MVP targets one Renode-backed demo board:
 
 - `NUCLEO-H753ZI`
 - selectable external `Button` on free pads across `CN7`, `CN8`, `CN9`, `CN10`, `CN11`, and `CN12`
-- selectable external `LED` on the same routed header pads
+- selectable external `LED`, `Buzzer`, and grouped `RGB LED` outputs on the same routed header pads
 - a default pin chooser that surfaces the most common teaching-friendly pads first
 - any already-connected pad remains visible even when the full pinout is collapsed
-- board top view with a more Wokwi-like workbench area, live hotspots, and pad highlights
+- board top view with a more Wokwi-like workbench area, live hotspots, grouped multi-endpoint devices, and pad highlights
 - local `arm-none-eabi-gcc` compilation with generated startup and linker files
 - local Renode launch through the bundled `renode/renode/renode.exe` when present
 - GDB server enabled on port `3333`
@@ -72,14 +72,14 @@ The helper launcher `scripts/run-local.ps1` will install dependencies automatica
 
 ## Demo flow
 
-1. Drag a `Button` template from the peripheral library into the workbench area below the board, or click `Add Button`.
+1. Drag a `Button`, `LED`, `Buzzer`, or `RGB LED` template from the peripheral library into the workbench area below the board, or click the matching add button.
 2. Pull the device's cyan wire stub directly onto a hotspot on the board canvas, or use the pin chooser on the lower half of the UI.
 3. Drag the device card around the workbench until the layout feels right.
-4. Drag in an `LED`, wire it to another pad, and choose which button drives it.
+4. For `Buzzer` and `RGB LED`, choose which button drives each output endpoint from the rack below the board.
 5. If you need a less common GPIO, click `Show Full Pinout`.
 6. The app regenerates `main.c`, `board.repl`, and the Renode launch preview from that wiring.
 7. Click `Compile`, then `Start`.
-8. Press and hold the external button card in the board canvas and watch the LED card update in real time.
+8. Press and hold the external button card in the board canvas and watch the output cards update in real time.
 
 ## Smoke test
 
@@ -120,7 +120,7 @@ npm run start
   - GPIO state read/write for live peripherals
 - `src/App.tsx`
   - NUCLEO-H753ZI board UI with common-pin-first wiring UX
-  - draggable peripherals, drag-in templates, and wire-stub hotspots for more Wokwi-like placement
+  - draggable peripherals, drag-in templates, grouped RGB devices, and wire-stub hotspots for more Wokwi-like placement
   - code editor
   - compile/run controls
   - live status/log rendering
@@ -138,6 +138,7 @@ npm run start
 - default pin selection follows the Wokwi idea of exposing the most useful pads first
 - external devices can be dragged in from the library and repositioned directly on the board canvas
 - each external device has a draggable wire stub that can be dropped on a board hotspot
+- grouped devices such as `RGB LED` share one workbench card while still exposing multiple GPIO endpoints
 - button presses go through Renode external control
 - LED state is polled back from Renode and updates the board view
 - `npm run smoke` validates compile -> simulate -> interact -> debug end to end

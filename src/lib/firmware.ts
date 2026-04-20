@@ -58,6 +58,7 @@ export type DemoBoardPin = {
 };
 
 export type DemoPeripheralKind = 'button' | 'led';
+export type DemoPeripheralTemplateKind = 'button' | 'led' | 'buzzer' | 'rgb-led';
 
 export type DemoPeripheral = {
   id: string;
@@ -65,6 +66,12 @@ export type DemoPeripheral = {
   label: string;
   padId: string | null;
   sourcePeripheralId: string | null;
+  templateKind?: DemoPeripheralTemplateKind;
+  groupId?: string | null;
+  groupLabel?: string | null;
+  endpointId?: string | null;
+  endpointLabel?: string | null;
+  accentColor?: string | null;
 };
 
 export type DemoPeripheralManifestEntry = {
@@ -569,6 +576,12 @@ export const DEFAULT_DEMO_WIRING: DemoWiring = {
       label: 'Button 1',
       padId: 'CN10-3',
       sourcePeripheralId: null,
+      templateKind: 'button',
+      groupId: null,
+      groupLabel: null,
+      endpointId: 'signal',
+      endpointLabel: 'SIG',
+      accentColor: '#d946ef',
     },
     {
       id: 'led-1',
@@ -576,6 +589,12 @@ export const DEFAULT_DEMO_WIRING: DemoWiring = {
       label: 'LED 1',
       padId: 'CN7-10',
       sourcePeripheralId: 'button-1',
+      templateKind: 'led',
+      groupId: null,
+      groupLabel: null,
+      endpointId: 'signal',
+      endpointLabel: 'SIG',
+      accentColor: '#f59e0b',
     },
   ],
 };
@@ -586,14 +605,94 @@ function sanitizeIdentifier(value: string): string {
   return value.replace(/[^a-z0-9_]+/gi, '_');
 }
 
-export function createPeripheral(kind: DemoPeripheralKind, ordinal: number): DemoPeripheral {
+export function getPeripheralTemplateKind(peripheral: DemoPeripheral): DemoPeripheralTemplateKind {
+  if (peripheral.templateKind) {
+    return peripheral.templateKind;
+  }
+  return peripheral.kind === 'button' ? 'button' : 'led';
+}
+
+function buildSinglePeripheral(
+  templateKind: DemoPeripheralTemplateKind,
+  ordinal: number,
+  options?: Partial<DemoPeripheral>
+): DemoPeripheral {
+  const kind = templateKind === 'button' ? 'button' : 'led';
+  const defaultLabel =
+    templateKind === 'button'
+      ? `Button ${ordinal}`
+      : templateKind === 'buzzer'
+        ? `Buzzer ${ordinal}`
+        : `LED ${ordinal}`;
+  const defaultEndpointLabel = templateKind === 'button' ? 'SIG' : templateKind === 'buzzer' ? 'OUT' : 'SIG';
+  const defaultAccent =
+    templateKind === 'button' ? '#d946ef' : templateKind === 'buzzer' ? '#14b8a6' : '#f59e0b';
+
   return {
-    id: `${kind}-${ordinal}`,
+    id: `${templateKind}-${ordinal}`,
     kind,
-    label: `${kind === 'button' ? 'Button' : 'LED'} ${ordinal}`,
+    label: options?.label ?? defaultLabel,
     padId: null,
-    sourcePeripheralId: null,
+    sourcePeripheralId: kind === 'led' ? options?.sourcePeripheralId ?? null : null,
+    templateKind,
+    groupId: null,
+    groupLabel: null,
+    endpointId: options?.endpointId ?? 'signal',
+    endpointLabel: options?.endpointLabel ?? defaultEndpointLabel,
+    accentColor: options?.accentColor ?? defaultAccent,
+    ...options,
   };
+}
+
+export function createPeripheralTemplate(templateKind: DemoPeripheralTemplateKind, ordinal: number): DemoPeripheral[] {
+  if (templateKind === 'rgb-led') {
+    const groupId = `rgb-led-${ordinal}`;
+    const groupLabel = `RGB LED ${ordinal}`;
+    return [
+      {
+        ...buildSinglePeripheral('led', ordinal, {
+          id: `${groupId}-r`,
+          label: groupLabel,
+          templateKind: 'rgb-led',
+          groupId,
+          groupLabel,
+          endpointId: 'red',
+          endpointLabel: 'RED',
+          accentColor: '#ef4444',
+        }),
+      },
+      {
+        ...buildSinglePeripheral('led', ordinal, {
+          id: `${groupId}-g`,
+          label: groupLabel,
+          templateKind: 'rgb-led',
+          groupId,
+          groupLabel,
+          endpointId: 'green',
+          endpointLabel: 'GREEN',
+          accentColor: '#22c55e',
+        }),
+      },
+      {
+        ...buildSinglePeripheral('led', ordinal, {
+          id: `${groupId}-b`,
+          label: groupLabel,
+          templateKind: 'rgb-led',
+          groupId,
+          groupLabel,
+          endpointId: 'blue',
+          endpointLabel: 'BLUE',
+          accentColor: '#3b82f6',
+        }),
+      },
+    ];
+  }
+
+  return [buildSinglePeripheral(templateKind, ordinal)];
+}
+
+export function createPeripheral(kind: DemoPeripheralKind, ordinal: number): DemoPeripheral {
+  return createPeripheralTemplate(kind, ordinal)[0];
 }
 
 export function getPeripheralsByKind(wiring: DemoWiring, kind: DemoPeripheralKind): DemoPeripheral[] {
@@ -629,11 +728,15 @@ function resolvePeripheralPin(peripheral: DemoPeripheral): DemoBoardPin {
 export function buildPeripheralManifest(wiring: DemoWiring): DemoPeripheralManifestEntry[] {
   return getConnectedPeripherals(wiring).map((peripheral) => {
     const pin = resolvePeripheralPin(peripheral);
+    const templateKind = getPeripheralTemplateKind(peripheral);
+    const manifestLabel =
+      templateKind === 'rgb-led' && peripheral.endpointLabel ? `${peripheral.label} ${peripheral.endpointLabel}` : peripheral.label;
+    const renodeType = peripheral.kind === 'button' ? 'Button' : templateKind === 'buzzer' ? 'Buzzer' : 'Led';
     return {
       id: peripheral.id,
       kind: peripheral.kind,
-      label: peripheral.label,
-      renodeName: `external${peripheral.kind === 'button' ? 'Button' : 'Led'}__${sanitizeIdentifier(peripheral.id)}`,
+      label: manifestLabel,
+      renodeName: `external${renodeType}__${sanitizeIdentifier(peripheral.id)}`,
       gpioPortName: `gpioPort${pin.portLetter}`,
       gpioNumber: pin.number,
       mcuPinId: pin.id,
@@ -691,7 +794,8 @@ export function describePad(pad: DemoBoardPad): string {
 
 export function describePeripheral(peripheral: DemoPeripheral): string {
   const padSummary = peripheral.padId ? describePad(resolveSelectablePad(peripheral.padId)) : 'not connected';
-  return `${peripheral.label} (${padSummary})`;
+  const endpointSummary = peripheral.endpointLabel ? ` ${peripheral.endpointLabel}` : '';
+  return `${peripheral.label}${endpointSummary} (${padSummary})`;
 }
 
 function buildPortEnableMaskExpression(pins: DemoBoardPin[]): string {
