@@ -6,6 +6,7 @@ It keeps the visual workflow from the original prototype, but moves execution in
 
 - Wokwi-like wiring UX: common pads first, full pinout on demand
 - pin-level placement on a real `NUCLEO-H753ZI` connector layout
+- drag-in peripheral templates and wire-stub-to-pad gestures on the main canvas
 - auto-generated Renode `.repl` and `.resc`
 - local ARM GCC compilation
 - local Renode startup
@@ -21,7 +22,7 @@ The current MVP targets one Renode-backed demo board:
 - selectable external `LED` on the same routed header pads
 - a default pin chooser that surfaces the most common teaching-friendly pads first
 - any already-connected pad remains visible even when the full pinout is collapsed
-- board top-view locator that mirrors those connector groups and highlights the selected pads
+- board top view with a more Wokwi-like workbench area, live hotspots, and pad highlights
 - local `arm-none-eabi-gcc` compilation with generated startup and linker files
 - local Renode launch through the bundled `renode/renode/renode.exe` when present
 - GDB server enabled on port `3333`
@@ -71,10 +72,10 @@ The helper launcher `scripts/run-local.ps1` will install dependencies automatica
 
 ## Demo flow
 
-1. Click `Add Button`, then use `Connect wire` on that new device.
-2. Click a hotspot directly on the board canvas, or use the pin chooser on the lower half of the UI.
-3. Drag the new device card around the canvas until the wiring layout feels right.
-4. Click `Add LED`, wire it to another pad, and choose which button drives it.
+1. Drag a `Button` template from the peripheral library into the workbench area below the board, or click `Add Button`.
+2. Pull the device's cyan wire stub directly onto a hotspot on the board canvas, or use the pin chooser on the lower half of the UI.
+3. Drag the device card around the workbench until the layout feels right.
+4. Drag in an `LED`, wire it to another pad, and choose which button drives it.
 5. If you need a less common GPIO, click `Show Full Pinout`.
 6. The app regenerates `main.c`, `board.repl`, and the Renode launch preview from that wiring.
 7. Click `Compile`, then `Start`.
@@ -119,7 +120,7 @@ npm run start
   - GPIO state read/write for live peripherals
 - `src/App.tsx`
   - NUCLEO-H753ZI board UI with common-pin-first wiring UX
-  - draggable peripherals and canvas hotspots for more Wokwi-like placement
+  - draggable peripherals, drag-in templates, and wire-stub hotspots for more Wokwi-like placement
   - code editor
   - compile/run controls
   - live status/log rendering
@@ -135,7 +136,8 @@ npm run start
 - renderer no longer uses the old fake LED simulation loop
 - connector-pad selection regenerates both bare-metal firmware and Renode platform wiring
 - default pin selection follows the Wokwi idea of exposing the most useful pads first
-- external devices can be repositioned directly on the board canvas
+- external devices can be dragged in from the library and repositioned directly on the board canvas
+- each external device has a draggable wire stub that can be dropped on a board hotspot
 - button presses go through Renode external control
 - LED state is polled back from Renode and updates the board view
 - `npm run smoke` validates compile -> simulate -> interact -> debug end to end

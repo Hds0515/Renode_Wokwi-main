@@ -8,7 +8,6 @@ import {
   Lightbulb,
   LoaderCircle,
   Play,
-  Plus,
   RefreshCcw,
   Save,
   Square,
@@ -164,12 +163,23 @@ const PERIPHERALS_PER_ROW = 4;
 const PERIPHERAL_ROW_GAP = 18;
 const PAD_HOTSPOT_SIZE = 18;
 const PAD_HOVER_LABEL_WIDTH = 140;
+const BOARD_TOP_VIEW_HEIGHT = 312;
+const LIBRARY_TEMPLATE_MIME = 'application/x-local-wokwi-peripheral';
 
 const createLogEntry = (message: string, level: RuntimeLog['level'] = 'info'): RuntimeLog => ({
   id: Date.now() + Math.floor(Math.random() * 1000),
   level,
   message,
 });
+
+function getCanvasHeightForPeripheralCount(count: number) {
+  const rows = Math.max(1, Math.ceil(Math.max(count, 1) / PERIPHERALS_PER_ROW));
+  return BOARD_CANVAS_BASE_HEIGHT + Math.max(0, rows - 1) * (PERIPHERAL_CARD_HEIGHT + PERIPHERAL_ROW_GAP);
+}
+
+function parseLibraryTemplateKind(rawValue: string | null | undefined): DemoPeripheralKind | null {
+  return rawValue === 'button' || rawValue === 'led' ? rawValue : null;
+}
 
 function ToolBadge({ label, status }: { label: string; status: ToolingStatus | null }) {
   if (!status) {
@@ -527,7 +537,7 @@ function createDefaultPeripheralPosition(index: number): PeripheralPosition {
   const row = Math.floor(index / PERIPHERALS_PER_ROW);
   const column = index % PERIPHERALS_PER_ROW;
   const startX = 96;
-  const startY = 376 + row * (PERIPHERAL_CARD_HEIGHT + PERIPHERAL_ROW_GAP);
+  const startY = BOARD_TOP_VIEW_HEIGHT + 52 + row * (PERIPHERAL_CARD_HEIGHT + PERIPHERAL_ROW_GAP);
   const x = startX + column * (PERIPHERAL_CARD_WIDTH + 18);
   const y = startY;
   return { x, y };
@@ -536,7 +546,7 @@ function createDefaultPeripheralPosition(index: number): PeripheralPosition {
 function clampPeripheralPosition(position: PeripheralPosition, canvasHeight: number): PeripheralPosition {
   return {
     x: Math.max(24, Math.min(BOARD_CANVAS_WIDTH - PERIPHERAL_CARD_WIDTH - 24, position.x)),
-    y: Math.max(330, Math.min(canvasHeight - PERIPHERAL_CARD_HEIGHT - 12, position.y)),
+    y: Math.max(BOARD_TOP_VIEW_HEIGHT + 28, Math.min(canvasHeight - PERIPHERAL_CARD_HEIGHT - 12, position.y)),
   };
 }
 
@@ -753,6 +763,84 @@ function PeripheralRackCard({
   );
 }
 
+function PeripheralLibraryCard({
+  kind,
+  disabled,
+  onAdd,
+  onDragStateChange,
+}: {
+  kind: DemoPeripheralKind;
+  disabled: boolean;
+  onAdd: () => void;
+  onDragStateChange: (kind: DemoPeripheralKind | null) => void;
+}) {
+  const palette =
+    kind === 'button'
+      ? {
+          title: 'Button',
+          subtitle: 'Momentary digital input',
+          accent: 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-100 hover:bg-fuchsia-500/20',
+          ghost: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700',
+          icon: ToggleLeft,
+        }
+      : {
+          title: 'LED',
+          subtitle: 'Visual digital output',
+          accent: 'border-amber-500/40 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20',
+          ghost: 'border-amber-200 bg-amber-50 text-amber-700',
+          icon: Lightbulb,
+        };
+  const Icon = palette.icon;
+
+  return (
+    <div
+      draggable={!disabled}
+      onDragStart={(event) => {
+        if (disabled) {
+          event.preventDefault();
+          return;
+        }
+        event.dataTransfer.effectAllowed = 'copy';
+        event.dataTransfer.setData(LIBRARY_TEMPLATE_MIME, kind);
+        event.dataTransfer.setData('text/plain', kind);
+        onDragStateChange(kind);
+      }}
+      onDragEnd={() => onDragStateChange(null)}
+      className={`rounded-[28px] border px-4 py-4 transition ${
+        disabled ? 'cursor-not-allowed border-slate-800 bg-slate-900/50 text-slate-500' : `${palette.accent} cursor-grab active:cursor-grabbing`
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className={`rounded-2xl border px-3 py-2 ${disabled ? 'border-current/15 bg-black/10' : palette.ghost}`}>
+          <Icon size={18} />
+        </div>
+        <div className="rounded-full border border-current/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]">
+          Drag in
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <div className="text-sm font-semibold">{palette.title}</div>
+        <div className="mt-1 text-xs text-current/75">{palette.subtitle}</div>
+      </div>
+
+      <div className="mt-4 rounded-2xl border border-current/15 bg-black/10 px-3 py-2 text-[11px] text-current/75">
+        Drag this part into the workbench, or click below to spawn one instantly.
+      </div>
+
+      <button
+        onClick={onAdd}
+        disabled={disabled}
+        className={`mt-4 w-full rounded-2xl border px-3 py-2 text-sm font-medium transition ${
+          disabled ? 'cursor-not-allowed border-current/10 bg-black/5 text-current/45' : 'border-current/20 bg-black/10 hover:bg-white/10'
+        }`}
+      >
+        Add {palette.title}
+      </button>
+    </div>
+  );
+}
+
 function BoardTopView({
   wiring,
   ledStates,
@@ -760,10 +848,13 @@ function BoardTopView({
   peripheralPositions,
   visiblePads,
   armedPeripheralId,
+  libraryDragKind,
   simulationRunning,
   onAssignPad,
+  onAssignPadToPeripheral,
+  onCreatePeripheral,
+  onBeginWiring,
   onMovePeripheral,
-  onArmPeripheral,
   onPressPeripheral,
 }: {
   wiring: DemoWiring;
@@ -772,28 +863,57 @@ function BoardTopView({
   peripheralPositions: Record<string, PeripheralPosition>;
   visiblePads: DemoBoardPad[];
   armedPeripheralId: string | null;
+  libraryDragKind: DemoPeripheralKind | null;
   simulationRunning: boolean;
   onAssignPad: (pad: DemoBoardPad) => void;
+  onAssignPadToPeripheral: (peripheralId: string, pad: DemoBoardPad) => void;
+  onCreatePeripheral: (kind: DemoPeripheralKind, position: PeripheralPosition) => void;
+  onBeginWiring: (peripheralId: string) => void;
   onMovePeripheral: (peripheralId: string, position: PeripheralPosition) => void;
-  onArmPeripheral: (peripheralId: string) => void;
   onPressPeripheral: (peripheralId: string, pressed: boolean) => void;
 }) {
-  const rows = Math.max(1, Math.ceil(Math.max(wiring.peripherals.length, 1) / PERIPHERALS_PER_ROW));
-  const canvasHeight = BOARD_CANVAS_BASE_HEIGHT + Math.max(0, rows - 1) * (PERIPHERAL_CARD_HEIGHT + PERIPHERAL_ROW_GAP);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const dragStateRef = useRef<{
+  const canvasHeight = getCanvasHeightForPeripheralCount(wiring.peripherals.length);
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const deviceDragStateRef = useRef<{
     peripheralId: string;
     pointerId: number;
     offsetX: number;
     offsetY: number;
   } | null>(null);
+  const wireDragStateRef = useRef<{
+    peripheralId: string;
+    pointerId: number;
+  } | null>(null);
   const [hoveredPadId, setHoveredPadId] = useState<string | null>(null);
   const [pointerPosition, setPointerPosition] = useState<{ x: number; y: number } | null>(null);
+  const [libraryPreviewPosition, setLibraryPreviewPosition] = useState<PeripheralPosition | null>(null);
 
   const resolveCanvasPosition = useCallback(
     (peripheral: DemoPeripheral, index: number) =>
       clampPeripheralPosition(peripheralPositions[peripheral.id] ?? createDefaultPeripheralPosition(index), canvasHeight),
     [canvasHeight, peripheralPositions]
+  );
+
+  const resolveBoardPointFromClient = useCallback((clientX: number, clientY: number) => {
+    if (!surfaceRef.current) {
+      return null;
+    }
+
+    const rect = surfaceRef.current.getBoundingClientRect();
+    return {
+      x: clientX - rect.left,
+      y: clientY - rect.top,
+    };
+  }, []);
+
+  const resolvePadFromClient = useCallback(
+    (clientX: number, clientY: number) => {
+      const element = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+      const padElement = element?.closest('[data-board-pad-id]') as HTMLElement | null;
+      const padId = padElement?.dataset.boardPadId;
+      return padId ? visiblePads.find((pad) => pad.id === padId) ?? null : null;
+    },
+    [visiblePads]
   );
 
   const wires = useMemo(
@@ -813,7 +933,7 @@ function BoardTopView({
             path: buildWirePath(cardAnchor, padAnchor),
           };
         })
-        .filter(Boolean) as Array<{ id: string; kind: DemoPeripheralKind; path: string }>,
+      .filter(Boolean) as Array<{ id: string; kind: DemoPeripheralKind; path: string }>,
     [resolveCanvasPosition, wiring]
   );
 
@@ -840,12 +960,12 @@ function BoardTopView({
 
   const beginPeripheralDrag = useCallback(
     (peripheralId: string, position: PeripheralPosition, event: React.PointerEvent<HTMLDivElement>) => {
-      if (simulationRunning || !containerRef.current) {
+      if (simulationRunning || !surfaceRef.current) {
         return;
       }
 
-      const rect = containerRef.current.getBoundingClientRect();
-      dragStateRef.current = {
+      const rect = surfaceRef.current.getBoundingClientRect();
+      deviceDragStateRef.current = {
         peripheralId,
         pointerId: event.pointerId,
         offsetX: event.clientX - rect.left - position.x,
@@ -858,12 +978,12 @@ function BoardTopView({
 
   const updatePeripheralDrag = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
-      const dragState = dragStateRef.current;
-      if (!dragState || dragState.pointerId !== event.pointerId || !containerRef.current) {
+      const dragState = deviceDragStateRef.current;
+      if (!dragState || dragState.pointerId !== event.pointerId || !surfaceRef.current) {
         return;
       }
 
-      const rect = containerRef.current.getBoundingClientRect();
+      const rect = surfaceRef.current.getBoundingClientRect();
       onMovePeripheral(dragState.peripheralId, {
         x: event.clientX - rect.left - dragState.offsetX,
         y: event.clientY - rect.top - dragState.offsetY,
@@ -873,80 +993,246 @@ function BoardTopView({
   );
 
   const endPeripheralDrag = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    const dragState = dragStateRef.current;
+    const dragState = deviceDragStateRef.current;
     if (!dragState || dragState.pointerId !== event.pointerId) {
       return;
     }
 
-    dragStateRef.current = null;
+    deviceDragStateRef.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
   }, []);
 
-  const trackPointerPreview = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (!armedPeripheralId || !containerRef.current) {
+  const beginWireDrag = useCallback(
+    (peripheralId: string, event: React.PointerEvent<HTMLButtonElement>) => {
+      if (simulationRunning) {
         return;
       }
 
-      const rect = containerRef.current.getBoundingClientRect();
-      setPointerPosition({
-        x: event.clientX - rect.left,
-        y: event.clientY - rect.top,
-      });
+      wireDragStateRef.current = {
+        peripheralId,
+        pointerId: event.pointerId,
+      };
+      onBeginWiring(peripheralId);
+      event.currentTarget.setPointerCapture(event.pointerId);
+      const nextPoint = resolveBoardPointFromClient(event.clientX, event.clientY);
+      if (nextPoint) {
+        setPointerPosition(nextPoint);
+      }
+      const pointedPad = resolvePadFromClient(event.clientX, event.clientY);
+      setHoveredPadId(pointedPad?.id ?? null);
     },
-    [armedPeripheralId]
+    [onBeginWiring, resolveBoardPointFromClient, resolvePadFromClient, simulationRunning]
   );
+
+  const updateWireDrag = useCallback(
+    (event: React.PointerEvent<HTMLButtonElement>) => {
+      const dragState = wireDragStateRef.current;
+      if (!dragState || dragState.pointerId !== event.pointerId) {
+        return;
+      }
+
+      const nextPoint = resolveBoardPointFromClient(event.clientX, event.clientY);
+      if (nextPoint) {
+        setPointerPosition(nextPoint);
+      }
+      const pointedPad = resolvePadFromClient(event.clientX, event.clientY);
+      setHoveredPadId(pointedPad?.id ?? null);
+    },
+    [resolveBoardPointFromClient, resolvePadFromClient]
+  );
+
+  const endWireDrag = useCallback(
+    (event: React.PointerEvent<HTMLButtonElement>) => {
+      const dragState = wireDragStateRef.current;
+      if (!dragState || dragState.pointerId !== event.pointerId) {
+        return;
+      }
+
+      wireDragStateRef.current = null;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+
+      const pointedPad = resolvePadFromClient(event.clientX, event.clientY);
+      if (pointedPad) {
+        onAssignPadToPeripheral(dragState.peripheralId, pointedPad);
+      }
+      setHoveredPadId(null);
+      setPointerPosition(null);
+    },
+    [onAssignPadToPeripheral, resolvePadFromClient]
+  );
+
+  const trackPointerPreview = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!armedPeripheralId || !surfaceRef.current || wireDragStateRef.current) {
+        return;
+      }
+
+      const nextPoint = resolveBoardPointFromClient(event.clientX, event.clientY);
+      if (nextPoint) {
+        setPointerPosition(nextPoint);
+      }
+      const pointedPad = resolvePadFromClient(event.clientX, event.clientY);
+      setHoveredPadId(pointedPad?.id ?? null);
+    },
+    [armedPeripheralId, resolveBoardPointFromClient, resolvePadFromClient]
+  );
+
+  const handleLibraryDragOver = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      const droppedKind = libraryDragKind ?? parseLibraryTemplateKind(event.dataTransfer.getData(LIBRARY_TEMPLATE_MIME));
+      if (!droppedKind || simulationRunning) {
+        return;
+      }
+
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+      const nextPoint = resolveBoardPointFromClient(event.clientX, event.clientY);
+      if (!nextPoint) {
+        return;
+      }
+
+      setLibraryPreviewPosition(
+        clampPeripheralPosition(
+          {
+            x: nextPoint.x - PERIPHERAL_CARD_WIDTH / 2,
+            y: nextPoint.y - PERIPHERAL_CARD_HEIGHT / 2,
+          },
+          canvasHeight
+        )
+      );
+    },
+    [canvasHeight, libraryDragKind, resolveBoardPointFromClient, simulationRunning]
+  );
+
+  const handleLibraryDrop = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      const droppedKind = libraryDragKind ?? parseLibraryTemplateKind(event.dataTransfer.getData(LIBRARY_TEMPLATE_MIME));
+      if (!droppedKind || simulationRunning) {
+        return;
+      }
+
+      event.preventDefault();
+      const nextPoint = resolveBoardPointFromClient(event.clientX, event.clientY);
+      if (!nextPoint) {
+        return;
+      }
+
+      onCreatePeripheral(
+        droppedKind,
+        clampPeripheralPosition(
+          {
+            x: nextPoint.x - PERIPHERAL_CARD_WIDTH / 2,
+            y: nextPoint.y - PERIPHERAL_CARD_HEIGHT / 2,
+          },
+          canvasHeight
+        )
+      );
+      setLibraryPreviewPosition(null);
+    },
+    [canvasHeight, libraryDragKind, onCreatePeripheral, resolveBoardPointFromClient, simulationRunning]
+  );
+
+  const handleLibraryDragLeave = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    const nextTarget = event.relatedTarget as Node | null;
+    if (nextTarget && event.currentTarget.contains(nextTarget)) {
+      return;
+    }
+    setLibraryPreviewPosition(null);
+  }, []);
 
   return (
     <div className="rounded-[30px] border border-slate-300 bg-[#f6f7fb] p-4 shadow-inner">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
           <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Board Top View</div>
-          <div className="mt-1 text-sm text-slate-600">Drag devices around the canvas, arm one for wiring, then click a hotspot directly on the board to drop a wire.</div>
+          <div className="mt-1 text-sm text-slate-600">
+            Drag parts from the library into the workbench, then drag each part&apos;s wire stub directly onto a live board hotspot.
+          </div>
         </div>
         <div className="rounded-full border border-slate-300 bg-white px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-slate-500">
-          Interactive canvas
+          Drag parts + wires
         </div>
       </div>
 
       <div
-        ref={containerRef}
-        onPointerMove={trackPointerPreview}
-        onPointerLeave={() => {
-          setHoveredPadId(null);
-          setPointerPosition(null);
-        }}
-        className="relative overflow-hidden rounded-[30px] border border-slate-300 bg-gradient-to-b from-slate-50 to-slate-200 px-8 py-6"
-        style={{ minHeight: canvasHeight + 48 }}
+        className={`relative overflow-hidden rounded-[30px] border px-5 py-5 shadow-inner transition ${
+          libraryDragKind ? 'border-cyan-400 bg-[#dfe6f0]' : 'border-slate-300 bg-[#d5d9e0]'
+        }`}
+        style={{ minHeight: canvasHeight + 32 }}
       >
-        <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${BOARD_CANVAS_WIDTH} ${canvasHeight}`} preserveAspectRatio="none">
-          {wires.map((wire) => (
-            <path
-              key={wire.id}
-              d={wire.path}
-              fill="none"
-              stroke={wire.kind === 'button' ? '#d946ef' : '#f59e0b'}
-              strokeWidth="3"
-              strokeLinecap="round"
-              opacity="0.92"
-            />
-          ))}
-          {previewPath ? (
-            <path
-              d={previewPath}
-              fill="none"
-              stroke="#06b6d4"
-              strokeWidth="3"
-              strokeDasharray="10 8"
-              strokeLinecap="round"
-              opacity="0.88"
-            />
-          ) : null}
-        </svg>
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-slate-500">
+          <div className="rounded-full border border-white/80 bg-white/80 px-3 py-1">1. Drag a device in</div>
+          <div className="rounded-full border border-white/80 bg-white/80 px-3 py-1">2. Pull its wire stub</div>
+          <div className="rounded-full border border-white/80 bg-white/80 px-3 py-1">3. Drop on a cyan hotspot</div>
+        </div>
 
-        <div className="relative mx-auto" style={{ width: BOARD_CANVAS_WIDTH, minHeight: canvasHeight }}>
+        <div
+          ref={surfaceRef}
+          onPointerMove={trackPointerPreview}
+          onPointerLeave={() => {
+            if (!wireDragStateRef.current) {
+              setHoveredPadId(null);
+              setPointerPosition(null);
+            }
+          }}
+          onDragOver={handleLibraryDragOver}
+          onDragLeave={handleLibraryDragLeave}
+          onDrop={handleLibraryDrop}
+          className="relative mx-auto overflow-hidden rounded-[38px]"
+          style={{ width: BOARD_CANVAS_WIDTH, minHeight: canvasHeight }}
+        >
+          <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${BOARD_CANVAS_WIDTH} ${canvasHeight}`} preserveAspectRatio="none">
+            {wires.map((wire) => (
+              <path
+                key={wire.id}
+                d={wire.path}
+                fill="none"
+                stroke={wire.kind === 'button' ? '#d946ef' : '#f59e0b'}
+                strokeWidth="3"
+                strokeLinecap="round"
+                opacity="0.92"
+              />
+            ))}
+            {previewPath ? (
+              <path
+                d={previewPath}
+                fill="none"
+                stroke="#06b6d4"
+                strokeWidth="3"
+                strokeDasharray="10 8"
+                strokeLinecap="round"
+                opacity="0.88"
+              />
+            ) : null}
+          </svg>
+
+          <div className="absolute inset-x-6 top-6 h-[290px] rounded-[36px] border border-[#deded8] bg-[#f8f7f2] shadow-[0_16px_28px_rgba(15,23,42,0.12)]" />
+          <div
+            className="absolute inset-x-10 top-10 h-[282px] rounded-[34px] border border-[#ebeae4]"
+            style={{ backgroundImage: 'linear-gradient(180deg, #fbfbf8 0%, #f4f3ee 100%)' }}
+          />
+          <div className="absolute left-12 right-12 top-[338px] bottom-5 rounded-[30px] border border-dashed border-slate-400/60 bg-white/40 shadow-inner" />
+          <div className="pointer-events-none absolute left-16 top-[350px] rounded-full border border-slate-300 bg-white/80 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+            Workbench area
+          </div>
+          <div className="pointer-events-none absolute right-16 top-[350px] rounded-full border border-slate-300 bg-white/80 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+            Drag parts here
+          </div>
+
+          {[{ left: 42, top: 34 }, { left: 688, top: 34 }, { left: 42, top: 280 }, { left: 688, top: 280 }].map((hole, index) => (
+            <div
+              key={index}
+              className="absolute h-7 w-7 rounded-full border border-slate-300 bg-slate-200/80 shadow-inner"
+              style={{ left: hole.left, top: hole.top }}
+            >
+              <div className="absolute left-1/2 top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-slate-300 bg-white/80" />
+            </div>
+          ))}
+
           {DEMO_LEFT_MORPHO_CONNECTOR ? (
             <div className="absolute left-0 top-6 w-[108px]">
               <MiniConnectorStrip connector={DEMO_LEFT_MORPHO_CONNECTOR} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
@@ -975,20 +1261,33 @@ function BoardTopView({
             </div>
           ) : null}
 
+          {Object.entries(BOARD_CONNECTOR_LAYOUT).map(([connectorId, frame]) => (
+            <div
+              key={connectorId}
+              className="pointer-events-none absolute text-[10px] font-semibold uppercase tracking-[0.24em] text-[#465dd7]"
+              style={{
+                left: frame.x + (frame.layout === 'dual' ? 22 : frame.width / 2 - 16),
+                top: frame.y - 14,
+              }}
+            >
+              {connectorId}
+            </div>
+          ))}
+
           <div className="absolute left-1/2 top-0 h-14 w-24 -translate-x-1/2 rounded-b-[18px] border border-slate-400 bg-slate-300 shadow-md" />
           <div className="absolute left-1/2 top-[72px] h-5 w-10 -translate-x-1/2 rounded-full border border-slate-500 bg-slate-900/80" />
 
           <div className="absolute left-1/2 top-[124px] flex -translate-x-1/2 items-start gap-5">
             <div className="rounded-[26px] border border-slate-300 bg-white/90 px-4 py-3 shadow-sm">
-              <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">USER</div>
+              <div className="text-[11px] uppercase tracking-[0.2em] text-[#465dd7]">USER</div>
               <div className={`mt-2 h-12 w-12 rounded-full border ${Object.values(buttonStates).some(Boolean) ? 'border-fuchsia-300 bg-fuchsia-400 shadow-[0_0_16px_rgba(217,70,239,0.45)]' : 'border-slate-300 bg-slate-100'}`} />
             </div>
             <div className="rounded-[26px] border border-slate-300 bg-white/90 px-4 py-3 shadow-sm">
-              <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">RESET</div>
+              <div className="text-[11px] uppercase tracking-[0.2em] text-[#465dd7]">RESET</div>
               <div className="mt-2 h-12 w-12 rounded-full border border-slate-400 bg-slate-900/85" />
             </div>
             <div className="rounded-[26px] border border-slate-300 bg-white/90 px-4 py-3 shadow-sm">
-              <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">LD1 / LD2 / LD3</div>
+              <div className="text-[11px] uppercase tracking-[0.2em] text-[#465dd7]">LD1 / LD2 / LD3</div>
               <div className="mt-2 flex gap-2">
                 <div className="h-4 w-4 rounded-full border border-emerald-300 bg-emerald-300/70" />
                 <div className="h-4 w-4 rounded-full border border-amber-300 bg-amber-300/70" />
@@ -1008,6 +1307,23 @@ function BoardTopView({
             </div>
           </div>
 
+          <div className="pointer-events-none absolute left-[228px] top-[52px] text-[11px] font-semibold uppercase tracking-[0.28em] text-[#465dd7]">
+            Arduino / Zio
+          </div>
+          <div className="pointer-events-none absolute right-[228px] top-[52px] text-[11px] font-semibold uppercase tracking-[0.28em] text-[#465dd7]">
+            Arduino / Zio
+          </div>
+          <div className="pointer-events-none absolute left-[18px] top-[156px] -rotate-90 text-[11px] font-semibold uppercase tracking-[0.28em] text-[#465dd7]">
+            Morpho
+          </div>
+          <div className="pointer-events-none absolute right-[12px] top-[156px] rotate-90 text-[11px] font-semibold uppercase tracking-[0.28em] text-[#465dd7]">
+            Morpho
+          </div>
+          <div className="pointer-events-none absolute left-1/2 top-[258px] -translate-x-1/2 text-center">
+            <div className="text-sm font-semibold uppercase tracking-[0.32em] text-[#465dd7]">NUCLEO</div>
+            <div className="mt-1 text-[34px] tracking-tight text-[#2e3ab0]">H753ZI</div>
+          </div>
+
           {visiblePads.map((pad) => {
             const anchor = getPadAnchor(pad);
             const occupant = findPeripheralForPad(wiring, pad.id);
@@ -1021,6 +1337,7 @@ function BoardTopView({
                   onPointerEnter={() => setHoveredPadId(pad.id)}
                   onPointerLeave={() => setHoveredPadId((current) => (current === pad.id ? null : current))}
                   disabled={simulationRunning}
+                  data-board-pad-id={pad.id}
                   className={`absolute rounded-full border transition ${
                     simulationRunning
                       ? 'cursor-not-allowed border-slate-300/60 bg-white/70'
@@ -1079,16 +1396,27 @@ function BoardTopView({
                 }`}
                 style={{ left: frame.x, top: frame.y, width: PERIPHERAL_CARD_WIDTH, minHeight: PERIPHERAL_CARD_HEIGHT }}
               >
-                <div className="absolute left-1/2 top-[-7px] h-3.5 w-3.5 -translate-x-1/2 rounded-full border-2 border-white bg-slate-900" />
+                <button
+                  onPointerDown={(event) => beginWireDrag(peripheral.id, event)}
+                  onPointerMove={updateWireDrag}
+                  onPointerUp={endWireDrag}
+                  onPointerCancel={endWireDrag}
+                  className={`absolute left-1/2 top-[-10px] flex h-5 w-5 -translate-x-1/2 items-center justify-center rounded-full border-2 border-white bg-slate-900 transition ${
+                    armedPeripheralId === peripheral.id ? 'shadow-[0_0_0_6px_rgba(34,211,238,0.18)]' : ''
+                  }`}
+                  style={{ touchAction: 'none' }}
+                  title="Drag wire from this terminal"
+                >
+                  <div className="h-2.5 w-2.5 rounded-full bg-cyan-300" />
+                </button>
                 <div className="flex items-start justify-between gap-2">
-                  <button
-                    onClick={() => onArmPeripheral(peripheral.id)}
+                  <div
                     className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
                       armedPeripheralId === peripheral.id ? 'border-cyan-300 bg-cyan-500/20 text-cyan-50' : 'border-current/25 bg-white/20 text-current/80'
                     }`}
                   >
-                    {armedPeripheralId === peripheral.id ? 'Wiring' : 'Wire'}
-                  </button>
+                    {armedPeripheralId === peripheral.id ? 'Wire armed' : 'Wire stub'}
+                  </div>
                   <div
                     onPointerDown={(event) => beginPeripheralDrag(peripheral.id, frame, event)}
                     onPointerMove={updatePeripheralDrag}
@@ -1134,6 +1462,24 @@ function BoardTopView({
               </div>
             );
           })}
+
+          {libraryDragKind && libraryPreviewPosition ? (
+            <div
+              className={`pointer-events-none absolute rounded-[24px] border border-dashed px-4 py-3 opacity-80 ${
+                libraryDragKind === 'button' ? 'border-fuchsia-300 bg-fuchsia-100/85 text-fuchsia-700' : 'border-amber-300 bg-amber-100/85 text-amber-700'
+              }`}
+              style={{
+                left: libraryPreviewPosition.x,
+                top: libraryPreviewPosition.y,
+                width: PERIPHERAL_CARD_WIDTH,
+                minHeight: PERIPHERAL_CARD_HEIGHT,
+              }}
+            >
+              <div className="text-[11px] uppercase tracking-[0.2em]">Preview</div>
+              <div className="mt-1 text-sm font-semibold">{libraryDragKind === 'button' ? 'Button' : 'LED'} Template</div>
+              <div className="mt-2 text-xs">Release here to drop a new part into the workbench.</div>
+            </div>
+          ) : null}
         </div>
       </div>
     </div>
@@ -1149,7 +1495,9 @@ function WiringWorkbench({
   showFullPinout,
   peripheralPositions,
   onAssign,
+  onAssignPeripheralToPad,
   onAddPeripheral,
+  onBeginWiring,
   onArmPeripheral,
   onDisconnectPeripheral,
   onRemovePeripheral,
@@ -1166,7 +1514,9 @@ function WiringWorkbench({
   showFullPinout: boolean;
   peripheralPositions: Record<string, PeripheralPosition>;
   onAssign: (pad: DemoBoardPad) => void;
-  onAddPeripheral: (kind: DemoPeripheralKind) => void;
+  onAssignPeripheralToPad: (peripheralId: string, pad: DemoBoardPad) => void;
+  onAddPeripheral: (kind: DemoPeripheralKind, position?: PeripheralPosition) => void;
+  onBeginWiring: (peripheralId: string) => void;
   onArmPeripheral: (peripheralId: string) => void;
   onDisconnectPeripheral: (peripheralId: string) => void;
   onRemovePeripheral: (peripheralId: string) => void;
@@ -1177,6 +1527,7 @@ function WiringWorkbench({
 }) {
   const buttons = getPeripheralsByKind(wiring, 'button');
   const leds = getPeripheralsByKind(wiring, 'led');
+  const [libraryDragKind, setLibraryDragKind] = useState<DemoPeripheralKind | null>(null);
   const workbenchConnectors = useMemo(() => buildWorkbenchConnectorGroups(wiring, showFullPinout), [wiring, showFullPinout]);
   const hiddenPadCount = Math.max(0, DEMO_SELECTABLE_PADS.length - workbenchConnectors.visibleSelectablePads);
   const visibleCanvasPads = useMemo(
@@ -1190,41 +1541,23 @@ function WiringWorkbench({
         <div className="rounded-[32px] border border-slate-800 bg-slate-950/70 p-5 shadow-xl">
           <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Peripheral Library</div>
           <div className="mt-3 text-sm text-slate-300">
-            Add as many external buttons and LEDs as you need. Arm one device, then click a free board pad to draw its wire.
+            Pull a part straight into the board canvas, then drag its wire stub to a hotspot just like Wokwi.
           </div>
 
           <div className="mt-5 grid gap-3">
-            <button
-              onClick={() => onAddPeripheral('button')}
+            <PeripheralLibraryCard
+              kind="button"
               disabled={wiring.peripherals.length >= MAX_PERIPHERALS || simulationRunning}
-              className={`rounded-3xl border px-4 py-3 text-left transition ${
-                wiring.peripherals.length >= MAX_PERIPHERALS || simulationRunning
-                  ? 'cursor-not-allowed border-slate-800 bg-slate-900/50 text-slate-500'
-                  : 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-100 hover:bg-fuchsia-500/20'
-              }`}
-            >
-              <div className="inline-flex items-center gap-2 text-sm font-semibold">
-                <Plus size={14} />
-                Add Button
-              </div>
-              <div className="mt-1 text-xs text-slate-400">Place a new momentary input and wire it to any free GPIO header pad.</div>
-            </button>
+              onAdd={() => onAddPeripheral('button')}
+              onDragStateChange={setLibraryDragKind}
+            />
 
-            <button
-              onClick={() => onAddPeripheral('led')}
+            <PeripheralLibraryCard
+              kind="led"
               disabled={wiring.peripherals.length >= MAX_PERIPHERALS || simulationRunning}
-              className={`rounded-3xl border px-4 py-3 text-left transition ${
-                wiring.peripherals.length >= MAX_PERIPHERALS || simulationRunning
-                  ? 'cursor-not-allowed border-slate-800 bg-slate-900/50 text-slate-500'
-                  : 'border-amber-500/40 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20'
-              }`}
-            >
-              <div className="inline-flex items-center gap-2 text-sm font-semibold">
-                <Plus size={14} />
-                Add LED
-              </div>
-              <div className="mt-1 text-xs text-slate-400">Drop in another visual output and choose which button will drive it.</div>
-            </button>
+              onAdd={() => onAddPeripheral('led')}
+              onDragStateChange={setLibraryDragKind}
+            />
           </div>
 
           <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-sm text-slate-300">
@@ -1235,7 +1568,9 @@ function WiringWorkbench({
                 : 'None'}
             </div>
             <div className="mt-2 text-xs text-slate-400">
-              {armedPeripheralId ? 'Click any free pad on the board to complete the wire.' : 'Use a device card’s “Connect wire” action to begin wiring.'}
+              {armedPeripheralId
+                ? 'Drag the cyan wire stub onto any free hotspot, or click a free pad to complete the connection.'
+                : 'Start by dragging a library part into the workbench or clicking Add on a template card.'}
             </div>
           </div>
 
@@ -1311,10 +1646,13 @@ function WiringWorkbench({
                 peripheralPositions={peripheralPositions}
                 visiblePads={visibleCanvasPads}
                 armedPeripheralId={armedPeripheralId}
+                libraryDragKind={libraryDragKind}
                 simulationRunning={simulationRunning}
                 onAssignPad={onAssign}
+                onAssignPadToPeripheral={onAssignPeripheralToPad}
+                onCreatePeripheral={onAddPeripheral}
+                onBeginWiring={onBeginWiring}
                 onMovePeripheral={onMovePeripheral}
-                onArmPeripheral={onArmPeripheral}
                 onPressPeripheral={onPressPeripheral}
               />
             </div>
@@ -1331,7 +1669,7 @@ function WiringWorkbench({
             </div>
           </div>
           <div className="text-xs uppercase tracking-[0.24em] text-slate-500">
-            {armedPeripheralId ? 'Click a free pad to finish the active wire' : 'Pick any card to start wiring'}
+            {armedPeripheralId ? 'Drag the active wire stub to a hotspot or click a pad to finish' : 'Use any rack card for quick edits'}
           </div>
         </div>
 
@@ -1422,13 +1760,13 @@ function WiringWorkbench({
           <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Wokwi-like flow</div>
           <div className="mt-4 grid gap-3 text-sm text-slate-300">
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-              1. Add a <span className="font-semibold text-white">Button</span> or <span className="font-semibold text-white">LED</span> from the library.
+              1. Drag a <span className="font-semibold text-white">Button</span> or <span className="font-semibold text-white">LED</span> template into the workbench.
             </div>
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-              2. Click <span className="font-semibold text-white">Connect wire</span> on that device.
+              2. Pull the device&apos;s <span className="font-semibold text-white">wire stub</span> onto a cyan hotspot on the board.
             </div>
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-              3. Pick from the default common pads, or open the full pinout when you need more advanced GPIOs.
+              3. Use the default common pads first, or open the full pinout when you need more advanced GPIOs.
             </div>
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
               4. Any pad you already connected stays visible, so the board never loses the context of your wiring.
@@ -1686,7 +2024,7 @@ export default function App() {
   }, [appendLog, peripheralManifest.length, resetDebugState, setRunningVisualState, simulation.gdbPort]);
 
   const addPeripheral = useCallback(
-    (kind: DemoPeripheralKind) => {
+    (kind: DemoPeripheralKind, preferredPosition?: PeripheralPosition) => {
       if (simulation.running) {
         appendLog('Stop the simulation before adding or removing external peripherals.', 'warn');
         return;
@@ -1710,20 +2048,23 @@ export default function App() {
       setWiring((current) => ({
         peripherals: [...current.peripherals, nextPeripheral],
       }));
+      setPeripheralPositions((current) => ({
+        ...current,
+        [nextPeripheral.id]: clampPeripheralPosition(
+          preferredPosition ?? createDefaultPeripheralPosition(wiring.peripherals.length),
+          getCanvasHeightForPeripheralCount(wiring.peripherals.length + 1)
+        ),
+      }));
       setArmedPeripheralId(nextPeripheral.id);
-      appendLog(`${nextPeripheral.label} added. Click a free board pad to place it.`);
+      appendLog(`${nextPeripheral.label} added. Drag its wire stub onto a free board hotspot to place it.`);
     },
     [appendLog, simulation.running, wiring]
   );
 
-  const assignPeripheralToPad = useCallback(
-    (pad: DemoBoardPad) => {
+  const assignPadToPeripheral = useCallback(
+    (peripheralId: string, pad: DemoBoardPad) => {
       if (simulation.running) {
         appendLog('Stop the simulation before moving wires to another header pin.', 'warn');
-        return;
-      }
-      if (!armedPeripheralId) {
-        appendLog('Choose a device card and click "Connect wire" before selecting a board pad.', 'warn');
         return;
       }
       if (!pad.selectable) {
@@ -1732,19 +2073,19 @@ export default function App() {
       }
 
       const occupiedBy = findPeripheralForPad(wiring, pad.id);
-      if (occupiedBy && occupiedBy.id !== armedPeripheralId) {
+      if (occupiedBy && occupiedBy.id !== peripheralId) {
         appendLog(`${describePad(pad)} is already used by ${occupiedBy.label}. Disconnect it first or pick another pad.`, 'warn');
         return;
       }
 
-      const peripheral = wiring.peripherals.find((item) => item.id === armedPeripheralId);
+      const peripheral = wiring.peripherals.find((item) => item.id === peripheralId);
       if (!peripheral) {
         return;
       }
 
       setWiring((current) => ({
         peripherals: current.peripherals.map((item) =>
-          item.id === armedPeripheralId
+          item.id === peripheralId
             ? {
                 ...item,
                 padId: pad.id,
@@ -1752,10 +2093,22 @@ export default function App() {
             : item
         ),
       }));
-      setArmedPeripheralId(null);
+      setArmedPeripheralId((current) => (current === peripheralId ? null : current));
       appendLog(`Wired ${peripheral.label} to ${describePad(pad)}.`);
     },
-    [appendLog, armedPeripheralId, simulation.running, wiring]
+    [appendLog, simulation.running, wiring]
+  );
+
+  const assignPeripheralToPad = useCallback(
+    (pad: DemoBoardPad) => {
+      if (!armedPeripheralId) {
+        appendLog('Choose a device card and start wiring before selecting a board pad.', 'warn');
+        return;
+      }
+
+      assignPadToPeripheral(armedPeripheralId, pad);
+    },
+    [appendLog, armedPeripheralId, assignPadToPeripheral]
   );
 
   const toggleArmPeripheral = useCallback((peripheralId: string) => {
@@ -1840,13 +2193,16 @@ export default function App() {
   }, []);
 
   const movePeripheral = useCallback((peripheralId: string, position: PeripheralPosition) => {
-    const rows = Math.max(1, Math.ceil(Math.max(wiring.peripherals.length, 1) / PERIPHERALS_PER_ROW));
-    const canvasHeight = BOARD_CANVAS_BASE_HEIGHT + Math.max(0, rows - 1) * (PERIPHERAL_CARD_HEIGHT + PERIPHERAL_ROW_GAP);
+    const canvasHeight = getCanvasHeightForPeripheralCount(wiring.peripherals.length);
     setPeripheralPositions((current) => ({
       ...current,
       [peripheralId]: clampPeripheralPosition(position, canvasHeight),
     }));
   }, [wiring.peripherals.length]);
+
+  const beginWiring = useCallback((peripheralId: string) => {
+    setArmedPeripheralId(peripheralId);
+  }, []);
 
   const sendButtonState = useCallback(
     async (peripheralId: string, pressed: boolean) => {
@@ -2091,7 +2447,9 @@ export default function App() {
               showFullPinout={showFullPinout}
               peripheralPositions={peripheralPositions}
               onAssign={assignPeripheralToPad}
+              onAssignPeripheralToPad={assignPadToPeripheral}
               onAddPeripheral={addPeripheral}
+              onBeginWiring={beginWiring}
               onArmPeripheral={toggleArmPeripheral}
               onDisconnectPeripheral={disconnectPeripheral}
               onRemovePeripheral={removePeripheral}
