@@ -17,6 +17,8 @@ type CompileRequest = {
   mainSource: string;
   startupSource: string;
   linkerScript: string;
+  linkerFileName?: string;
+  gccArgs?: string[];
 };
 
 type CompileResult = {

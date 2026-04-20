@@ -1,31 +1,123 @@
-const PORT_BASE_ADDRESS = 0x40020000;
+const PORT_BASE_ADDRESS = 0x58020000;
 const PORT_STRIDE = 0x400;
 const GPIO_PORT_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K'];
+const BOARD_REPL_PATH = 'platforms/boards/nucleo_h753zi.repl';
 
 const DEFAULT_DEMO_WIRING = {
-  buttonPinId: 'PB0',
-  ledPinId: 'PA5',
+  buttonPadId: 'CN10-3',
+  ledPadId: 'CN7-10',
+};
+
+const PAD_MCU_PIN_MAP = {
+  'CN7-8': 'PD9',
+  'CN7-9': 'PD8',
+  'CN7-10': 'PA5',
+  'CN7-11': 'PA6',
+  'CN7-12': 'PA7',
+  'CN7-13': 'PD14',
+  'CN7-14': 'PF15',
+  'CN7-15': 'PF14',
+  'CN7-16': 'PF13',
+  'CN7-17': 'PG14',
+  'CN7-18': 'PE11',
+  'CN7-19': 'PE9',
+  'CN7-20': 'PF3',
+  'CN8-2': 'PC8',
+  'CN8-4': 'PC9',
+  'CN8-6': 'PC10',
+  'CN8-8': 'PC11',
+  'CN8-10': 'PC12',
+  'CN8-12': 'PD2',
+  'CN8-14': 'PG2',
+  'CN8-16': 'PG3',
+  'CN9-1': 'PA3',
+  'CN9-2': 'PC0',
+  'CN9-3': 'PC3',
+  'CN9-4': 'PB1',
+  'CN9-5': 'PB9',
+  'CN9-6': 'PB8',
+  'CN9-7': 'PF4',
+  'CN9-8': 'PF5',
+  'CN9-9': 'PF10',
+  'CN9-10': 'PE15',
+  'CN9-11': 'PF11',
+  'CN9-12': 'PF12',
+  'CN9-13': 'PD15',
+  'CN9-14': 'PE13',
+  'CN9-15': 'PF15',
+  'CN9-16': 'PA9',
+  'CN9-17': 'PA10',
+  'CN9-18': 'PG13',
+  'CN9-19': 'PB13',
+  'CN9-20': 'PB12',
+  'CN9-23': 'PD6',
+  'CN9-24': 'PD5',
+  'CN9-25': 'PD4',
+  'CN9-26': 'PD7',
+  'CN9-27': 'PB3',
+  'CN9-28': 'PB5',
+  'CN9-29': 'PB4',
+  'CN9-30': 'PB10',
+  'CN10-3': 'PG12',
+  'CN10-4': 'PG10',
+  'CN10-5': 'PA3',
+  'CN10-6': 'PB6',
+  'CN10-7': 'PA7',
+  'CN10-8': 'PA6',
+  'CN10-9': 'PA5',
+  'CN10-11': 'PB9',
+  'CN10-12': 'PB8',
+  'CN10-14': 'PC6',
+  'CN10-15': 'PA15',
+  'CN10-16': 'PC7',
+  'CN10-17': 'PB5',
+  'CN10-18': 'PB4',
+  'CN10-19': 'PB10',
+  'CN10-20': 'PA8',
+  'CN10-21': 'PA9',
+  'CN10-22': 'PC7',
+  'CN10-23': 'PB2',
+  'CN10-24': 'PB1',
+  'CN10-25': 'PE8',
+  'CN10-26': 'PE10',
+  'CN10-27': 'PE12',
+  'CN10-28': 'PE14',
+  'CN10-29': 'PE15',
+  'CN10-30': 'PE7',
+  'CN10-31': 'PE9',
+  'CN10-32': 'PG14',
+  'CN10-33': 'PG9',
+  'CN10-34': 'PG13',
 };
 
 function formatHex(value) {
   return `0x${value.toString(16).toUpperCase()}`;
 }
 
-function resolvePin(pinId) {
-  const match = /^P([A-K])(\d{1,2})$/i.exec(String(pinId).trim());
-  if (!match) {
-    throw new Error(`Unsupported GPIO pin id: ${pinId}`);
+function normalizeMcuPinId(candidate) {
+  const normalized = String(candidate || '').trim().toUpperCase();
+  return /^P[A-K](?:1[0-5]|[0-9])$/.test(normalized) ? normalized : null;
+}
+
+function resolvePadMcuPin(padId) {
+  const fromMap = PAD_MCU_PIN_MAP[String(padId).trim()];
+  if (fromMap) {
+    return fromMap;
   }
 
-  const portLetter = match[1].toUpperCase();
-  const number = Number(match[2]);
-  if (number < 0 || number > 15) {
-    throw new Error(`GPIO pin number is out of range: ${pinId}`);
-  }
+  throw new Error(`Unsupported board pad id for CLI helpers: ${padId}`);
+}
 
+function resolvePinFromPadId(padId) {
+  const mcuPinId = resolvePadMcuPin(padId);
+  const normalized = normalizeMcuPinId(mcuPinId);
+  const portLetter = normalized[1];
+  const number = Number(normalized.slice(2));
   const portIndex = GPIO_PORT_LETTERS.indexOf(portLetter);
+
   return {
-    id: `P${portLetter}${number}`,
+    padId,
+    mcuPinId: normalized,
     portLetter,
     portIndex,
     number,
@@ -34,16 +126,17 @@ function resolvePin(pinId) {
 }
 
 function generateDemoMainSource(wiring = DEFAULT_DEMO_WIRING) {
-  const button = resolvePin(wiring.buttonPinId);
-  const led = resolvePin(wiring.ledPinId);
+  const button = resolvePinFromPadId(wiring.buttonPadId);
+  const led = resolvePinFromPadId(wiring.ledPadId);
 
-  return `// Auto-generated demo firmware for Renode STM32F4 GPIO Explorer.
-// Press the external button on ${button.id} to drive the external LED on ${led.id}.
+  return `// Auto-generated demo firmware for the Renode NUCLEO-H753ZI workbench.
+// External button pad: ${button.padId} -> ${button.mcuPinId}
+// External LED pad: ${led.padId} -> ${led.mcuPinId}
 
 typedef unsigned int uint32_t;
 
-#define RCC_BASE            0x40023800u
-#define RCC_AHB1ENR         (*(volatile uint32_t *)(RCC_BASE + 0x30u))
+#define RCC_BASE            0x58024400u
+#define RCC_AHB4ENR         (*(volatile uint32_t *)(RCC_BASE + 0xE0u))
 
 #define LED_GPIO_BASE       ${formatHex(led.baseAddress)}u
 #define BUTTON_GPIO_BASE    ${formatHex(button.baseAddress)}u
@@ -58,7 +151,7 @@ typedef unsigned int uint32_t;
 #define GPIO_BSRR(base)     (*(volatile uint32_t *)((base) + 0x18u))
 
 static void enable_gpio_clocks(void) {
-    RCC_AHB1ENR |= (1u << LED_PORT_ENABLE) | (1u << BUTTON_PORT_ENABLE);
+    RCC_AHB4ENR |= (1u << LED_PORT_ENABLE) | (1u << BUTTON_PORT_ENABLE);
 }
 
 static void configure_led(void) {
@@ -164,11 +257,14 @@ void Default_Handler(void) {
 }
 `;
 
+const DEFAULT_LINKER_FILENAME = 'stm32h753zi.ld';
+const DEFAULT_GCC_ARGS = ['-mcpu=cortex-m7', '-mthumb'];
+
 const DEFAULT_LINKER_SCRIPT = `ENTRY(Reset_Handler)
 
 MEMORY
 {
-    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 1024K
+    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 2048K
     RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
 }
 
@@ -213,11 +309,11 @@ SECTIONS
 `;
 
 function generateBoardRepl(wiring = DEFAULT_DEMO_WIRING) {
-  const button = resolvePin(wiring.buttonPinId);
-  const led = resolvePin(wiring.ledPinId);
+  const button = resolvePinFromPadId(wiring.buttonPadId);
+  const led = resolvePinFromPadId(wiring.ledPadId);
 
   return [
-    'using "platforms/cpus/stm32f4.repl"',
+    `using "${BOARD_REPL_PATH}"`,
     '',
     `externalButton: Miscellaneous.Button @ gpioPort${button.portLetter}`,
     `    -> gpioPort${button.portLetter}@${button.number}`,
@@ -234,8 +330,9 @@ module.exports = {
   DEFAULT_DEMO_WIRING,
   DEFAULT_MAIN_SOURCE,
   DEFAULT_STARTUP_SOURCE,
+  DEFAULT_LINKER_FILENAME,
   DEFAULT_LINKER_SCRIPT,
-  resolvePin,
+  DEFAULT_GCC_ARGS,
   generateDemoMainSource,
   generateBoardRepl,
 };

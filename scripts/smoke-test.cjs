@@ -4,7 +4,9 @@ const {
 const {
   DEFAULT_MAIN_SOURCE,
   DEFAULT_STARTUP_SOURCE,
+  DEFAULT_LINKER_FILENAME,
   DEFAULT_LINKER_SCRIPT,
+  DEFAULT_GCC_ARGS,
   DEFAULT_DEMO_WIRING,
   generateBoardRepl,
 } = require('../electron/firmware.cjs');
@@ -50,6 +52,8 @@ async function main() {
     mainSource: DEFAULT_MAIN_SOURCE,
     startupSource: DEFAULT_STARTUP_SOURCE,
     linkerScript: DEFAULT_LINKER_SCRIPT,
+    linkerFileName: DEFAULT_LINKER_FILENAME,
+    gccArgs: DEFAULT_GCC_ARGS,
   });
 
   if (!compileResult.success) {

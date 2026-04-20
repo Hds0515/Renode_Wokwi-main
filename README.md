@@ -4,7 +4,7 @@
 
 It keeps the visual workflow from the original prototype, but moves execution into a local Electron shell:
 
-- pin-level GPIO placement on a demo board
+- pin-level placement on a real `NUCLEO-H753ZI` connector layout
 - auto-generated Renode `.repl` and `.resc`
 - local ARM GCC compilation
 - local Renode startup
@@ -15,9 +15,10 @@ It keeps the visual workflow from the original prototype, but moves execution in
 
 The current MVP targets one Renode-backed demo board:
 
-- `STM32F4 GPIO Explorer`
-- selectable external `Button` on any `PAx`..`PKx` pin
-- selectable external `LED` on any `PAx`..`PKx` pin
+- `NUCLEO-H753ZI`
+- selectable external `Button` on free pads across `CN7`, `CN8`, `CN9`, `CN10`, `CN11`, and `CN12`
+- selectable external `LED` on the same routed header pads
+- board top-view locator that mirrors those connector groups and highlights the selected pads
 - local `arm-none-eabi-gcc` compilation with generated startup and linker files
 - local Renode launch through the bundled `renode/renode/renode.exe` when present
 - GDB server enabled on port `3333`
@@ -67,8 +68,8 @@ The helper launcher `scripts/run-local.ps1` will install dependencies automatica
 
 ## Demo flow
 
-1. Click `Place Button`, then click any GPIO pin card such as `PB0` or `PC13`.
-2. Click `Place LED`, then click another GPIO pin card such as `PA5` or `PD3`.
+1. Click `Place Button`, then click any free connector pad such as `CN10 pin 3 (D7 / PG12)` or `CN12 pin 19 (PG12)`.
+2. Click `Place LED`, then click another free connector pad such as `CN7 pin 10 (D13 / PA5)`.
 3. The app regenerates `main.c`, `board.repl`, and the Renode launch preview from that wiring.
 4. Click `Compile`, then `Start`.
 5. Press and hold the external button card in the board canvas and watch the LED card update in real time.
@@ -108,12 +109,12 @@ npm run start
 - `electron/preload.cjs`
   - safe renderer API exposed as `window.localWokwi`
 - `src/App.tsx`
-  - GPIO demo board UI
+  - NUCLEO-H753ZI board UI with real header groupings
   - code editor
   - compile/run controls
   - live status/log rendering
 - `src/lib/firmware.ts`
-  - generated firmware template from selected GPIO pins
+  - generated firmware template from selected board pads
   - startup/runtime files
   - `.repl` / `.resc` preview generation
 - `renode_bridge.py`
@@ -124,14 +125,14 @@ npm run start
 - compile action calls local `arm-none-eabi-gcc`
 - run action launches Renode as a child process
 - renderer no longer uses the old fake LED simulation loop
-- GPIO pin selection regenerates both bare-metal firmware and Renode platform wiring
+- connector-pad selection regenerates both bare-metal firmware and Renode platform wiring
 - button presses go to the local bridge
 - LED state comes back from Renode and updates the board view
 - `npm run smoke` validates compile -> simulate -> interact -> debug end to end
 
 ## What is still next
 
-- exact board artwork for specific Nucleo/Discovery layouts
-- reusable board/device templates beyond the STM32F4 GPIO demo
+- more exact board artwork polish and richer silkscreen detail
+- reusable board/device templates beyond the NUCLEO-H753ZI demo
 - UART terminal and waveform panels
 - persistent projects and device libraries

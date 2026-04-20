@@ -381,7 +381,8 @@ function createRuntimeService(options = {}) {
 
     const mainPath = path.join(workspaceDir, 'main.c');
     const startupPath = path.join(workspaceDir, 'startup.c');
-    const linkerPath = path.join(workspaceDir, 'stm32f4.ld');
+    const linkerFileName = request.linkerFileName || 'firmware.ld';
+    const linkerPath = path.join(workspaceDir, linkerFileName);
     const elfPath = path.join(buildDir, 'firmware.elf');
     const mapPath = path.join(buildDir, 'firmware.map');
 
@@ -390,8 +391,7 @@ function createRuntimeService(options = {}) {
     fs.writeFileSync(linkerPath, request.linkerScript, 'utf8');
 
     const args = [
-      '-mcpu=cortex-m4',
-      '-mthumb',
+      ...(Array.isArray(request.gccArgs) && request.gccArgs.length > 0 ? request.gccArgs : ['-mcpu=cortex-m4', '-mthumb']),
       '-O0',
       '-g3',
       '-ffreestanding',
@@ -488,7 +488,7 @@ function createRuntimeService(options = {}) {
     fs.writeFileSync(bridgePath, bridgeTemplate, 'utf8');
 
     const rescContent = [
-      `$name?="${request.machineName || 'STM32F4'}"`,
+      `$name?="${request.machineName || 'NUCLEO-H753ZI GPIO Workbench'}"`,
       'mach create $name',
       '',
       'machine LoadPlatformDescription @board.repl',

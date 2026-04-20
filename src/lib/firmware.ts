@@ -1,83 +1,598 @@
 export const DEFAULT_BRIDGE_PORT = 9001;
 export const DEFAULT_GDB_PORT = 3333;
 
-const PORT_BASE_ADDRESS = 0x40020000;
+const PORT_BASE_ADDRESS = 0x58020000;
 const PORT_STRIDE = 0x400;
 const GPIO_PORT_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K'] as const;
-const LEFT_BANKS = new Set(['A', 'C', 'E', 'G', 'I', 'K']);
+const NUCLEO_REPL_PATH = 'platforms/boards/nucleo_h753zi.repl';
+const MACHINE_NAME = 'NUCLEO-H753ZI GPIO Workbench';
+
+const RESERVED_MCU_PINS = new Map<string, string>([
+  ['PB0', 'Reserved by on-board LD1 (green LED).'],
+  ['PE1', 'Reserved by on-board LD2 (yellow LED).'],
+  ['PB14', 'Reserved by on-board LD3 (red LED).'],
+  ['PC13', 'Reserved by on-board B1 USER button.'],
+  ['PA13', 'Reserved by the ST-LINK SWDIO header.'],
+  ['PA14', 'Reserved by the ST-LINK SWCLK header.'],
+]);
+
+type ConnectorPlacement = 'morpho-left' | 'left' | 'right' | 'morpho-right';
+type ConnectorLayout = 'single' | 'dual';
+type PadRole = 'gpio' | 'power' | 'ground' | 'control' | 'reserved';
+type PadColumn = 'single' | 'odd' | 'even';
 
 export type GpioPortLetter = (typeof GPIO_PORT_LETTERS)[number];
+
+export type DemoBoardPad = {
+  id: string;
+  connectorId: string;
+  connectorTitle: string;
+  connectorPlacement: ConnectorPlacement;
+  connectorLayout: ConnectorLayout;
+  pinNumber: number;
+  pinLabel: string;
+  mcuPinId: string | null;
+  signalName: string;
+  note: string | null;
+  role: PadRole;
+  column: PadColumn;
+  selectable: boolean;
+  blockedReason: string | null;
+};
+
+export type DemoBoardConnector = {
+  id: string;
+  title: string;
+  subtitle: string;
+  placement: ConnectorPlacement;
+  layout: ConnectorLayout;
+  pins: DemoBoardPad[];
+};
 
 export type DemoBoardPin = {
   id: string;
   portLetter: GpioPortLetter;
   portIndex: number;
-  portLabel: string;
   number: number;
-  side: 'left' | 'right';
   baseAddress: number;
 };
 
-export type DemoPinBank = {
-  id: string;
-  title: string;
-  side: 'left' | 'right';
-  pins: DemoBoardPin[];
+export type DemoWiring = {
+  buttonPadId: string;
+  ledPadId: string;
 };
 
-export type DemoWiring = {
-  buttonPinId: string;
-  ledPinId: string;
+type SingleConnectorPinDefinition = {
+  pinNumber: number;
+  pinLabel: string;
+  mcuPinId?: string | null;
+  signalName?: string;
+  note?: string;
+};
+
+type SingleConnectorDefinition = {
+  id: string;
+  title: string;
+  subtitle: string;
+  placement: ConnectorPlacement;
+  pins: SingleConnectorPinDefinition[];
+};
+
+type DualConnectorPinDefinition = {
+  pinNumber: number;
+  pinLabel: string;
+  signalName?: string;
+  note?: string;
+};
+
+type DualConnectorDefinition = {
+  id: string;
+  title: string;
+  subtitle: string;
+  placement: ConnectorPlacement;
+  oddPins: DualConnectorPinDefinition[];
+  evenPins: DualConnectorPinDefinition[];
+};
+
+function normalizeMcuPinId(candidate?: string | null): string | null {
+  if (!candidate) {
+    return null;
+  }
+
+  const normalized = candidate.trim().toUpperCase();
+  if (!/^P[A-K](?:1[0-5]|[0-9])$/.test(normalized)) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function detectRole(pinLabel: string, mcuPinId: string | null): PadRole {
+  const normalizedLabel = pinLabel.trim().toUpperCase();
+  if (mcuPinId) {
+    return RESERVED_MCU_PINS.has(mcuPinId) ? 'reserved' : 'gpio';
+  }
+  if (normalizedLabel.includes('GND')) {
+    return 'ground';
+  }
+  if (
+    normalizedLabel.includes('3V3') ||
+    normalizedLabel.includes('5V') ||
+    normalizedLabel.includes('VDD') ||
+    normalizedLabel.includes('VIN') ||
+    normalizedLabel.includes('VBAT') ||
+    normalizedLabel.includes('VREF') ||
+    normalizedLabel.includes('VDDA') ||
+    normalizedLabel.includes('IOREF')
+  ) {
+    return 'power';
+  }
+
+  return 'control';
+}
+
+function createPad(
+  connector: Pick<DemoBoardConnector, 'id' | 'title' | 'placement'> & { layout: ConnectorLayout },
+  definition: SingleConnectorPinDefinition,
+  column: PadColumn
+): DemoBoardPad {
+  const mcuPinId = normalizeMcuPinId(definition.mcuPinId ?? definition.pinLabel);
+  const blockedReason = mcuPinId ? RESERVED_MCU_PINS.get(mcuPinId) ?? null : null;
+  const role = detectRole(definition.pinLabel, mcuPinId);
+
+  return {
+    id: `${connector.id}-${definition.pinNumber}`,
+    connectorId: connector.id,
+    connectorTitle: connector.title,
+    connectorPlacement: connector.placement,
+    connectorLayout: connector.layout,
+    pinNumber: definition.pinNumber,
+    pinLabel: definition.pinLabel,
+    mcuPinId,
+    signalName: definition.signalName ?? definition.pinLabel,
+    note: definition.note ?? null,
+    role,
+    column,
+    selectable: Boolean(mcuPinId && !blockedReason),
+    blockedReason,
+  };
+}
+
+function buildSingleConnector(definition: SingleConnectorDefinition): DemoBoardConnector {
+  return {
+    id: definition.id,
+    title: definition.title,
+    subtitle: definition.subtitle,
+    placement: definition.placement,
+    layout: 'single',
+    pins: definition.pins.map((pin) =>
+      createPad(
+        {
+          id: definition.id,
+          title: definition.title,
+          placement: definition.placement,
+          layout: 'single',
+        },
+        pin,
+        'single'
+      )
+    ),
+  };
+}
+
+function buildDualConnector(definition: DualConnectorDefinition): DemoBoardConnector {
+  const oddPins = definition.oddPins.map((pin) =>
+    createPad(
+      {
+        id: definition.id,
+        title: definition.title,
+        placement: definition.placement,
+        layout: 'dual',
+      },
+      pin,
+      'odd'
+    )
+  );
+  const evenPins = definition.evenPins.map((pin) =>
+    createPad(
+      {
+        id: definition.id,
+        title: definition.title,
+        placement: definition.placement,
+        layout: 'dual',
+      },
+      pin,
+      'even'
+    )
+  );
+
+  return {
+    id: definition.id,
+    title: definition.title,
+    subtitle: definition.subtitle,
+    placement: definition.placement,
+    layout: 'dual',
+    pins: [...oddPins, ...evenPins].sort((left, right) => left.pinNumber - right.pinNumber),
+  };
+}
+
+const NUCLEO_ZIO_CONNECTORS: DemoBoardConnector[] = [
+  buildSingleConnector({
+    id: 'CN7',
+    title: 'CN7',
+    subtitle: 'Zio digital / SPI / USART header',
+    placement: 'left',
+    pins: [
+      { pinNumber: 1, pinLabel: 'IOREF', signalName: 'Shield IO reference' },
+      { pinNumber: 2, pinLabel: 'NRST', signalName: 'MCU reset' },
+      { pinNumber: 3, pinLabel: '3V3', signalName: '3.3V rail' },
+      { pinNumber: 4, pinLabel: '5V', signalName: '5V rail' },
+      { pinNumber: 5, pinLabel: 'GND', signalName: 'Ground' },
+      { pinNumber: 6, pinLabel: 'GND', signalName: 'Ground' },
+      { pinNumber: 7, pinLabel: 'VIN', signalName: 'VIN' },
+      { pinNumber: 8, pinLabel: 'D15/RX3', mcuPinId: 'PD9', signalName: 'USART3 RX / D15' },
+      { pinNumber: 9, pinLabel: 'D14/TX3', mcuPinId: 'PD8', signalName: 'USART3 TX / D14' },
+      { pinNumber: 10, pinLabel: 'D13/SCK', mcuPinId: 'PA5', signalName: 'SPI1 SCK / TIM2_CH1' },
+      { pinNumber: 11, pinLabel: 'D12/MISO', mcuPinId: 'PA6', signalName: 'SPI1 MISO / TIM3_CH1' },
+      {
+        pinNumber: 12,
+        pinLabel: 'D11/MOSI',
+        mcuPinId: 'PA7',
+        signalName: 'SPI1 MOSI / TIM1_CH1N',
+        note: 'Shared with RMII_CRS_DV on Ethernet-capable shields.',
+      },
+      { pinNumber: 13, pinLabel: 'D10/CS', mcuPinId: 'PD14', signalName: 'SPI chip select / TIM4_CH3' },
+      { pinNumber: 14, pinLabel: 'D9/PWM', mcuPinId: 'PF15', signalName: 'TIM1_CH1 / D9' },
+      { pinNumber: 15, pinLabel: 'D8', mcuPinId: 'PF14', signalName: 'GPIO / D8' },
+      { pinNumber: 16, pinLabel: 'D7', mcuPinId: 'PF13', signalName: 'GPIO / D7' },
+      { pinNumber: 17, pinLabel: 'D6/PWM', mcuPinId: 'PG14', signalName: 'TIM1_CH2 / D6' },
+      { pinNumber: 18, pinLabel: 'D5/PWM', mcuPinId: 'PE11', signalName: 'TIM1_CH2N / D5' },
+      { pinNumber: 19, pinLabel: 'D4/PWM', mcuPinId: 'PE9', signalName: 'TIM1_CH1 / D4' },
+      { pinNumber: 20, pinLabel: 'D3/PWM', mcuPinId: 'PF3', signalName: 'TIM2_CH3 / D3' },
+    ],
+  }),
+  buildSingleConnector({
+    id: 'CN8',
+    title: 'CN8',
+    subtitle: 'Zio high-number digital header',
+    placement: 'left',
+    pins: [
+      { pinNumber: 1, pinLabel: 'NC', signalName: 'No connect' },
+      { pinNumber: 2, pinLabel: 'D43', mcuPinId: 'PC8', signalName: 'GPIO / D43' },
+      { pinNumber: 3, pinLabel: 'IOREF', signalName: 'Shield IO reference' },
+      { pinNumber: 4, pinLabel: 'D44', mcuPinId: 'PC9', signalName: 'GPIO / D44' },
+      { pinNumber: 5, pinLabel: 'NRST', signalName: 'MCU reset' },
+      { pinNumber: 6, pinLabel: 'D45', mcuPinId: 'PC10', signalName: 'USART3 TX / D45' },
+      { pinNumber: 7, pinLabel: '3V3', signalName: '3.3V rail' },
+      { pinNumber: 8, pinLabel: 'D46', mcuPinId: 'PC11', signalName: 'USART3 RX / D46' },
+      { pinNumber: 9, pinLabel: '5V', signalName: '5V rail' },
+      { pinNumber: 10, pinLabel: 'D47', mcuPinId: 'PC12', signalName: 'GPIO / D47' },
+      { pinNumber: 11, pinLabel: 'GND', signalName: 'Ground' },
+      { pinNumber: 12, pinLabel: 'D48', mcuPinId: 'PD2', signalName: 'GPIO / D48' },
+      { pinNumber: 13, pinLabel: 'GND', signalName: 'Ground' },
+      { pinNumber: 14, pinLabel: 'D49', mcuPinId: 'PG2', signalName: 'GPIO / D49' },
+      { pinNumber: 15, pinLabel: 'VIN', signalName: 'VIN' },
+      { pinNumber: 16, pinLabel: 'D50', mcuPinId: 'PG3', signalName: 'GPIO / D50' },
+    ],
+  }),
+  buildSingleConnector({
+    id: 'CN9',
+    title: 'CN9',
+    subtitle: 'Zio analog / extended digital header',
+    placement: 'right',
+    pins: [
+      { pinNumber: 1, pinLabel: 'A0', mcuPinId: 'PA3', signalName: 'ADC1 INP15 / USART2 RX' },
+      { pinNumber: 2, pinLabel: 'A1', mcuPinId: 'PC0', signalName: 'ADC123 INP10' },
+      { pinNumber: 3, pinLabel: 'A2', mcuPinId: 'PC3', signalName: 'ADC12 INP13' },
+      { pinNumber: 4, pinLabel: 'A3', mcuPinId: 'PB1', signalName: 'ADC12 INP5 / TIM8 CH3N' },
+      {
+        pinNumber: 5,
+        pinLabel: 'A4',
+        mcuPinId: 'PB9',
+        signalName: 'I2C1 SDA / A4',
+        note: 'ADC alternative PC2 is available only with solder-bridge changes.',
+      },
+      {
+        pinNumber: 6,
+        pinLabel: 'A5',
+        mcuPinId: 'PB8',
+        signalName: 'I2C1 SCL / A5',
+        note: 'ADC alternative PF10 is available only with solder-bridge changes.',
+      },
+      { pinNumber: 7, pinLabel: 'A6', mcuPinId: 'PF4', signalName: 'ADC3 INP14 / A6' },
+      { pinNumber: 8, pinLabel: 'A7', mcuPinId: 'PF5', signalName: 'ADC3 INP15 / A7' },
+      { pinNumber: 9, pinLabel: 'A8', mcuPinId: 'PF10', signalName: 'GPIO / A8' },
+      { pinNumber: 10, pinLabel: 'D38', mcuPinId: 'PE15', signalName: 'TIM1 BKIN / D38' },
+      { pinNumber: 11, pinLabel: 'D39', mcuPinId: 'PF11', signalName: 'GPIO / D39' },
+      { pinNumber: 12, pinLabel: 'D40', mcuPinId: 'PF12', signalName: 'GPIO / D40' },
+      { pinNumber: 13, pinLabel: 'D41', mcuPinId: 'PD15', signalName: 'TIM4 CH4 / D41' },
+      { pinNumber: 14, pinLabel: 'D42', mcuPinId: 'PE13', signalName: 'TIM1 CH3N / D42' },
+      { pinNumber: 15, pinLabel: 'D2', mcuPinId: 'PF15', signalName: 'GPIO / D2' },
+      { pinNumber: 16, pinLabel: 'D1/TX', mcuPinId: 'PA9', signalName: 'USART1 TX / D1' },
+      { pinNumber: 17, pinLabel: 'D0/RX', mcuPinId: 'PA10', signalName: 'USART1 RX / D0' },
+      { pinNumber: 18, pinLabel: 'D15', mcuPinId: 'PG13', signalName: 'GPIO / D15' },
+      { pinNumber: 19, pinLabel: 'D14', mcuPinId: 'PB13', signalName: 'SPI2 SCK / D14' },
+      { pinNumber: 20, pinLabel: 'D13', mcuPinId: 'PB12', signalName: 'GPIO / D13' },
+      { pinNumber: 21, pinLabel: 'GND', signalName: 'Ground' },
+      { pinNumber: 22, pinLabel: 'AREF', signalName: 'Analog reference' },
+      { pinNumber: 23, pinLabel: 'D16', mcuPinId: 'PD6', signalName: 'USART2 RX / D16' },
+      { pinNumber: 24, pinLabel: 'D17', mcuPinId: 'PD5', signalName: 'USART2 TX / D17' },
+      { pinNumber: 25, pinLabel: 'D18', mcuPinId: 'PD4', signalName: 'GPIO / D18' },
+      { pinNumber: 26, pinLabel: 'D19', mcuPinId: 'PD7', signalName: 'GPIO / D19' },
+      { pinNumber: 27, pinLabel: 'D20', mcuPinId: 'PB3', signalName: 'SPI1 SCK / D20' },
+      { pinNumber: 28, pinLabel: 'D21', mcuPinId: 'PB5', signalName: 'SPI1 MOSI / D21' },
+      { pinNumber: 29, pinLabel: 'D22', mcuPinId: 'PB4', signalName: 'SPI1 MISO / D22' },
+      { pinNumber: 30, pinLabel: 'D23', mcuPinId: 'PB10', signalName: 'GPIO / D23' },
+    ],
+  }),
+  buildSingleConnector({
+    id: 'CN10',
+    title: 'CN10',
+    subtitle: 'Zio power / PWM / SPI header',
+    placement: 'right',
+    pins: [
+      { pinNumber: 1, pinLabel: 'AVDD', signalName: 'Analog 3.3V rail' },
+      { pinNumber: 2, pinLabel: 'AGND', signalName: 'Analog ground' },
+      { pinNumber: 3, pinLabel: 'D7', mcuPinId: 'PG12', signalName: 'GPIO / D7' },
+      { pinNumber: 4, pinLabel: 'D8', mcuPinId: 'PG10', signalName: 'GPIO / D8' },
+      { pinNumber: 5, pinLabel: 'D9/PWM', mcuPinId: 'PA3', signalName: 'TIM15 CH1 / D9' },
+      { pinNumber: 6, pinLabel: 'D10/PWM', mcuPinId: 'PB6', signalName: 'TIM16 CH1N / D10' },
+      { pinNumber: 7, pinLabel: 'D11/MOSI', mcuPinId: 'PA7', signalName: 'SPI1 MOSI / D11' },
+      { pinNumber: 8, pinLabel: 'D12/MISO', mcuPinId: 'PA6', signalName: 'SPI1 MISO / D12' },
+      { pinNumber: 9, pinLabel: 'D13/SCK', mcuPinId: 'PA5', signalName: 'SPI1 SCK / D13' },
+      { pinNumber: 10, pinLabel: 'GND', signalName: 'Ground' },
+      { pinNumber: 11, pinLabel: 'D14', mcuPinId: 'PB9', signalName: 'GPIO / D14' },
+      { pinNumber: 12, pinLabel: 'D15', mcuPinId: 'PB8', signalName: 'GPIO / D15' },
+      { pinNumber: 13, pinLabel: 'NC', signalName: 'No connect' },
+      { pinNumber: 14, pinLabel: 'D16', mcuPinId: 'PC6', signalName: 'GPIO / D16' },
+      { pinNumber: 15, pinLabel: 'D17', mcuPinId: 'PA15', signalName: 'GPIO / D17' },
+      { pinNumber: 16, pinLabel: 'D18', mcuPinId: 'PC7', signalName: 'GPIO / D18' },
+      { pinNumber: 17, pinLabel: 'D19', mcuPinId: 'PB5', signalName: 'GPIO / D19' },
+      { pinNumber: 18, pinLabel: 'D20', mcuPinId: 'PB4', signalName: 'GPIO / D20' },
+      { pinNumber: 19, pinLabel: 'D21', mcuPinId: 'PB10', signalName: 'GPIO / D21' },
+      { pinNumber: 20, pinLabel: 'D22', mcuPinId: 'PA8', signalName: 'MCO / D22' },
+      { pinNumber: 21, pinLabel: 'D23', mcuPinId: 'PA9', signalName: 'USART1 TX / D23' },
+      { pinNumber: 22, pinLabel: 'D24', mcuPinId: 'PC7', signalName: 'GPIO / D24' },
+      { pinNumber: 23, pinLabel: 'D25', mcuPinId: 'PB2', signalName: 'GPIO / D25' },
+      { pinNumber: 24, pinLabel: 'D26', mcuPinId: 'PB1', signalName: 'ADC12 INP5 / D26' },
+      { pinNumber: 25, pinLabel: 'D27', mcuPinId: 'PE8', signalName: 'GPIO / D27' },
+      { pinNumber: 26, pinLabel: 'D28', mcuPinId: 'PE10', signalName: 'GPIO / D28' },
+      { pinNumber: 27, pinLabel: 'D29', mcuPinId: 'PE12', signalName: 'GPIO / D29' },
+      { pinNumber: 28, pinLabel: 'D30', mcuPinId: 'PE14', signalName: 'GPIO / D30' },
+      { pinNumber: 29, pinLabel: 'D31', mcuPinId: 'PE15', signalName: 'GPIO / D31' },
+      { pinNumber: 30, pinLabel: 'D32', mcuPinId: 'PE7', signalName: 'GPIO / D32' },
+      { pinNumber: 31, pinLabel: 'D33', mcuPinId: 'PE9', signalName: 'GPIO / D33' },
+      { pinNumber: 32, pinLabel: 'D34', mcuPinId: 'PG14', signalName: 'GPIO / D34' },
+      { pinNumber: 33, pinLabel: 'D35', mcuPinId: 'PG9', signalName: 'GPIO / D35' },
+      { pinNumber: 34, pinLabel: 'D36', mcuPinId: 'PG13', signalName: 'GPIO / D36' },
+    ],
+  }),
+];
+
+const NUCLEO_MORPHO_CONNECTORS: DemoBoardConnector[] = [
+  buildDualConnector({
+    id: 'CN11',
+    title: 'CN11',
+    subtitle: 'ST Morpho left header',
+    placement: 'morpho-left',
+    oddPins: [
+      { pinNumber: 1, pinLabel: 'PC10', signalName: 'USART3 TX / SPI3 SCK' },
+      { pinNumber: 3, pinLabel: 'PC12', signalName: 'UART5 TX / SPI3 MOSI' },
+      { pinNumber: 5, pinLabel: '3V3', signalName: '3.3V rail' },
+      { pinNumber: 7, pinLabel: 'BOOT0', signalName: 'BOOT0' },
+      { pinNumber: 9, pinLabel: 'PF6', signalName: 'ADC3 INP4 / TIM16 CH1' },
+      { pinNumber: 11, pinLabel: 'PF7', signalName: 'ADC3 INP3 / TIM17 CH1' },
+      { pinNumber: 13, pinLabel: 'PA13', signalName: 'SWDIO' },
+      { pinNumber: 15, pinLabel: 'PA14', signalName: 'SWCLK' },
+      { pinNumber: 17, pinLabel: 'PH0', signalName: 'OSC IN' },
+      { pinNumber: 19, pinLabel: 'PC2', signalName: 'ADC123 INP12' },
+      { pinNumber: 21, pinLabel: 'PC3', signalName: 'ADC12 INP13' },
+      { pinNumber: 23, pinLabel: 'PC13', signalName: 'B1 USER button' },
+      { pinNumber: 25, pinLabel: 'PF10', signalName: 'ADC3 INP8' },
+      { pinNumber: 27, pinLabel: 'PE9', signalName: 'TIM1 CH1' },
+      { pinNumber: 29, pinLabel: 'PF3', signalName: 'ADC3 INP9 / TIM2 CH3' },
+      { pinNumber: 31, pinLabel: 'PE13', signalName: 'TIM1 CH3N' },
+      { pinNumber: 33, pinLabel: 'FDCAN_RX', signalName: 'Shared FDCAN RX net' },
+      { pinNumber: 35, pinLabel: 'FDCAN_TX', signalName: 'Shared FDCAN TX net' },
+      { pinNumber: 37, pinLabel: 'PB13', signalName: 'SPI2 SCK' },
+      { pinNumber: 39, pinLabel: 'PB14', signalName: 'On-board LD3 red LED' },
+      { pinNumber: 41, pinLabel: 'PB15', signalName: 'SPI2 MOSI / TIM1 CH3N' },
+      { pinNumber: 43, pinLabel: 'PA8', signalName: 'MCO / TIM1 CH1' },
+      { pinNumber: 45, pinLabel: 'PA9', signalName: 'USART1 TX / TIM1 CH2' },
+      { pinNumber: 47, pinLabel: 'PA10', signalName: 'USART1 RX / TIM1 CH3' },
+      { pinNumber: 49, pinLabel: 'PA11', signalName: 'USB DM / USART1 CTS' },
+      { pinNumber: 51, pinLabel: 'PB12', signalName: 'SPI2 NSS' },
+      { pinNumber: 53, pinLabel: 'PB1', signalName: 'ADC12 INP5 / TIM8 CH3N' },
+      { pinNumber: 55, pinLabel: 'PB2', signalName: 'GPIO' },
+      { pinNumber: 57, pinLabel: 'PE7', signalName: 'TIM1 ETR' },
+      { pinNumber: 59, pinLabel: 'PE8', signalName: 'TIM1 CH1N' },
+      { pinNumber: 61, pinLabel: 'PE10', signalName: 'TIM1 CH2N' },
+      { pinNumber: 63, pinLabel: 'PE12', signalName: 'SPI4 SCK / TIM1 CH3N' },
+      { pinNumber: 65, pinLabel: 'PE14', signalName: 'TIM1 CH4' },
+      { pinNumber: 67, pinLabel: 'PB10', signalName: 'I2C2 SCL / TIM2 CH3' },
+      { pinNumber: 69, pinLabel: 'PD9', signalName: 'USART3 RX / D15' },
+    ],
+    evenPins: [
+      { pinNumber: 2, pinLabel: 'PC11', signalName: 'USART3 RX / SPI3 MISO' },
+      { pinNumber: 4, pinLabel: 'PD2', signalName: 'UART5 RX / SDMMC CMD' },
+      { pinNumber: 6, pinLabel: '5V', signalName: '5V rail' },
+      { pinNumber: 8, pinLabel: 'GND', signalName: 'Ground' },
+      { pinNumber: 10, pinLabel: 'NC', signalName: 'No connect' },
+      { pinNumber: 12, pinLabel: 'NC', signalName: 'No connect' },
+      { pinNumber: 14, pinLabel: 'GND', signalName: 'Ground' },
+      { pinNumber: 16, pinLabel: 'NC', signalName: 'No connect' },
+      { pinNumber: 18, pinLabel: 'PH1', signalName: 'OSC OUT' },
+      { pinNumber: 20, pinLabel: 'PC1', signalName: 'ADC123 INP11' },
+      { pinNumber: 22, pinLabel: 'PC0', signalName: 'ADC123 INP10' },
+      { pinNumber: 24, pinLabel: 'VBAT', signalName: 'Backup battery input' },
+      { pinNumber: 26, pinLabel: 'PF5', signalName: 'ADC3 INP15' },
+      { pinNumber: 28, pinLabel: 'PF4', signalName: 'ADC3 INP14' },
+      { pinNumber: 30, pinLabel: 'PF1', signalName: 'ADC3 INP7' },
+      { pinNumber: 32, pinLabel: 'PF2', signalName: 'ADC3 INP10' },
+      { pinNumber: 34, pinLabel: 'VREF+', signalName: 'Analog reference' },
+      { pinNumber: 36, pinLabel: 'PC4', signalName: 'ADC12 INP4' },
+      { pinNumber: 38, pinLabel: 'PB0', signalName: 'On-board LD1 green LED' },
+      { pinNumber: 40, pinLabel: 'PE1', signalName: 'On-board LD2 yellow LED' },
+      { pinNumber: 42, pinLabel: 'PE0', signalName: 'TIM4 ETR' },
+      { pinNumber: 44, pinLabel: 'PB9', signalName: 'I2C1 SDA / TIM17 CH1' },
+      { pinNumber: 46, pinLabel: 'VDD', signalName: '3.3V rail' },
+      { pinNumber: 48, pinLabel: 'GND', signalName: 'Ground' },
+      { pinNumber: 50, pinLabel: 'PB8', signalName: 'I2C1 SCL / TIM16 CH1' },
+      { pinNumber: 52, pinLabel: 'PB5', signalName: 'SPI1 MOSI / GPIO' },
+      { pinNumber: 54, pinLabel: 'PB4', signalName: 'SPI1 MISO / GPIO' },
+      { pinNumber: 56, pinLabel: 'PB3', signalName: 'SPI1 SCK / SWO' },
+      { pinNumber: 58, pinLabel: 'PD7', signalName: 'USART2 CK / GPIO' },
+      { pinNumber: 60, pinLabel: 'PD6', signalName: 'USART2 RX / GPIO' },
+      { pinNumber: 62, pinLabel: 'PD5', signalName: 'USART2 TX / GPIO' },
+      { pinNumber: 64, pinLabel: 'PD4', signalName: 'GPIO' },
+      { pinNumber: 66, pinLabel: 'PD3', signalName: 'USART2 CTS / GPIO' },
+      { pinNumber: 68, pinLabel: 'PG15', signalName: 'USART6 CTS / GPIO' },
+      { pinNumber: 70, pinLabel: 'PG11', signalName: 'ETH RMII_TX_EN / GPIO' },
+    ],
+  }),
+  buildDualConnector({
+    id: 'CN12',
+    title: 'CN12',
+    subtitle: 'ST Morpho right header',
+    placement: 'morpho-right',
+    oddPins: [
+      { pinNumber: 1, pinLabel: 'PC9', signalName: 'GPIO / D44' },
+      { pinNumber: 3, pinLabel: 'PB8', signalName: 'I2C1 SCL / D15' },
+      { pinNumber: 5, pinLabel: 'PB6', signalName: 'USART1 TX / TIM16 CH1N' },
+      { pinNumber: 7, pinLabel: 'PB7', signalName: 'USART1 RX / TIM17 CH1N' },
+      { pinNumber: 9, pinLabel: 'BOOT1', signalName: 'BOOT1' },
+      { pinNumber: 11, pinLabel: 'AGND', signalName: 'Analog ground' },
+      { pinNumber: 13, pinLabel: 'GND', signalName: 'Ground' },
+      { pinNumber: 15, pinLabel: 'PG13', signalName: 'GPIO / D15 / ETH TXD0' },
+      { pinNumber: 17, pinLabel: 'PD10', signalName: 'USART3 CK / GPIO' },
+      { pinNumber: 19, pinLabel: 'PG12', signalName: 'GPIO / D7 / ETH TXD1' },
+      { pinNumber: 21, pinLabel: 'PG10', signalName: 'GPIO / D8 / ETH RXD2' },
+      { pinNumber: 23, pinLabel: 'PA4', signalName: 'ADC12 INP18 / SPI1 NSS' },
+      { pinNumber: 25, pinLabel: 'PA7', signalName: 'SPI1 MOSI / D11' },
+      { pinNumber: 27, pinLabel: 'PA6', signalName: 'SPI1 MISO / D12' },
+      { pinNumber: 29, pinLabel: 'PA5', signalName: 'SPI1 SCK / D13' },
+      { pinNumber: 31, pinLabel: 'PG14', signalName: 'GPIO / D6 / USART6 TX' },
+      { pinNumber: 33, pinLabel: 'PB12', signalName: 'SPI2 NSS / GPIO' },
+      { pinNumber: 35, pinLabel: 'PA2', signalName: 'USART2 TX / GPIO' },
+      { pinNumber: 37, pinLabel: 'PA3', signalName: 'USART2 RX / GPIO / A0' },
+      { pinNumber: 39, pinLabel: 'PA0', signalName: 'ADC12 INP16 / WKUP' },
+      { pinNumber: 41, pinLabel: 'PA1', signalName: 'ADC12 INP17 / ETH REFCLK' },
+      { pinNumber: 43, pinLabel: 'PA12', signalName: 'USB DP / GPIO' },
+      { pinNumber: 45, pinLabel: 'PA15', signalName: 'JTDI / SPI1 NSS / D17' },
+      { pinNumber: 47, pinLabel: 'PC7', signalName: 'GPIO / D18 / USART6 RX' },
+      { pinNumber: 49, pinLabel: 'PG2', signalName: 'GPIO / D49' },
+      { pinNumber: 51, pinLabel: 'PG3', signalName: 'GPIO / D50' },
+      { pinNumber: 53, pinLabel: 'PD14', signalName: 'TIM4 CH3 / D10' },
+      { pinNumber: 55, pinLabel: 'PE15', signalName: 'TIM1 BKIN / D38' },
+      { pinNumber: 57, pinLabel: 'PE9', signalName: 'TIM1 CH1 / D4' },
+      { pinNumber: 59, pinLabel: 'PE11', signalName: 'TIM1 CH2N / D5' },
+      { pinNumber: 61, pinLabel: 'PF13', signalName: 'GPIO / D7' },
+      { pinNumber: 63, pinLabel: 'PF14', signalName: 'GPIO / D8' },
+      { pinNumber: 65, pinLabel: 'PF15', signalName: 'TIM1 CH1 / D9' },
+      { pinNumber: 67, pinLabel: 'PE13', signalName: 'TIM1 CH3N / D42' },
+      { pinNumber: 69, pinLabel: 'PG4', signalName: 'USART6 RTS / GPIO' },
+    ],
+    evenPins: [
+      { pinNumber: 2, pinLabel: 'PC8', signalName: 'GPIO / D43' },
+      { pinNumber: 4, pinLabel: 'PC6', signalName: 'GPIO / D16 / USART6 TX' },
+      { pinNumber: 6, pinLabel: 'PC5', signalName: 'ADC12 INP8 / ETH RXD1' },
+      { pinNumber: 8, pinLabel: 'U5V', signalName: 'USB 5V input' },
+      { pinNumber: 10, pinLabel: 'NC', signalName: 'No connect' },
+      { pinNumber: 12, pinLabel: 'AVDD', signalName: 'Analog 3.3V rail' },
+      { pinNumber: 14, pinLabel: 'RST', signalName: 'MCU reset' },
+      { pinNumber: 16, pinLabel: 'PH13', signalName: 'GPIO' },
+      { pinNumber: 18, pinLabel: 'PH14', signalName: 'GPIO' },
+      { pinNumber: 20, pinLabel: 'PH15', signalName: 'GPIO' },
+      { pinNumber: 22, pinLabel: 'PC2', signalName: 'ADC123 INP12' },
+      { pinNumber: 24, pinLabel: 'PC3', signalName: 'ADC12 INP13' },
+      { pinNumber: 26, pinLabel: 'NC', signalName: 'No connect' },
+      { pinNumber: 28, pinLabel: 'PD13', signalName: 'TIM4 CH2 / GPIO' },
+      { pinNumber: 30, pinLabel: 'PD12', signalName: 'TIM4 CH1 / GPIO' },
+      { pinNumber: 32, pinLabel: 'PD11', signalName: 'USART3 CTS / GPIO' },
+      { pinNumber: 34, pinLabel: 'PG5', signalName: 'GPIO / USART6 TX' },
+      { pinNumber: 36, pinLabel: 'PG8', signalName: 'ETH PTP PPS / GPIO' },
+      { pinNumber: 38, pinLabel: 'NC', signalName: 'No connect' },
+      { pinNumber: 40, pinLabel: 'NC', signalName: 'No connect' },
+      { pinNumber: 42, pinLabel: 'NC', signalName: 'No connect' },
+      { pinNumber: 44, pinLabel: 'NC', signalName: 'No connect' },
+      { pinNumber: 46, pinLabel: 'NC', signalName: 'No connect' },
+      { pinNumber: 48, pinLabel: 'PF12', signalName: 'GPIO / D40' },
+      { pinNumber: 50, pinLabel: 'PE6', signalName: 'GPIO' },
+      { pinNumber: 52, pinLabel: 'PE5', signalName: 'GPIO' },
+      { pinNumber: 54, pinLabel: 'PE4', signalName: 'GPIO / TIM15 CH1N' },
+      { pinNumber: 56, pinLabel: 'PE3', signalName: 'GPIO' },
+      { pinNumber: 58, pinLabel: 'PE2', signalName: 'GPIO' },
+      { pinNumber: 60, pinLabel: 'PF11', signalName: 'GPIO / D39' },
+      { pinNumber: 62, pinLabel: 'PF2', signalName: 'ADC3 INP10' },
+      { pinNumber: 64, pinLabel: 'PF1', signalName: 'ADC3 INP7' },
+      { pinNumber: 66, pinLabel: 'PF0', signalName: 'ADC3 INP6 / RTC_TAMP1' },
+      { pinNumber: 68, pinLabel: 'PC2', signalName: 'ADC123 INP12 / A4 alt' },
+      { pinNumber: 70, pinLabel: 'PG6', signalName: 'GPIO / USART6 CTS' },
+    ],
+  }),
+];
+
+export const DEMO_CONNECTORS: DemoBoardConnector[] = [...NUCLEO_MORPHO_CONNECTORS, ...NUCLEO_ZIO_CONNECTORS];
+export const DEMO_LEFT_CONNECTORS = DEMO_CONNECTORS.filter((connector) => connector.placement === 'left');
+export const DEMO_RIGHT_CONNECTORS = DEMO_CONNECTORS.filter((connector) => connector.placement === 'right');
+export const DEMO_LEFT_MORPHO_CONNECTOR =
+  DEMO_CONNECTORS.find((connector) => connector.placement === 'morpho-left') ?? null;
+export const DEMO_RIGHT_MORPHO_CONNECTOR =
+  DEMO_CONNECTORS.find((connector) => connector.placement === 'morpho-right') ?? null;
+export const DEMO_BOARD_PADS = DEMO_CONNECTORS.flatMap((connector) => connector.pins);
+export const DEMO_SELECTABLE_PADS = DEMO_BOARD_PADS.filter((pad) => pad.selectable);
+
+export const DEFAULT_DEMO_WIRING: DemoWiring = {
+  buttonPadId: 'CN10-3',
+  ledPadId: 'CN7-10',
 };
 
 function formatHex(value: number): string {
   return `0x${value.toString(16).toUpperCase()}`;
 }
 
-function buildPin(portLetter: GpioPortLetter, number: number): DemoBoardPin {
+function resolveMcuPin(mcuPinId: string): DemoBoardPin {
+  const normalized = normalizeMcuPinId(mcuPinId);
+  if (!normalized) {
+    throw new Error(`Unsupported MCU GPIO pin id: ${mcuPinId}`);
+  }
+
+  const portLetter = normalized[1] as GpioPortLetter;
+  const number = Number(normalized.slice(2));
   const portIndex = GPIO_PORT_LETTERS.indexOf(portLetter);
+  if (portIndex < 0) {
+    throw new Error(`Unsupported MCU GPIO port: ${mcuPinId}`);
+  }
+
   return {
-    id: `P${portLetter}${number}`,
+    id: normalized,
     portLetter,
     portIndex,
-    portLabel: `GPIO${portLetter}`,
     number,
-    side: LEFT_BANKS.has(portLetter) ? 'left' : 'right',
     baseAddress: PORT_BASE_ADDRESS + portIndex * PORT_STRIDE,
   };
 }
 
-function buildBank(portLetter: GpioPortLetter): DemoPinBank {
-  return {
-    id: `gpio-${portLetter.toLowerCase()}`,
-    title: `GPIO${portLetter}`,
-    side: LEFT_BANKS.has(portLetter) ? 'left' : 'right',
-    pins: Array.from({ length: 16 }, (_, index) => buildPin(portLetter, 15 - index)),
-  };
+export function resolveBoardPad(padId: string): DemoBoardPad {
+  const match = DEMO_BOARD_PADS.find((pad) => pad.id === padId);
+  if (!match) {
+    throw new Error(`Unknown board pad id: ${padId}`);
+  }
+
+  return match;
 }
 
-export const DEMO_PIN_BANKS: DemoPinBank[] = GPIO_PORT_LETTERS.map(buildBank);
-export const DEMO_LEFT_PIN_BANKS = DEMO_PIN_BANKS.filter((bank) => bank.side === 'left');
-export const DEMO_RIGHT_PIN_BANKS = DEMO_PIN_BANKS.filter((bank) => bank.side === 'right');
-
-export const DEFAULT_DEMO_WIRING: DemoWiring = {
-  buttonPinId: 'PB0',
-  ledPinId: 'PA5',
-};
-
-export function resolvePin(pinId: string): DemoBoardPin {
-  const match = /^P([A-K])(\d{1,2})$/i.exec(pinId.trim());
-  if (!match) {
-    throw new Error(`Unsupported GPIO pin id: ${pinId}`);
+export function resolveSelectablePad(padId: string): DemoBoardPad {
+  const pad = resolveBoardPad(padId);
+  if (!pad.selectable || !pad.mcuPinId) {
+    throw new Error(`Board pad ${padId} is not available for external GPIO wiring.`);
   }
+  return pad;
+}
 
-  const portLetter = match[1].toUpperCase() as GpioPortLetter;
-  const number = Number(match[2]);
-  if (number < 0 || number > 15) {
-    throw new Error(`GPIO pin number is out of range: ${pinId}`);
-  }
-
-  return buildPin(portLetter, number);
+export function describePad(pad: DemoBoardPad): string {
+  const mcuPinSuffix = pad.mcuPinId ? ` / ${pad.mcuPinId}` : '';
+  return `${pad.connectorTitle} pin ${pad.pinNumber} (${pad.pinLabel}${mcuPinSuffix})`;
 }
 
 export const DEFAULT_MAIN_SOURCE = generateDemoMainSource(DEFAULT_DEMO_WIRING);
@@ -151,11 +666,14 @@ void Default_Handler(void) {
 }
 `;
 
+export const DEFAULT_LINKER_FILENAME = 'stm32h753zi.ld';
+export const DEFAULT_GCC_ARGS = ['-mcpu=cortex-m7', '-mthumb'];
+
 export const DEFAULT_LINKER_SCRIPT = `ENTRY(Reset_Handler)
 
 MEMORY
 {
-    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 1024K
+    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 2048K
     RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
 }
 
@@ -200,16 +718,19 @@ SECTIONS
 `;
 
 export function generateDemoMainSource(wiring: DemoWiring): string {
-  const button = resolvePin(wiring.buttonPinId);
-  const led = resolvePin(wiring.ledPinId);
+  const buttonPad = resolveSelectablePad(wiring.buttonPadId);
+  const ledPad = resolveSelectablePad(wiring.ledPadId);
+  const button = resolveMcuPin(buttonPad.mcuPinId!);
+  const led = resolveMcuPin(ledPad.mcuPinId!);
 
-  return `// Auto-generated demo firmware for Renode STM32F4 GPIO Explorer.
-// Press the external button on ${button.id} to drive the external LED on ${led.id}.
+  return `// Auto-generated demo firmware for the Renode NUCLEO-H753ZI workbench.
+// External button: ${describePad(buttonPad)}.
+// External LED: ${describePad(ledPad)}.
 
 typedef unsigned int uint32_t;
 
-#define RCC_BASE            0x40023800u
-#define RCC_AHB1ENR         (*(volatile uint32_t *)(RCC_BASE + 0x30u))
+#define RCC_BASE            0x58024400u
+#define RCC_AHB4ENR         (*(volatile uint32_t *)(RCC_BASE + 0xE0u))
 
 #define LED_GPIO_BASE       ${formatHex(led.baseAddress)}u
 #define BUTTON_GPIO_BASE    ${formatHex(button.baseAddress)}u
@@ -224,7 +745,7 @@ typedef unsigned int uint32_t;
 #define GPIO_BSRR(base)     (*(volatile uint32_t *)((base) + 0x18u))
 
 static void enable_gpio_clocks(void) {
-    RCC_AHB1ENR |= (1u << LED_PORT_ENABLE) | (1u << BUTTON_PORT_ENABLE);
+    RCC_AHB4ENR |= (1u << LED_PORT_ENABLE) | (1u << BUTTON_PORT_ENABLE);
 }
 
 static void configure_led(void) {
@@ -260,11 +781,17 @@ int main(void) {
 }
 
 export function generateBoardRepl(wiring: DemoWiring): string {
-  const button = resolvePin(wiring.buttonPinId);
-  const led = resolvePin(wiring.ledPinId);
+  const buttonPad = resolveSelectablePad(wiring.buttonPadId);
+  const ledPad = resolveSelectablePad(wiring.ledPadId);
+  const button = resolveMcuPin(buttonPad.mcuPinId!);
+  const led = resolveMcuPin(ledPad.mcuPinId!);
 
   return [
-    'using "platforms/cpus/stm32f4.repl"',
+    `using "${NUCLEO_REPL_PATH}"`,
+    '',
+    '// External lab peripherals attached from the visual board editor.',
+    `// Button: ${describePad(buttonPad)}`,
+    `// LED: ${describePad(ledPad)}`,
     '',
     `externalButton: Miscellaneous.Button @ gpioPort${button.portLetter}`,
     `    -> gpioPort${button.portLetter}@${button.number}`,
@@ -285,7 +812,7 @@ export function generateRescPreview(options: {
   const elfPath = options.elfPath ?? '${workspace}/build/firmware.elf';
 
   return [
-    '$name?="STM32F4 GPIO Explorer"',
+    `$name?="${MACHINE_NAME}"`,
     'mach create $name',
     '',
     'machine LoadPlatformDescription @${workspace}/board.repl',
@@ -297,3 +824,7 @@ export function generateRescPreview(options: {
     '',
   ].join('\n');
 }
+
+export const DEMO_BOARD_NAME = 'NUCLEO-H753ZI';
+export const DEMO_BOARD_TAGLINE = 'Real connector map bound to Renode board support and live external peripherals.';
+export const DEMO_MACHINE_NAME = MACHINE_NAME;
