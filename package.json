@@ -12,7 +12,11 @@
     "preview": "vite preview",
     "start": "electron .",
     "lint": "tsc --noEmit",
-    "smoke": "node scripts/smoke-test.cjs"
+    "smoke": "node scripts/smoke-test.cjs",
+    "check:env": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\check-env.ps1",
+    "run:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-local.ps1 -Mode dev",
+    "run:start": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-local.ps1 -Mode start",
+    "run:smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-local.ps1 -Mode smoke"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

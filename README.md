@@ -34,6 +34,23 @@ This is intentionally narrower than a full Wokwi replacement. The goal is to fin
 
 If this repository contains `renode/renode/renode.exe`, the desktop app will prefer that bundled Renode runtime over the system one.
 
+The GitHub-published version of this project does not include the bundled Renode runtime because GitHub rejects the large `renode.exe` payload. On a fresh machine, install Renode system-wide and expose `renode` on `PATH`.
+
+## Quick Start On A New PC
+
+1. Install `Node.js`, `Renode`, and `arm-none-eabi-gcc`.
+2. Clone this repository.
+3. Run `check-env.cmd` to verify the local toolchain.
+4. Run `run-dev.cmd` for development mode or `run-start.cmd` for the desktop build.
+
+You can also use npm scripts if you prefer:
+
+```bash
+npm run check:env
+npm run run:dev
+npm run run:start
+```
+
 ## Run
 
 ```bash
@@ -45,6 +62,8 @@ This starts:
 
 1. the Vite renderer on `http://127.0.0.1:3000`
 2. the Electron desktop shell
+
+The helper launcher `scripts/run-local.ps1` will install dependencies automatically if `node_modules` is missing.
 
 ## Demo flow
 
