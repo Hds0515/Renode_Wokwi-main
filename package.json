@@ -1,0 +1,40 @@
+{
+  "name": "renode-local-visualizer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "concurrently -k \"npm run dev:renderer\" \"npm run dev:electron\"",
+    "dev:renderer": "vite",
+    "dev:electron": "wait-on tcp:3000 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:3000 electron .",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "electron .",
+    "lint": "tsc --noEmit",
+    "smoke": "node scripts/smoke-test.cjs"
+  },
+  "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "@xyflow/react": "^12.10.2",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.546.0",
+    "motion": "^12.23.24",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwind-merge": "^3.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "autoprefixer": "^10.4.21",
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3",
+    "electron": "^30.5.1",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "~5.8.2",
+    "vite": "^4.5.5",
+    "wait-on": "^7.2.0"
+  }
+}

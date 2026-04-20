@@ -1,0 +1,135 @@
+export {};
+
+type ToolingStatus = {
+  found: boolean;
+  path: string | null;
+  source: string;
+};
+
+type ToolingReport = {
+  renode: ToolingStatus;
+  gcc: ToolingStatus;
+  gdb: ToolingStatus;
+};
+
+type CompileRequest = {
+  workspaceDir?: string;
+  mainSource: string;
+  startupSource: string;
+  linkerScript: string;
+};
+
+type CompileResult = {
+  success: boolean;
+  message: string;
+  workspaceDir?: string;
+  elfPath?: string;
+  mapPath?: string;
+  stdout?: string;
+  stderr?: string;
+};
+
+type StartSimulationRequest = {
+  workspaceDir?: string;
+  elfPath: string;
+  boardRepl: string;
+  bridgePort?: number;
+  gdbPort?: number;
+  machineName?: string;
+};
+
+type StartSimulationResult = {
+  success: boolean;
+  message: string;
+  workspaceDir?: string;
+  rescPath?: string;
+  replPath?: string;
+  gdbPort?: number;
+  bridgePort?: number;
+  monitorPort?: number;
+  bridgeReady?: boolean;
+};
+
+type PeripheralEventResult = {
+  success: boolean;
+  message?: string;
+};
+
+type StartDebuggingRequest = {
+  workspaceDir?: string;
+  elfPath: string;
+  gdbPort?: number;
+};
+
+type StartDebuggingResult = {
+  success: boolean;
+  message: string;
+  gdbPort?: number;
+};
+
+type DebugActionRequest = {
+  action: 'continue' | 'next' | 'step' | 'interrupt' | 'break-main' | 'break-line';
+  line?: number;
+};
+
+type RuntimeEvent =
+  | {
+      type: 'log';
+      level?: 'info' | 'warn' | 'error';
+      message: string;
+      timestamp?: string;
+    }
+  | {
+      type: 'led';
+      id: string;
+      state: number;
+    }
+  | {
+      type: 'bridge';
+      status: 'connected' | 'disconnected' | 'ready' | 'button-event';
+      ledHooked?: boolean;
+      ledHookError?: string | null;
+      state?: number;
+    }
+  | {
+      type: 'simulation';
+      status: 'running' | 'stopped';
+      workspaceDir?: string;
+      gdbPort?: number;
+      bridgePort?: number;
+      monitorPort?: number;
+      exitCode?: number | null;
+    }
+  | {
+      type: 'debug';
+      stream?: 'mi' | 'console' | 'stderr';
+      status?: 'connected' | 'disconnected' | 'running' | 'stopped' | 'breakpoint' | 'done' | 'error';
+      gdbPort?: number;
+      exitCode?: number | null;
+      reason?: string | null;
+      message?: string;
+      breakpoint?: string | null | { number: string | null; file: string | null; fullname: string | null; line: number | null };
+      frame?: {
+        func: string | null;
+        file: string | null;
+        fullname: string | null;
+        line: number | null;
+      } | null;
+      raw?: string;
+    };
+
+declare global {
+  interface Window {
+    localWokwi?: {
+      getTooling: () => Promise<ToolingReport>;
+      compileFirmware: (request: CompileRequest) => Promise<CompileResult>;
+      startSimulation: (request: StartSimulationRequest) => Promise<StartSimulationResult>;
+      stopSimulation: () => Promise<{ success: boolean; message: string }>;
+      sendPeripheralEvent: (request: { type: 'button'; id: string; state: 0 | 1 }) => Promise<PeripheralEventResult>;
+      startDebugging: (request: StartDebuggingRequest) => Promise<StartDebuggingResult>;
+      stopDebugging: () => Promise<{ success: boolean; message: string }>;
+      debugAction: (request: DebugActionRequest) => Promise<{ success: boolean; message?: string; token?: number }>;
+      onSimulationEvent: (callback: (event: RuntimeEvent) => void) => () => void;
+    };
+  }
+}
