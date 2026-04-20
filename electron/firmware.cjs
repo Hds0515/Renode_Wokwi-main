@@ -4,8 +4,22 @@ const GPIO_PORT_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K'
 const BOARD_REPL_PATH = 'platforms/boards/nucleo_h753zi.repl';
 
 const DEFAULT_DEMO_WIRING = {
-  buttonPadId: 'CN10-3',
-  ledPadId: 'CN7-10',
+  peripherals: [
+    {
+      id: 'button-1',
+      kind: 'button',
+      label: 'Button 1',
+      padId: 'CN10-3',
+      sourcePeripheralId: null,
+    },
+    {
+      id: 'led-1',
+      kind: 'led',
+      label: 'LED 1',
+      padId: 'CN7-10',
+      sourcePeripheralId: 'button-1',
+    },
+  ],
 };
 
 const PAD_MCU_PIN_MAP = {
@@ -99,12 +113,15 @@ function normalizeMcuPinId(candidate) {
   return /^P[A-K](?:1[0-5]|[0-9])$/.test(normalized) ? normalized : null;
 }
 
+function sanitizeIdentifier(value) {
+  return String(value || '').replace(/[^a-z0-9_]+/gi, '_');
+}
+
 function resolvePadMcuPin(padId) {
   const fromMap = PAD_MCU_PIN_MAP[String(padId).trim()];
   if (fromMap) {
     return fromMap;
   }
-
   throw new Error(`Unsupported board pad id for CLI helpers: ${padId}`);
 }
 
@@ -125,25 +142,87 @@ function resolvePinFromPadId(padId) {
   };
 }
 
+function getConnectedPeripherals(wiring, kind) {
+  return (wiring.peripherals || []).filter((peripheral) => peripheral.padId && (!kind || peripheral.kind === kind));
+}
+
+function buildPortEnableMaskExpression(pins) {
+  const uniquePortIndexes = [...new Set(pins.map((pin) => pin.portIndex))];
+  if (uniquePortIndexes.length === 0) {
+    return '0u';
+  }
+  return uniquePortIndexes.map((portIndex) => `(1u << ${portIndex}u)`).join(' | ');
+}
+
+function resolveLedDriver(led, wiring) {
+  const connectedButtons = getConnectedPeripherals(wiring, 'button');
+  if (connectedButtons.length === 0) {
+    return null;
+  }
+  return connectedButtons.find((button) => button.id === led.sourcePeripheralId) || connectedButtons[0];
+}
+
 function generateDemoMainSource(wiring = DEFAULT_DEMO_WIRING) {
-  const button = resolvePinFromPadId(wiring.buttonPadId);
-  const led = resolvePinFromPadId(wiring.ledPadId);
+  const connectedButtons = getConnectedPeripherals(wiring, 'button');
+  const connectedLeds = getConnectedPeripherals(wiring, 'led');
+  const buttonPins = connectedButtons.map((button) => resolvePinFromPadId(button.padId));
+  const ledPins = connectedLeds.map((led) => resolvePinFromPadId(led.padId));
+  const portEnableExpression = buildPortEnableMaskExpression([...buttonPins, ...ledPins]);
+
+  const buttonConstants = connectedButtons
+    .map((button, index) => {
+      const pin = buttonPins[index];
+      return [
+        `// ${button.label}: ${button.padId} -> ${pin.mcuPinId}`,
+        `#define BUTTON_${index}_GPIO_BASE ${formatHex(pin.baseAddress)}u`,
+        `#define BUTTON_${index}_PIN ${pin.number}u`,
+      ].join('\n');
+    })
+    .join('\n\n');
+
+  const ledConstants = connectedLeds
+    .map((led, index) => {
+      const pin = ledPins[index];
+      const driver = resolveLedDriver(led, wiring);
+      return [
+        `// ${led.label}: ${led.padId} -> ${pin.mcuPinId}${driver ? ` (driven by ${driver.label})` : ''}`,
+        `#define LED_${index}_GPIO_BASE ${formatHex(pin.baseAddress)}u`,
+        `#define LED_${index}_PIN ${pin.number}u`,
+      ].join('\n');
+    })
+    .join('\n\n');
+
+  const configureLeds = connectedLeds
+    .map((_led, index) => `    configure_output(LED_${index}_GPIO_BASE, LED_${index}_PIN);`)
+    .join('\n');
+  const configureButtons = connectedButtons
+    .map((_button, index) => `    configure_input(BUTTON_${index}_GPIO_BASE, BUTTON_${index}_PIN);`)
+    .join('\n');
+  const buttonReads = connectedButtons
+    .map((_button, index) => `        const int button_state_${index} = read_input(BUTTON_${index}_GPIO_BASE, BUTTON_${index}_PIN);`)
+    .join('\n');
+  const ledWrites = connectedLeds
+    .map((led, index) => {
+      const driver = resolveLedDriver(led, wiring);
+      if (!driver) {
+        return `        write_output(LED_${index}_GPIO_BASE, LED_${index}_PIN, 0);`;
+      }
+      const driverIndex = connectedButtons.findIndex((button) => button.id === driver.id);
+      return `        write_output(LED_${index}_GPIO_BASE, LED_${index}_PIN, button_state_${driverIndex});`;
+    })
+    .join('\n');
 
   return `// Auto-generated demo firmware for the Renode NUCLEO-H753ZI workbench.
-// External button pad: ${button.padId} -> ${button.mcuPinId}
-// External LED pad: ${led.padId} -> ${led.mcuPinId}
 
 typedef unsigned int uint32_t;
 
 #define RCC_BASE            0x58024400u
 #define RCC_AHB4ENR         (*(volatile uint32_t *)(RCC_BASE + 0xE0u))
+#define PERIPHERAL_PORT_ENABLE_MASK ${portEnableExpression}
 
-#define LED_GPIO_BASE       ${formatHex(led.baseAddress)}u
-#define BUTTON_GPIO_BASE    ${formatHex(button.baseAddress)}u
-#define LED_PIN             ${led.number}u
-#define BUTTON_PIN          ${button.number}u
-#define LED_PORT_ENABLE     ${led.portIndex}u
-#define BUTTON_PORT_ENABLE  ${button.portIndex}u
+${buttonConstants || '// No external button constants generated.'}
+
+${ledConstants || '// No external LED constants generated.'}
 
 #define GPIO_MODER(base)    (*(volatile uint32_t *)((base) + 0x00u))
 #define GPIO_PUPDR(base)    (*(volatile uint32_t *)((base) + 0x0Cu))
@@ -151,36 +230,40 @@ typedef unsigned int uint32_t;
 #define GPIO_BSRR(base)     (*(volatile uint32_t *)((base) + 0x18u))
 
 static void enable_gpio_clocks(void) {
-    RCC_AHB4ENR |= (1u << LED_PORT_ENABLE) | (1u << BUTTON_PORT_ENABLE);
+    RCC_AHB4ENR |= PERIPHERAL_PORT_ENABLE_MASK;
 }
 
-static void configure_led(void) {
-    GPIO_MODER(LED_GPIO_BASE) &= ~(3u << (LED_PIN * 2u));
-    GPIO_MODER(LED_GPIO_BASE) |=  (1u << (LED_PIN * 2u));
+static void configure_output(uint32_t base, uint32_t pin) {
+    GPIO_MODER(base) &= ~(3u << (pin * 2u));
+    GPIO_MODER(base) |=  (1u << (pin * 2u));
 }
 
-static void configure_button(void) {
-    GPIO_MODER(BUTTON_GPIO_BASE) &= ~(3u << (BUTTON_PIN * 2u));
-    GPIO_PUPDR(BUTTON_GPIO_BASE) &= ~(3u << (BUTTON_PIN * 2u));
-    GPIO_PUPDR(BUTTON_GPIO_BASE) |=  (2u << (BUTTON_PIN * 2u));
+static void configure_input(uint32_t base, uint32_t pin) {
+    GPIO_MODER(base) &= ~(3u << (pin * 2u));
+    GPIO_PUPDR(base) &= ~(3u << (pin * 2u));
+    GPIO_PUPDR(base) |=  (2u << (pin * 2u));
 }
 
-static void set_led(int on) {
+static int read_input(uint32_t base, uint32_t pin) {
+    return (GPIO_IDR(base) & (1u << pin)) != 0;
+}
+
+static void write_output(uint32_t base, uint32_t pin, int on) {
     if(on) {
-        GPIO_BSRR(LED_GPIO_BASE) = (1u << LED_PIN);
+        GPIO_BSRR(base) = (1u << pin);
     } else {
-        GPIO_BSRR(LED_GPIO_BASE) = (1u << (LED_PIN + 16u));
+        GPIO_BSRR(base) = (1u << (pin + 16u));
     }
 }
 
 int main(void) {
     enable_gpio_clocks();
-    configure_led();
-    configure_button();
+${configureLeds || '    // No LED outputs connected.'}
+${configureButtons || '    // No button inputs connected.'}
 
     while(1) {
-        const int pressed = (GPIO_IDR(BUTTON_GPIO_BASE) & (1u << BUTTON_PIN)) != 0;
-        set_led(pressed);
+${buttonReads || '        // No button states to sample.'}
+${ledWrites || '        // No LED states to update.'}
     }
 }
 `;
@@ -309,21 +392,56 @@ SECTIONS
 `;
 
 function generateBoardRepl(wiring = DEFAULT_DEMO_WIRING) {
-  const button = resolvePinFromPadId(wiring.buttonPadId);
-  const led = resolvePinFromPadId(wiring.ledPadId);
+  const connectedButtons = getConnectedPeripherals(wiring, 'button');
+  const connectedLeds = getConnectedPeripherals(wiring, 'led');
+  const ledMappings = new Map();
+
+  const buttonBlocks = connectedButtons.map((button) => {
+    const pin = resolvePinFromPadId(button.padId);
+    const renodeName = `externalButton__${sanitizeIdentifier(button.id)}`;
+    return [
+      `// ${button.label}: ${button.padId} -> ${pin.mcuPinId}`,
+      `${renodeName}: Miscellaneous.Button @ gpioPort${pin.portLetter}`,
+      `    -> gpioPort${pin.portLetter}@${pin.number}`,
+      '',
+    ].join('\n');
+  });
+
+  const ledBlocks = connectedLeds.map((led) => {
+    const pin = resolvePinFromPadId(led.padId);
+    const renodeName = `externalLed__${sanitizeIdentifier(led.id)}`;
+    const current = ledMappings.get(pin.portLetter) || [];
+    current.push(`    ${pin.number} -> ${renodeName}@0`);
+    ledMappings.set(pin.portLetter, current);
+    return [`// ${led.label}: ${led.padId} -> ${pin.mcuPinId}`, `${renodeName}: Miscellaneous.LED @ gpioPort${pin.portLetter}`, ''].join('\n');
+  });
+
+  const gpioBlocks = [...ledMappings.entries()].map(([portLetter, mappings]) => [`gpioPort${portLetter}:`, ...mappings, ''].join('\n'));
 
   return [
     `using "${BOARD_REPL_PATH}"`,
     '',
-    `externalButton: Miscellaneous.Button @ gpioPort${button.portLetter}`,
-    `    -> gpioPort${button.portLetter}@${button.number}`,
+    '// External lab peripherals attached from the visual board editor.',
     '',
-    `externalLed: Miscellaneous.LED @ gpioPort${led.portLetter}`,
-    '',
-    `gpioPort${led.portLetter}:`,
-    `    ${led.number} -> externalLed@0`,
-    '',
+    ...(buttonBlocks.length > 0 ? buttonBlocks : ['// No external buttons are connected.', '']),
+    ...(ledBlocks.length > 0 ? ledBlocks : ['// No external LEDs are connected.', '']),
+    ...gpioBlocks,
   ].join('\n');
+}
+
+function buildPeripheralManifest(wiring = DEFAULT_DEMO_WIRING) {
+  return getConnectedPeripherals(wiring).map((peripheral) => {
+    const pin = resolvePinFromPadId(peripheral.padId);
+    return {
+      id: peripheral.id,
+      kind: peripheral.kind,
+      label: peripheral.label,
+      renodeName: `external${peripheral.kind === 'button' ? 'Button' : 'Led'}__${sanitizeIdentifier(peripheral.id)}`,
+      gpioPortName: `gpioPort${pin.portLetter}`,
+      gpioNumber: pin.number,
+      mcuPinId: pin.mcuPinId,
+    };
+  });
 }
 
 module.exports = {
@@ -335,4 +453,5 @@ module.exports = {
   DEFAULT_GCC_ARGS,
   generateDemoMainSource,
   generateBoardRepl,
+  buildPeripheralManifest,
 };

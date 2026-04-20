@@ -35,6 +35,15 @@ type StartSimulationRequest = {
   workspaceDir?: string;
   elfPath: string;
   boardRepl: string;
+  peripheralManifest?: Array<{
+    id: string;
+    kind: 'button' | 'led';
+    label: string;
+    renodeName: string;
+    gpioPortName: string;
+    gpioNumber: number;
+    mcuPinId: string;
+  }>;
   bridgePort?: number;
   gdbPort?: number;
   machineName?: string;
@@ -91,6 +100,8 @@ type RuntimeEvent =
       status: 'connected' | 'disconnected' | 'ready' | 'button-event';
       ledHooked?: boolean;
       ledHookError?: string | null;
+      peripheralIds?: string[];
+      id?: string;
       state?: number;
     }
   | {

@@ -4,12 +4,12 @@ const fs = require('fs');
 const net = require('net');
 const os = require('os');
 const path = require('path');
+const { connectExternalControlClient } = require('./external-control.cjs');
 
 const APP_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_BRIDGE_PORT = 9001;
 const DEFAULT_GDB_PORT = 3333;
 const LOCAL_RENODE_PATH = path.join(APP_ROOT, 'renode', 'renode', 'renode.exe');
-const BRIDGE_TEMPLATE_PATH = path.join(APP_ROOT, 'renode_bridge.py');
 
 function normalizeForRenode(filePath) {
   return filePath.replace(/\\/g, '/');
@@ -124,8 +124,11 @@ function createRuntimeService(options = {}) {
   const emitter = new EventEmitter();
   const state = {
     renodeProcess: null,
-    bridgeSocket: null,
-    bridgeBuffer: '',
+    bridgeClient: null,
+    bridgePollTimer: null,
+    bridgePolling: false,
+    bridgeManifest: [],
+    ledStateCache: new Map(),
     debugProcess: null,
     debugBuffer: '',
     debugSequence: 1,
@@ -220,36 +223,117 @@ function createRuntimeService(options = {}) {
     };
   }
 
-  function parseBridgeMessages(chunk) {
-    state.bridgeBuffer += chunk.toString();
-    let newlineIndex = state.bridgeBuffer.indexOf('\n');
-
-    while (newlineIndex >= 0) {
-      const rawLine = state.bridgeBuffer.slice(0, newlineIndex).trim();
-      state.bridgeBuffer = state.bridgeBuffer.slice(newlineIndex + 1);
-
-      if (rawLine) {
-        try {
-          emit(JSON.parse(rawLine));
-        } catch (error) {
-          log(`Failed to parse bridge payload: ${String(error)}`, 'error');
-        }
-      }
-
-      newlineIndex = state.bridgeBuffer.indexOf('\n');
+  function clearBridgePolling() {
+    if (state.bridgePollTimer) {
+      clearInterval(state.bridgePollTimer);
+      state.bridgePollTimer = null;
     }
+    state.bridgePolling = false;
   }
 
-  function closeBridgeSocket() {
-    if (state.bridgeSocket) {
+  function closeBridgeSession() {
+    clearBridgePolling();
+
+    if (state.bridgeClient) {
       try {
-        state.bridgeSocket.destroy();
+        state.bridgeClient.close();
       } catch {
-        // ignore cleanup failures
+        // ignore shutdown failures
       }
     }
-    state.bridgeSocket = null;
-    state.bridgeBuffer = '';
+
+    if (state.bridgeClient || state.bridgeManifest.length > 0) {
+      emit({ type: 'bridge', status: 'disconnected' });
+    }
+
+    state.bridgeClient = null;
+    state.bridgeManifest = [];
+    state.ledStateCache = new Map();
+  }
+
+  function startBridgePolling() {
+    clearBridgePolling();
+
+    const ledEntries = state.bridgeManifest.filter((entry) => entry.kind === 'led');
+    if (!state.bridgeClient || ledEntries.length === 0) {
+      return;
+    }
+
+    const poll = async () => {
+      if (!state.bridgeClient || state.bridgePolling) {
+        return;
+      }
+
+      state.bridgePolling = true;
+
+      try {
+        const states = await state.bridgeClient.getPeripheralStates(ledEntries);
+        for (const entry of ledEntries) {
+          const nextState = Boolean(states.get(entry.id));
+          const previousState = state.ledStateCache.get(entry.id);
+          if (previousState === nextState) {
+            continue;
+          }
+
+          state.ledStateCache.set(entry.id, nextState);
+          emit({
+            type: 'led',
+            id: entry.id,
+            state: nextState ? 1 : 0,
+          });
+        }
+      } catch (error) {
+        const message = String(error);
+        if (!state.bridgeClient || /client closed|socket closed/i.test(message)) {
+          return;
+        }
+        log(`External control poll failed: ${message}`, 'error');
+        closeBridgeSession();
+      } finally {
+        state.bridgePolling = false;
+      }
+    };
+
+    void poll();
+    state.bridgePollTimer = setInterval(() => {
+      void poll();
+    }, 120);
+  }
+
+  async function connectBridge(port, machineName, peripheralManifest) {
+    const manifest = Array.isArray(peripheralManifest) ? peripheralManifest : [];
+    const startedAt = Date.now();
+    log(`Waiting for Renode external control on port ${port}...`);
+
+    try {
+      const client = await connectExternalControlClient({
+        port,
+        machineName,
+        peripheralManifest: manifest,
+        attempts: 80,
+        delayMs: 250,
+      });
+
+      state.bridgeClient = client;
+      state.bridgeManifest = manifest;
+      state.ledStateCache = new Map();
+
+      emit({ type: 'bridge', status: 'connected' });
+      emit({
+        type: 'bridge',
+        status: 'ready',
+        ledHooked: true,
+        ledHookError: null,
+        peripheralIds: manifest.map((entry) => entry.id),
+      });
+
+      log(`External control connected after ${Date.now() - startedAt} ms.`);
+      startBridgePolling();
+      return true;
+    } catch (error) {
+      log(`Renode external control was unavailable on port ${port} after ${Date.now() - startedAt} ms: ${String(error)}`, 'warn');
+      return false;
+    }
   }
 
   function parseDebugStdout(chunk) {
@@ -293,37 +377,6 @@ function createRuntimeService(options = {}) {
     state.debugBuffer = '';
   }
 
-  async function connectBridge(port, attempts = 40, delayMs = 250) {
-    for (let attempt = 1; attempt <= attempts; attempt += 1) {
-      try {
-        await new Promise((resolve, reject) => {
-          const socket = net.createConnection({ host: '127.0.0.1', port }, () => {
-            state.bridgeSocket = socket;
-            state.bridgeBuffer = '';
-            socket.setEncoding('utf8');
-            socket.on('data', parseBridgeMessages);
-            socket.on('close', () => {
-              state.bridgeSocket = null;
-              emit({ type: 'bridge', status: 'disconnected' });
-            });
-            socket.on('error', (error) => {
-              log(`Bridge socket error: ${String(error)}`, 'error');
-            });
-            emit({ type: 'bridge', status: 'connected' });
-            resolve();
-          });
-
-          socket.on('error', reject);
-        });
-        return true;
-      } catch {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
-    }
-
-    return false;
-  }
-
   function attachRenodeProcessHandlers(child) {
     child.stdout.on('data', (chunk) => {
       const message = chunk.toString().trimEnd();
@@ -340,7 +393,7 @@ function createRuntimeService(options = {}) {
     });
 
     child.on('close', (code) => {
-      closeBridgeSocket();
+      closeBridgeSession();
       stopDebuggingInternal();
       state.renodeProcess = null;
       emit({
@@ -353,7 +406,7 @@ function createRuntimeService(options = {}) {
   }
 
   function stopSimulationInternal() {
-    closeBridgeSocket();
+    closeBridgeSession();
     stopDebuggingInternal();
 
     if (state.renodeProcess) {
@@ -472,29 +525,24 @@ function createRuntimeService(options = {}) {
 
     const replPath = path.join(workspaceDir, 'board.repl');
     const rescPath = path.join(workspaceDir, 'run.resc');
-    const bridgePath = path.join(workspaceDir, 'renode_bridge.py');
     const bridgePort = request.bridgePort || DEFAULT_BRIDGE_PORT;
     const gdbPort = request.gdbPort || DEFAULT_GDB_PORT;
     const monitorPort = await getFreePort();
+    const machineName = request.machineName || 'NUCLEO-H753ZI GPIO Workbench';
     const relativeElfPath = path
       .relative(workspaceDir, request.elfPath)
       .replace(/\\/g, '/');
 
-    const bridgeTemplate = fs
-      .readFileSync(BRIDGE_TEMPLATE_PATH, 'utf8')
-      .replace('__BRIDGE_PORT__', String(bridgePort));
-
     fs.writeFileSync(replPath, request.boardRepl, 'utf8');
-    fs.writeFileSync(bridgePath, bridgeTemplate, 'utf8');
 
     const rescContent = [
-      `$name?="${request.machineName || 'NUCLEO-H753ZI GPIO Workbench'}"`,
+      `$name?="${machineName}"`,
       'mach create $name',
       '',
       'machine LoadPlatformDescription @board.repl',
       'using sysbus',
       `sysbus LoadELF @${relativeElfPath}`,
-      'include @renode_bridge.py',
+      `emulation CreateExternalControlServer "local-control" ${bridgePort}`,
       `machine StartGdbServer ${gdbPort}`,
       'start',
       '',
@@ -526,9 +574,9 @@ function createRuntimeService(options = {}) {
       state.activeWorkspaceDir = workspaceDir;
       attachRenodeProcessHandlers(child);
 
-      const bridgeReady = await connectBridge(bridgePort);
+      const bridgeReady = await connectBridge(bridgePort, machineName, request.peripheralManifest);
       if (!bridgeReady) {
-        log(`Renode started, but the local bridge on port ${bridgePort} did not answer in time.`, 'warn');
+        log(`Renode started, but the external control bridge on port ${bridgePort} did not answer in time.`, 'warn');
       }
 
       emit({
@@ -553,7 +601,7 @@ function createRuntimeService(options = {}) {
       };
     } catch (error) {
       state.renodeProcess = null;
-      closeBridgeSocket();
+      closeBridgeSession();
       return {
         success: false,
         message: `Failed to launch Renode: ${String(error)}`,
@@ -562,17 +610,38 @@ function createRuntimeService(options = {}) {
   }
 
   async function sendPeripheralEvent(request) {
-    if (!state.bridgeSocket) {
+    if (!state.bridgeClient) {
       return {
         success: false,
-        message: 'Bridge socket is not connected.',
+        message: 'External control bridge is not connected.',
       };
     }
 
-    state.bridgeSocket.write(`${JSON.stringify(request)}\n`);
-    return {
-      success: true,
-    };
+    const entry = state.bridgeManifest.find((candidate) => candidate.id === request.id && candidate.kind === 'button');
+    if (!entry) {
+      return {
+        success: false,
+        message: `Unknown button peripheral: ${request.id}`,
+      };
+    }
+
+    try {
+      await state.bridgeClient.setPeripheralState(entry, request.state === 1);
+      emit({
+        type: 'bridge',
+        status: 'button-event',
+        id: request.id,
+        state: request.state,
+      });
+      return {
+        success: true,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Failed to drive button state: ${String(error)}`,
+      };
+    }
   }
 
   function sendDebugCommand(command) {

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckCircle2,
   Code2,
@@ -8,11 +8,13 @@ import {
   Lightbulb,
   LoaderCircle,
   Play,
+  Plus,
   RefreshCcw,
   Save,
   Square,
   Terminal,
   ToggleLeft,
+  Trash2,
   TriangleAlert,
   Wrench,
 } from 'lucide-react';
@@ -35,13 +37,20 @@ import {
   DEMO_RIGHT_CONNECTORS,
   DEMO_RIGHT_MORPHO_CONNECTOR,
   DEMO_SELECTABLE_PADS,
+  MAX_PERIPHERALS,
   DemoBoardConnector,
   DemoBoardPad,
+  DemoPeripheral,
+  DemoPeripheralKind,
   DemoWiring,
+  buildPeripheralManifest,
+  createPeripheral,
   describePad,
   generateBoardRepl,
   generateDemoMainSource,
   generateRescPreview,
+  getConnectedPeripherals,
+  getPeripheralsByKind,
   resolveSelectablePad,
 } from './lib/firmware';
 
@@ -96,8 +105,11 @@ type DebugState = {
   lastMessage: string;
 };
 
-type PlacementTool = 'button' | 'led' | null;
 type CodeMode = 'generated' | 'manual';
+type PeripheralPosition = {
+  x: number;
+  y: number;
+};
 
 const ONBOARD_FEATURES = [
   { label: 'LD1', detail: 'PB0 · Green LED' },
@@ -105,6 +117,53 @@ const ONBOARD_FEATURES = [
   { label: 'LD3', detail: 'PB14 · Red LED' },
   { label: 'B1', detail: 'PC13 · User Button' },
 ];
+
+const BOARD_CONNECTOR_LAYOUT = {
+  CN11: { x: 0, y: 24, width: 108, layout: 'dual' as const },
+  CN7: { x: 128, y: 50, width: 90, layout: 'single' as const },
+  CN8: { x: 128, y: 228, width: 90, layout: 'single' as const },
+  CN9: { x: 542, y: 50, width: 90, layout: 'single' as const },
+  CN10: { x: 542, y: 228, width: 90, layout: 'single' as const },
+  CN12: { x: 652, y: 24, width: 108, layout: 'dual' as const },
+};
+
+const WOKWI_CURATED_PAD_IDS = new Set<string>([
+  'CN7-8',
+  'CN7-9',
+  'CN7-10',
+  'CN7-11',
+  'CN7-12',
+  'CN7-13',
+  'CN7-14',
+  'CN7-15',
+  'CN8-1',
+  'CN8-2',
+  'CN8-3',
+  'CN8-4',
+  'CN8-5',
+  'CN8-6',
+  'CN8-7',
+  'CN8-8',
+  'CN8-9',
+  'CN8-10',
+  'CN9-1',
+  'CN9-3',
+  'CN9-5',
+  'CN9-7',
+  'CN10-3',
+  'CN10-5',
+  'CN10-7',
+  'CN10-9',
+]);
+
+const BOARD_CANVAS_WIDTH = 760;
+const BOARD_CANVAS_BASE_HEIGHT = 510;
+const PERIPHERAL_CARD_WIDTH = 138;
+const PERIPHERAL_CARD_HEIGHT = 86;
+const PERIPHERALS_PER_ROW = 4;
+const PERIPHERAL_ROW_GAP = 18;
+const PAD_HOTSPOT_SIZE = 18;
+const PAD_HOVER_LABEL_WIDTH = 140;
 
 const createLogEntry = (message: string, level: RuntimeLog['level'] = 'info'): RuntimeLog => ({
   id: Date.now() + Math.floor(Math.random() * 1000),
@@ -148,157 +207,175 @@ function StatusPill({ active, label }: { active: boolean; label: string }) {
   );
 }
 
-function PlacementButton({
-  active,
-  disabled,
-  label,
-  detail,
-  accent,
-  onClick,
-}: {
-  active: boolean;
-  disabled?: boolean;
-  label: string;
-  detail: string;
-  accent: 'fuchsia' | 'amber';
-  onClick: () => void;
-}) {
-  const activeClass =
-    accent === 'fuchsia'
-      ? 'border-fuchsia-400 bg-fuchsia-500/15 text-fuchsia-100'
-      : 'border-amber-300 bg-amber-500/10 text-amber-100';
-
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className={`rounded-3xl border px-4 py-3 text-left transition ${
-        disabled
-          ? 'cursor-not-allowed border-slate-800 bg-slate-900/50 text-slate-500'
-          : active
-            ? activeClass
-            : 'border-slate-800 bg-slate-900/70 text-slate-300 hover:border-slate-600 hover:text-white'
-      }`}
-    >
-      <div className="text-sm font-semibold">{label}</div>
-      <div className="mt-1 text-xs text-slate-400">{detail}</div>
-    </button>
-  );
+function findPeripheralForPad(wiring: DemoWiring, padId: string): DemoPeripheral | null {
+  return wiring.peripherals.find((peripheral) => peripheral.padId === padId) ?? null;
 }
 
-function padTone(
+function getPeripheralDisplayTone(
+  peripheral: DemoPeripheral,
+  armedPeripheralId: string | null,
+  ledStates: Record<string, boolean>,
+  buttonStates: Record<string, boolean>
+) {
+  const armed = armedPeripheralId === peripheral.id;
+
+  if (peripheral.kind === 'button') {
+    return buttonStates[peripheral.id]
+      ? `border-fuchsia-300 bg-fuchsia-500/20 text-fuchsia-50 ${armed ? 'ring-2 ring-cyan-400/70' : ''}`
+      : `border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-100 ${armed ? 'ring-2 ring-cyan-400/70' : ''}`;
+  }
+
+  return ledStates[peripheral.id]
+    ? `border-amber-200 bg-amber-400/20 text-amber-50 shadow-[0_0_18px_rgba(251,191,36,0.35)] ${armed ? 'ring-2 ring-cyan-400/70' : ''}`
+    : `border-amber-500/40 bg-amber-500/10 text-amber-100 ${armed ? 'ring-2 ring-cyan-400/70' : ''}`;
+}
+
+function getPadTone(
   pad: DemoBoardPad,
   wiring: DemoWiring,
-  ledOn: boolean,
-  buttonPressed: boolean,
-  placementTool: PlacementTool,
+  armedPeripheralId: string | null,
+  ledStates: Record<string, boolean>,
+  buttonStates: Record<string, boolean>,
   disabled: boolean
 ) {
-  const isButton = wiring.buttonPadId === pad.id;
-  const isLed = wiring.ledPadId === pad.id;
-  const isSelected = placementTool === 'button' ? isButton : placementTool === 'led' ? isLed : false;
+  const occupant = findPeripheralForPad(wiring, pad.id);
 
   if (!pad.selectable) {
     if (pad.role === 'power') {
-      return {
-        className: 'border-emerald-900/60 bg-emerald-950/30 text-emerald-100/80',
-        badge: 'PWR',
-        selected: false,
-      };
+      return 'border-emerald-900/60 bg-emerald-950/30 text-emerald-100/80';
     }
     if (pad.role === 'ground') {
-      return {
-        className: 'border-slate-700 bg-slate-900/80 text-slate-300',
-        badge: 'GND',
-        selected: false,
-      };
+      return 'border-slate-700 bg-slate-900/80 text-slate-300';
     }
     if (pad.blockedReason) {
-      return {
-        className: 'border-cyan-900/70 bg-cyan-950/25 text-cyan-100/80',
-        badge: 'ON-BOARD',
-        selected: false,
-      };
+      return 'border-cyan-900/70 bg-cyan-950/25 text-cyan-100/80';
     }
-    return {
-      className: 'border-slate-800 bg-slate-900/70 text-slate-500',
-      badge: 'CTRL',
-      selected: false,
-    };
+    return 'border-slate-800 bg-slate-900/70 text-slate-500';
   }
 
-  if (isButton) {
-    return {
-      className: buttonPressed
-        ? 'border-fuchsia-300 bg-fuchsia-500/20 text-fuchsia-50'
-        : 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-100',
-      badge: 'BUTTON',
-      selected: isSelected,
-    };
+  if (occupant) {
+    return `${getPeripheralDisplayTone(occupant, armedPeripheralId, ledStates, buttonStates)} ${disabled ? 'cursor-not-allowed' : ''}`;
   }
 
-  if (isLed) {
-    return {
-      className: ledOn
-        ? 'border-amber-200 bg-amber-400/20 text-amber-50 shadow-[0_0_18px_rgba(251,191,36,0.35)]'
-        : 'border-amber-500/40 bg-amber-500/10 text-amber-100',
-      badge: 'LED',
-      selected: isSelected,
-    };
-  }
+  return disabled
+    ? 'border-slate-800 bg-slate-900/70 text-slate-500 cursor-not-allowed'
+    : `border-slate-800 bg-slate-900/70 text-slate-200 hover:border-slate-600 hover:text-white ${
+        armedPeripheralId ? 'ring-1 ring-cyan-400/35' : ''
+      }`;
+}
+
+function buildWorkbenchConnectorGroups(wiring: DemoWiring, showFullPinout: boolean) {
+  const connectedPadIds = new Set(
+    getConnectedPeripherals(wiring)
+      .map((peripheral) => peripheral.padId)
+      .filter((padId): padId is string => Boolean(padId))
+  );
+
+  const filterConnector = (connector: DemoBoardConnector | null) => {
+    if (!connector) {
+      return null;
+    }
+
+    if (showFullPinout) {
+      return connector;
+    }
+
+    const isVisiblePad = (pad: DemoBoardPad) => connectedPadIds.has(pad.id) || WOKWI_CURATED_PAD_IDS.has(pad.id);
+
+    const pins =
+      connector.layout === 'dual'
+        ? (() => {
+            const oddPins = connector.pins.filter((pad) => pad.column === 'odd');
+            const evenPins = connector.pins.filter((pad) => pad.column === 'even');
+            const pairedPins: DemoBoardPad[] = [];
+
+            oddPins.forEach((oddPin, index) => {
+              const evenPin = evenPins[index];
+              if (isVisiblePad(oddPin) || (evenPin ? isVisiblePad(evenPin) : false)) {
+                pairedPins.push(oddPin);
+                if (evenPin) {
+                  pairedPins.push(evenPin);
+                }
+              }
+            });
+
+            return pairedPins;
+          })()
+        : connector.pins.filter(isVisiblePad);
+
+    return pins.length > 0 ? { ...connector, pins } : null;
+  };
+
+  const leftMorpho = filterConnector(DEMO_LEFT_MORPHO_CONNECTOR);
+  const left = DEMO_LEFT_CONNECTORS.map(filterConnector).filter((connector): connector is DemoBoardConnector => Boolean(connector));
+  const right = DEMO_RIGHT_CONNECTORS.map(filterConnector).filter((connector): connector is DemoBoardConnector => Boolean(connector));
+  const rightMorpho = filterConnector(DEMO_RIGHT_MORPHO_CONNECTOR);
+
+  const connectors = [
+    ...(leftMorpho ? [leftMorpho] : []),
+    ...left,
+    ...right,
+    ...(rightMorpho ? [rightMorpho] : []),
+  ];
+  const visibleSelectablePads = connectors.flatMap((connector) => connector.pins).filter((pad) => pad.selectable).length;
 
   return {
-    className: disabled
-      ? 'border-slate-800 bg-slate-900/70 text-slate-500'
-      : 'border-slate-800 bg-slate-900/70 text-slate-200 hover:border-slate-600 hover:text-white',
-    badge: pad.role === 'gpio' ? 'GPIO' : 'FREE',
-    selected: isSelected,
+    leftMorpho,
+    left,
+    right,
+    rightMorpho,
+    connectors,
+    visibleSelectablePads,
   };
 }
 
 function BoardPadChip({
   pad,
   wiring,
-  placementTool,
-  ledOn,
-  buttonPressed,
+  armedPeripheralId,
+  ledStates,
+  buttonStates,
   disabled,
   onAssign,
   compact = false,
 }: {
   pad: DemoBoardPad;
   wiring: DemoWiring;
-  placementTool: PlacementTool;
-  ledOn: boolean;
-  buttonPressed: boolean;
+  armedPeripheralId: string | null;
+  ledStates: Record<string, boolean>;
+  buttonStates: Record<string, boolean>;
   disabled: boolean;
   onAssign: (pad: DemoBoardPad) => void;
   compact?: boolean;
 }) {
-  const tone = padTone(pad, wiring, ledOn, buttonPressed, placementTool, disabled);
-  const muted = !pad.selectable;
+  const occupant = findPeripheralForPad(wiring, pad.id);
 
   return (
     <button
       onClick={() => onAssign(pad)}
       disabled={disabled || !pad.selectable}
-      className={`rounded-2xl border p-2.5 text-left transition ${tone.className} ${
-        disabled || !pad.selectable ? 'cursor-not-allowed' : ''
-      } ${tone.selected ? 'ring-2 ring-cyan-400/70' : ''}`}
+      className={`rounded-2xl border p-2.5 text-left transition ${getPadTone(
+        pad,
+        wiring,
+        armedPeripheralId,
+        ledStates,
+        buttonStates,
+        disabled
+      )}`}
     >
       <div className="flex items-start justify-between gap-2">
         <div>
-          <div className={`${compact ? 'text-[11px]' : 'text-xs'} uppercase tracking-[0.18em] ${muted ? 'text-current/70' : 'text-current/70'}`}>
+          <div className={`${compact ? 'text-[11px]' : 'text-xs'} uppercase tracking-[0.18em] text-current/70`}>
             Pin {pad.pinNumber}
           </div>
           <div className={`${compact ? 'mt-0.5 text-[13px]' : 'mt-1 text-sm'} font-semibold`}>{pad.pinLabel}</div>
         </div>
-        <div className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] ${muted ? 'border-current/20' : 'border-current/25'}`}>
-          {tone.badge}
+        <div className="rounded-full border border-current/20 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em]">
+          {occupant ? occupant.label : pad.selectable ? 'FREE' : pad.role.toUpperCase()}
         </div>
       </div>
 
-      <div className={`mt-2 ${compact ? 'text-[11px]' : 'text-xs'} ${muted ? 'text-current/70' : 'text-current/80'}`}>
+      <div className={`mt-2 ${compact ? 'text-[11px]' : 'text-xs'} text-current/80`}>
         {pad.mcuPinId || pad.signalName}
       </div>
       {pad.note ? <div className="mt-1 text-[11px] text-current/65">{pad.note}</div> : null}
@@ -310,13 +387,13 @@ function BoardPadChip({
 function SingleConnectorCard(props: {
   connector: DemoBoardConnector;
   wiring: DemoWiring;
-  placementTool: PlacementTool;
-  ledOn: boolean;
-  buttonPressed: boolean;
+  armedPeripheralId: string | null;
+  ledStates: Record<string, boolean>;
+  buttonStates: Record<string, boolean>;
   disabled: boolean;
   onAssign: (pad: DemoBoardPad) => void;
 }) {
-  const { connector, wiring, placementTool, ledOn, buttonPressed, disabled, onAssign } = props;
+  const { connector, wiring, armedPeripheralId, ledStates, buttonStates, disabled, onAssign } = props;
 
   return (
     <div className="rounded-[28px] border border-slate-800/90 bg-slate-950/80 p-4 shadow-xl backdrop-blur">
@@ -336,9 +413,9 @@ function SingleConnectorCard(props: {
             <BoardPadChip
               pad={pad}
               wiring={wiring}
-              placementTool={placementTool}
-              ledOn={ledOn}
-              buttonPressed={buttonPressed}
+              armedPeripheralId={armedPeripheralId}
+              ledStates={ledStates}
+              buttonStates={buttonStates}
               disabled={disabled}
               onAssign={onAssign}
             />
@@ -352,13 +429,13 @@ function SingleConnectorCard(props: {
 function DualConnectorCard(props: {
   connector: DemoBoardConnector;
   wiring: DemoWiring;
-  placementTool: PlacementTool;
-  ledOn: boolean;
-  buttonPressed: boolean;
+  armedPeripheralId: string | null;
+  ledStates: Record<string, boolean>;
+  buttonStates: Record<string, boolean>;
   disabled: boolean;
   onAssign: (pad: DemoBoardPad) => void;
 }) {
-  const { connector, wiring, placementTool, ledOn, buttonPressed, disabled, onAssign } = props;
+  const { connector, wiring, armedPeripheralId, ledStates, buttonStates, disabled, onAssign } = props;
   const oddPins = connector.pins.filter((pad) => pad.column === 'odd');
   const evenPins = connector.pins.filter((pad) => pad.column === 'even');
 
@@ -382,9 +459,9 @@ function DualConnectorCard(props: {
               <BoardPadChip
                 pad={oddPin}
                 wiring={wiring}
-                placementTool={placementTool}
-                ledOn={ledOn}
-                buttonPressed={buttonPressed}
+                armedPeripheralId={armedPeripheralId}
+                ledStates={ledStates}
+                buttonStates={buttonStates}
                 disabled={disabled}
                 onAssign={onAssign}
                 compact
@@ -393,9 +470,9 @@ function DualConnectorCard(props: {
                 <BoardPadChip
                   pad={evenPin}
                   wiring={wiring}
-                  placementTool={placementTool}
-                  ledOn={ledOn}
-                  buttonPressed={buttonPressed}
+                  armedPeripheralId={armedPeripheralId}
+                  ledStates={ledStates}
+                  buttonStates={buttonStates}
                   disabled={disabled}
                   onAssign={onAssign}
                   compact
@@ -411,26 +488,95 @@ function DualConnectorCard(props: {
   );
 }
 
+function getPadAnchor(pad: DemoBoardPad): { x: number; y: number } {
+  const frame = BOARD_CONNECTOR_LAYOUT[pad.connectorId as keyof typeof BOARD_CONNECTOR_LAYOUT];
+  if (!frame) {
+    return { x: BOARD_CANVAS_WIDTH / 2, y: 180 };
+  }
+
+  if (frame.layout === 'single') {
+    const connector = DEMO_CONNECTORS.find((item) => item.id === pad.connectorId)!;
+    const index = connector.pins.findIndex((item) => item.id === pad.id);
+    const dotX = frame.x + 18;
+    const dotY = frame.y + 28 + index * 12;
+    return {
+      x: pad.connectorPlacement === 'left' ? dotX : frame.x + frame.width - 18,
+      y: dotY,
+    };
+  }
+
+  const connector = DEMO_CONNECTORS.find((item) => item.id === pad.connectorId)!;
+  if (pad.column === 'odd') {
+    const oddPins = connector.pins.filter((item) => item.column === 'odd');
+    const index = oddPins.findIndex((item) => item.id === pad.id);
+    return {
+      x: frame.x + 20,
+      y: frame.y + 28 + index * 10,
+    };
+  }
+
+  const evenPins = connector.pins.filter((item) => item.column === 'even');
+  const index = evenPins.findIndex((item) => item.id === pad.id);
+  return {
+    x: frame.x + frame.width - 20,
+    y: frame.y + 28 + index * 10,
+  };
+}
+
+function createDefaultPeripheralPosition(index: number): PeripheralPosition {
+  const row = Math.floor(index / PERIPHERALS_PER_ROW);
+  const column = index % PERIPHERALS_PER_ROW;
+  const startX = 96;
+  const startY = 376 + row * (PERIPHERAL_CARD_HEIGHT + PERIPHERAL_ROW_GAP);
+  const x = startX + column * (PERIPHERAL_CARD_WIDTH + 18);
+  const y = startY;
+  return { x, y };
+}
+
+function clampPeripheralPosition(position: PeripheralPosition, canvasHeight: number): PeripheralPosition {
+  return {
+    x: Math.max(24, Math.min(BOARD_CANVAS_WIDTH - PERIPHERAL_CARD_WIDTH - 24, position.x)),
+    y: Math.max(330, Math.min(canvasHeight - PERIPHERAL_CARD_HEIGHT - 12, position.y)),
+  };
+}
+
+function getPeripheralCardAnchor(position: PeripheralPosition) {
+  return {
+    x: position.x + PERIPHERAL_CARD_WIDTH / 2,
+    y: position.y,
+  };
+}
+
+function buildWirePath(start: { x: number; y: number }, end: { x: number; y: number }) {
+  const controlOffset = Math.max(36, Math.abs(end.x - start.x) * 0.28);
+  return `M ${start.x} ${start.y} C ${start.x} ${start.y - controlOffset}, ${end.x} ${end.y + controlOffset}, ${end.x} ${end.y}`;
+}
+
 function MiniConnectorStrip({
   connector,
-  buttonPadId,
-  ledPadId,
-  compact = false,
+  wiring,
+  ledStates,
+  buttonStates,
 }: {
   connector: DemoBoardConnector;
-  buttonPadId: string;
-  ledPadId: string;
-  compact?: boolean;
+  wiring: DemoWiring;
+  ledStates: Record<string, boolean>;
+  buttonStates: Record<string, boolean>;
 }) {
   const oddPins = connector.layout === 'dual' ? connector.pins.filter((pad) => pad.column === 'odd') : [];
   const evenPins = connector.layout === 'dual' ? connector.pins.filter((pad) => pad.column === 'even') : [];
 
-  const padClassName = (pad: DemoBoardPad) => {
-    if (buttonPadId === pad.id) {
-      return 'border-fuchsia-300 bg-fuchsia-400 shadow-[0_0_12px_rgba(217,70,239,0.65)]';
+  const dotTone = (pad: DemoBoardPad) => {
+    const occupant = findPeripheralForPad(wiring, pad.id);
+    if (occupant?.kind === 'button') {
+      return buttonStates[occupant.id]
+        ? 'border-fuchsia-300 bg-fuchsia-400 shadow-[0_0_12px_rgba(217,70,239,0.65)]'
+        : 'border-fuchsia-300 bg-fuchsia-200/80';
     }
-    if (ledPadId === pad.id) {
-      return 'border-amber-200 bg-amber-300 shadow-[0_0_12px_rgba(251,191,36,0.75)]';
+    if (occupant?.kind === 'led') {
+      return ledStates[occupant.id]
+        ? 'border-amber-200 bg-amber-300 shadow-[0_0_12px_rgba(251,191,36,0.75)]'
+        : 'border-amber-300 bg-amber-200/80';
     }
     if (!pad.selectable) {
       if (pad.role === 'power') {
@@ -448,43 +594,35 @@ function MiniConnectorStrip({
   };
 
   return (
-    <div className={`rounded-[20px] border border-slate-300/70 bg-[#16181f]/95 ${compact ? 'p-2' : 'p-2.5'} shadow-md`}>
+    <div className="rounded-[20px] border border-slate-300/70 bg-[#16181f]/95 p-2 shadow-md">
       <div className="flex items-center justify-between gap-3">
-        <div className={`${compact ? 'text-[10px]' : 'text-[11px]'} font-semibold uppercase tracking-[0.2em] text-slate-200`}>
-          {connector.title}
-        </div>
-        <div className={`${compact ? 'text-[9px]' : 'text-[10px]'} uppercase tracking-[0.18em] text-slate-400`}>
-          {connector.layout === 'dual' ? 'Morpho' : 'Zio'}
-        </div>
+        <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-200">{connector.title}</div>
+        <div className="text-[9px] uppercase tracking-[0.18em] text-slate-400">{connector.layout === 'dual' ? 'Morpho' : 'Zio'}</div>
       </div>
 
       {connector.layout === 'single' ? (
-        <div className={`mt-2 grid ${compact ? 'grid-cols-1 gap-1.5' : 'grid-cols-1 gap-2'}`}>
+        <div className="mt-2 grid grid-cols-1 gap-1.5">
           {connector.pins.map((pad) => (
             <div key={pad.id} className="flex items-center gap-2">
-              <div className={`h-3.5 w-3.5 rounded-full border ${padClassName(pad)}`} />
-              <div className={`${compact ? 'text-[9px]' : 'text-[10px]'} leading-none text-slate-300`}>{pad.pinNumber}</div>
+              <div className={`h-3.5 w-3.5 rounded-full border ${dotTone(pad)}`} />
+              <div className="text-[9px] leading-none text-slate-300">{pad.pinNumber}</div>
             </div>
           ))}
         </div>
       ) : (
-        <div className={`mt-2 grid ${compact ? 'gap-1.5' : 'gap-2'}`}>
+        <div className="mt-2 grid gap-1.5">
           {oddPins.map((oddPin, index) => {
             const evenPin = evenPins[index];
             return (
               <div key={oddPin.id} className="grid grid-cols-[1fr_1fr] gap-2">
                 <div className="flex items-center gap-1.5">
-                  <div className={`h-3.5 w-3.5 rounded-full border ${padClassName(oddPin)}`} />
-                  <div className={`${compact ? 'text-[9px]' : 'text-[10px]'} leading-none text-slate-300`}>
-                    {oddPin.pinNumber}
-                  </div>
+                  <div className={`h-3.5 w-3.5 rounded-full border ${dotTone(oddPin)}`} />
+                  <div className="text-[9px] leading-none text-slate-300">{oddPin.pinNumber}</div>
                 </div>
                 {evenPin ? (
                   <div className="flex items-center justify-end gap-1.5">
-                    <div className={`${compact ? 'text-[9px]' : 'text-[10px]'} leading-none text-slate-300`}>
-                      {evenPin.pinNumber}
-                    </div>
-                    <div className={`h-3.5 w-3.5 rounded-full border ${padClassName(evenPin)}`} />
+                    <div className="text-[9px] leading-none text-slate-300">{evenPin.pinNumber}</div>
+                    <div className={`h-3.5 w-3.5 rounded-full border ${dotTone(evenPin)}`} />
                   </div>
                 ) : (
                   <div />
@@ -498,70 +636,352 @@ function MiniConnectorStrip({
   );
 }
 
-function BoardTopView({
-  buttonPad,
-  ledPad,
+function PeripheralRackCard({
+  peripheral,
+  buttons,
+  armed,
+  simulationRunning,
   ledOn,
   buttonPressed,
+  onArm,
+  onDisconnect,
+  onRemove,
+  onPress,
+  onSourceChange,
 }: {
-  buttonPad: DemoBoardPad;
-  ledPad: DemoBoardPad;
+  peripheral: DemoPeripheral;
+  buttons: DemoPeripheral[];
+  armed: boolean;
+  simulationRunning: boolean;
   ledOn: boolean;
   buttonPressed: boolean;
+  onArm: () => void;
+  onDisconnect: () => void;
+  onRemove: () => void;
+  onPress: (pressed: boolean) => void;
+  onSourceChange: (sourceId: string | null) => void;
 }) {
+  const baseTone =
+    peripheral.kind === 'button'
+      ? buttonPressed
+        ? 'border-fuchsia-300 bg-fuchsia-500/20 text-fuchsia-50'
+        : 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-100'
+      : ledOn
+        ? 'border-amber-200 bg-amber-400/20 text-amber-50 shadow-[0_0_18px_rgba(251,191,36,0.35)]'
+        : 'border-amber-500/40 bg-amber-500/10 text-amber-100';
+
+  return (
+    <div className={`rounded-[26px] border p-4 transition ${baseTone} ${armed ? 'ring-2 ring-cyan-400/70' : ''}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-[0.22em] text-current/70">{peripheral.kind}</div>
+          <div className="mt-1 text-lg font-semibold">{peripheral.label}</div>
+        </div>
+        <button
+          onClick={onRemove}
+          className="rounded-full border border-current/25 p-2 text-current/80 transition hover:bg-white/10"
+          title="Remove peripheral"
+        >
+          <Trash2 size={14} />
+        </button>
+      </div>
+
+      <div className="mt-3 rounded-2xl border border-current/20 bg-black/10 px-3 py-2 text-sm">
+        {peripheral.padId ? describePad(resolveSelectablePad(peripheral.padId)) : 'Not connected to a board pad'}
+      </div>
+
+      {peripheral.kind === 'led' ? (
+        <div className="mt-3">
+          <div className="text-xs uppercase tracking-[0.22em] text-current/70">Driven By</div>
+          <select
+            value={peripheral.sourcePeripheralId ?? ''}
+            onChange={(event) => onSourceChange(event.target.value || null)}
+            className="mt-2 w-full rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
+          >
+            <option value="">No button selected</option>
+            {buttons.map((button) => (
+              <option key={button.id} value={button.id} className="text-slate-900">
+                {button.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
+
+      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        <button
+          onClick={onArm}
+          className="rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm font-medium transition hover:bg-white/10"
+        >
+          {armed ? 'Cancel wiring' : 'Connect wire'}
+        </button>
+        <button
+          onClick={onDisconnect}
+          disabled={!peripheral.padId}
+          className={`rounded-2xl px-3 py-2 text-sm font-medium transition ${
+            peripheral.padId ? 'border border-current/25 bg-black/10 hover:bg-white/10' : 'cursor-not-allowed border border-current/10 bg-black/5 text-current/40'
+          }`}
+        >
+          Disconnect
+        </button>
+      </div>
+
+      {peripheral.kind === 'button' ? (
+        <button
+          onMouseDown={() => onPress(true)}
+          onMouseUp={() => onPress(false)}
+          onMouseLeave={() => onPress(false)}
+          onTouchStart={() => onPress(true)}
+          onTouchEnd={() => onPress(false)}
+          disabled={!simulationRunning || !peripheral.padId}
+          className={`mt-3 w-full rounded-2xl border px-3 py-3 text-sm font-semibold uppercase tracking-[0.2em] transition ${
+            simulationRunning && peripheral.padId
+              ? buttonPressed
+                ? 'border-fuchsia-300 bg-fuchsia-500 text-white'
+                : 'border-current/25 bg-black/10 hover:bg-white/10'
+              : 'cursor-not-allowed border-current/10 bg-black/5 text-current/40'
+          }`}
+        >
+          {simulationRunning && peripheral.padId ? 'Press button' : 'Run simulation to press'}
+        </button>
+      ) : (
+        <div className="mt-3 rounded-2xl border border-current/20 bg-black/10 px-3 py-3 text-center text-sm font-semibold">
+          {ledOn ? 'LED is glowing' : 'LED is idle'}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BoardTopView({
+  wiring,
+  ledStates,
+  buttonStates,
+  peripheralPositions,
+  visiblePads,
+  armedPeripheralId,
+  simulationRunning,
+  onAssignPad,
+  onMovePeripheral,
+  onArmPeripheral,
+  onPressPeripheral,
+}: {
+  wiring: DemoWiring;
+  ledStates: Record<string, boolean>;
+  buttonStates: Record<string, boolean>;
+  peripheralPositions: Record<string, PeripheralPosition>;
+  visiblePads: DemoBoardPad[];
+  armedPeripheralId: string | null;
+  simulationRunning: boolean;
+  onAssignPad: (pad: DemoBoardPad) => void;
+  onMovePeripheral: (peripheralId: string, position: PeripheralPosition) => void;
+  onArmPeripheral: (peripheralId: string) => void;
+  onPressPeripheral: (peripheralId: string, pressed: boolean) => void;
+}) {
+  const rows = Math.max(1, Math.ceil(Math.max(wiring.peripherals.length, 1) / PERIPHERALS_PER_ROW));
+  const canvasHeight = BOARD_CANVAS_BASE_HEIGHT + Math.max(0, rows - 1) * (PERIPHERAL_CARD_HEIGHT + PERIPHERAL_ROW_GAP);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const dragStateRef = useRef<{
+    peripheralId: string;
+    pointerId: number;
+    offsetX: number;
+    offsetY: number;
+  } | null>(null);
+  const [hoveredPadId, setHoveredPadId] = useState<string | null>(null);
+  const [pointerPosition, setPointerPosition] = useState<{ x: number; y: number } | null>(null);
+
+  const resolveCanvasPosition = useCallback(
+    (peripheral: DemoPeripheral, index: number) =>
+      clampPeripheralPosition(peripheralPositions[peripheral.id] ?? createDefaultPeripheralPosition(index), canvasHeight),
+    [canvasHeight, peripheralPositions]
+  );
+
+  const wires = useMemo(
+    () =>
+      wiring.peripherals
+        .map((peripheral, index) => {
+          if (!peripheral.padId) {
+            return null;
+          }
+          const pad = resolveSelectablePad(peripheral.padId);
+          const padAnchor = getPadAnchor(pad);
+          const position = resolveCanvasPosition(peripheral, index);
+          const cardAnchor = getPeripheralCardAnchor(position);
+          return {
+            id: peripheral.id,
+            kind: peripheral.kind,
+            path: buildWirePath(cardAnchor, padAnchor),
+          };
+        })
+        .filter(Boolean) as Array<{ id: string; kind: DemoPeripheralKind; path: string }>,
+    [resolveCanvasPosition, wiring]
+  );
+
+  const armedPeripheral = armedPeripheralId ? wiring.peripherals.find((peripheral) => peripheral.id === armedPeripheralId) ?? null : null;
+  const hoveredPad = hoveredPadId ? visiblePads.find((pad) => pad.id === hoveredPadId) ?? null : null;
+  const previewPath = useMemo(() => {
+    if (!armedPeripheral) {
+      return null;
+    }
+
+    const index = wiring.peripherals.findIndex((peripheral) => peripheral.id === armedPeripheral.id);
+    if (index < 0) {
+      return null;
+    }
+
+    const start = getPeripheralCardAnchor(resolveCanvasPosition(armedPeripheral, index));
+    const end = hoveredPad ? getPadAnchor(hoveredPad) : pointerPosition;
+    if (!end) {
+      return null;
+    }
+
+    return buildWirePath(start, end);
+  }, [armedPeripheral, hoveredPad, pointerPosition, resolveCanvasPosition, wiring.peripherals]);
+
+  const beginPeripheralDrag = useCallback(
+    (peripheralId: string, position: PeripheralPosition, event: React.PointerEvent<HTMLDivElement>) => {
+      if (simulationRunning || !containerRef.current) {
+        return;
+      }
+
+      const rect = containerRef.current.getBoundingClientRect();
+      dragStateRef.current = {
+        peripheralId,
+        pointerId: event.pointerId,
+        offsetX: event.clientX - rect.left - position.x,
+        offsetY: event.clientY - rect.top - position.y,
+      };
+      event.currentTarget.setPointerCapture(event.pointerId);
+    },
+    [simulationRunning]
+  );
+
+  const updatePeripheralDrag = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const dragState = dragStateRef.current;
+      if (!dragState || dragState.pointerId !== event.pointerId || !containerRef.current) {
+        return;
+      }
+
+      const rect = containerRef.current.getBoundingClientRect();
+      onMovePeripheral(dragState.peripheralId, {
+        x: event.clientX - rect.left - dragState.offsetX,
+        y: event.clientY - rect.top - dragState.offsetY,
+      });
+    },
+    [onMovePeripheral]
+  );
+
+  const endPeripheralDrag = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const dragState = dragStateRef.current;
+    if (!dragState || dragState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    dragStateRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }, []);
+
+  const trackPointerPreview = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!armedPeripheralId || !containerRef.current) {
+        return;
+      }
+
+      const rect = containerRef.current.getBoundingClientRect();
+      setPointerPosition({
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+      });
+    },
+    [armedPeripheralId]
+  );
+
   return (
     <div className="rounded-[30px] border border-slate-300 bg-[#f6f7fb] p-4 shadow-inner">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
           <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Board Top View</div>
-          <div className="mt-1 text-sm text-slate-600">Selected pads glow on the same connector block they belong to.</div>
+          <div className="mt-1 text-sm text-slate-600">Drag devices around the canvas, arm one for wiring, then click a hotspot directly on the board to drop a wire.</div>
         </div>
         <div className="rounded-full border border-slate-300 bg-white px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-slate-500">
-          Physical map
+          Interactive canvas
         </div>
       </div>
 
-      <div className="relative overflow-hidden rounded-[30px] border border-slate-300 bg-gradient-to-b from-slate-50 to-slate-200 px-10 py-6">
-        <div className="absolute inset-x-10 top-0 h-24 rounded-b-[40px] bg-white/65" />
-        <div className="absolute inset-y-10 left-0 w-16 rounded-r-[28px] bg-slate-300/35" />
-        <div className="absolute inset-y-10 right-0 w-16 rounded-l-[28px] bg-slate-300/35" />
+      <div
+        ref={containerRef}
+        onPointerMove={trackPointerPreview}
+        onPointerLeave={() => {
+          setHoveredPadId(null);
+          setPointerPosition(null);
+        }}
+        className="relative overflow-hidden rounded-[30px] border border-slate-300 bg-gradient-to-b from-slate-50 to-slate-200 px-8 py-6"
+        style={{ minHeight: canvasHeight + 48 }}
+      >
+        <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${BOARD_CANVAS_WIDTH} ${canvasHeight}`} preserveAspectRatio="none">
+          {wires.map((wire) => (
+            <path
+              key={wire.id}
+              d={wire.path}
+              fill="none"
+              stroke={wire.kind === 'button' ? '#d946ef' : '#f59e0b'}
+              strokeWidth="3"
+              strokeLinecap="round"
+              opacity="0.92"
+            />
+          ))}
+          {previewPath ? (
+            <path
+              d={previewPath}
+              fill="none"
+              stroke="#06b6d4"
+              strokeWidth="3"
+              strokeDasharray="10 8"
+              strokeLinecap="round"
+              opacity="0.88"
+            />
+          ) : null}
+        </svg>
 
-        <div className="relative mx-auto min-h-[470px] max-w-[760px]">
+        <div className="relative mx-auto" style={{ width: BOARD_CANVAS_WIDTH, minHeight: canvasHeight }}>
           {DEMO_LEFT_MORPHO_CONNECTOR ? (
-            <div className="absolute left-0 top-6 w-[104px]">
-              <MiniConnectorStrip connector={DEMO_LEFT_MORPHO_CONNECTOR} buttonPadId={buttonPad.id} ledPadId={ledPad.id} compact />
+            <div className="absolute left-0 top-6 w-[108px]">
+              <MiniConnectorStrip connector={DEMO_LEFT_MORPHO_CONNECTOR} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
             </div>
           ) : null}
 
-          <div className="absolute left-[122px] top-12 w-[88px]">
+          <div className="absolute left-[128px] top-[50px] w-[90px]">
             {DEMO_LEFT_CONNECTORS.map((connector) => (
               <div key={connector.id} className="mb-3 last:mb-0">
-                <MiniConnectorStrip connector={connector} buttonPadId={buttonPad.id} ledPadId={ledPad.id} compact />
+                <MiniConnectorStrip connector={connector} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
               </div>
             ))}
           </div>
 
-          <div className="absolute right-[122px] top-12 w-[88px]">
+          <div className="absolute right-[128px] top-[50px] w-[90px]">
             {DEMO_RIGHT_CONNECTORS.map((connector) => (
               <div key={connector.id} className="mb-3 last:mb-0">
-                <MiniConnectorStrip connector={connector} buttonPadId={buttonPad.id} ledPadId={ledPad.id} compact />
+                <MiniConnectorStrip connector={connector} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
               </div>
             ))}
           </div>
 
           {DEMO_RIGHT_MORPHO_CONNECTOR ? (
-            <div className="absolute right-0 top-6 w-[104px]">
-              <MiniConnectorStrip connector={DEMO_RIGHT_MORPHO_CONNECTOR} buttonPadId={buttonPad.id} ledPadId={ledPad.id} compact />
+            <div className="absolute right-0 top-6 w-[108px]">
+              <MiniConnectorStrip connector={DEMO_RIGHT_MORPHO_CONNECTOR} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
             </div>
           ) : null}
 
-          <div className="absolute left-1/2 top-2 h-14 w-24 -translate-x-1/2 rounded-b-[18px] border border-slate-400 bg-slate-300 shadow-md" />
-          <div className="absolute left-1/2 top-20 h-5 w-10 -translate-x-1/2 rounded-full border border-slate-500 bg-slate-900/80" />
+          <div className="absolute left-1/2 top-0 h-14 w-24 -translate-x-1/2 rounded-b-[18px] border border-slate-400 bg-slate-300 shadow-md" />
+          <div className="absolute left-1/2 top-[72px] h-5 w-10 -translate-x-1/2 rounded-full border border-slate-500 bg-slate-900/80" />
 
-          <div className="absolute left-1/2 top-36 flex -translate-x-1/2 items-start gap-5">
+          <div className="absolute left-1/2 top-[124px] flex -translate-x-1/2 items-start gap-5">
             <div className="rounded-[26px] border border-slate-300 bg-white/90 px-4 py-3 shadow-sm">
               <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">USER</div>
-              <div className={`mt-2 h-12 w-12 rounded-full border ${buttonPressed ? 'border-fuchsia-300 bg-fuchsia-400 shadow-[0_0_16px_rgba(217,70,239,0.45)]' : 'border-slate-300 bg-slate-100'}`} />
+              <div className={`mt-2 h-12 w-12 rounded-full border ${Object.values(buttonStates).some(Boolean) ? 'border-fuchsia-300 bg-fuchsia-400 shadow-[0_0_16px_rgba(217,70,239,0.45)]' : 'border-slate-300 bg-slate-100'}`} />
             </div>
             <div className="rounded-[26px] border border-slate-300 bg-white/90 px-4 py-3 shadow-sm">
               <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">RESET</div>
@@ -577,181 +997,445 @@ function BoardTopView({
             </div>
           </div>
 
-          <div className="absolute left-1/2 top-[252px] grid w-[260px] -translate-x-1/2 gap-4">
+          <div className="absolute left-1/2 top-[244px] grid w-[260px] -translate-x-1/2 gap-4">
             <div className="mx-auto flex h-28 w-28 items-center justify-center rounded-[30px] border border-slate-700 bg-slate-900 shadow-[0_18px_36px_rgba(15,23,42,0.25)]">
               <Cpu size={46} className="text-cyan-300" />
             </div>
             <div className="rounded-[28px] border border-slate-300 bg-white/92 px-5 py-4 text-center shadow-sm">
               <div className="text-xs uppercase tracking-[0.24em] text-slate-500">MCU</div>
               <div className="mt-1 text-xl font-semibold tracking-tight text-slate-900">STM32H753ZIT6</div>
-              <div className="mt-1 text-sm text-slate-600">Cortex-M7, real Renode board model</div>
+              <div className="mt-1 text-sm text-slate-600">Renode-backed board, live GPIO wiring</div>
             </div>
           </div>
 
-          <div className="absolute bottom-4 left-[152px] rounded-[24px] border border-fuchsia-200 bg-fuchsia-50/95 px-4 py-3 shadow-sm">
-            <div className="text-[11px] uppercase tracking-[0.2em] text-fuchsia-500">External button</div>
-            <div className="mt-1 text-sm font-semibold text-slate-900">{buttonPad.connectorTitle} · Pin {buttonPad.pinNumber}</div>
-            <div className="text-xs text-slate-600">{buttonPad.pinLabel} / {buttonPad.mcuPinId}</div>
-          </div>
+          {visiblePads.map((pad) => {
+            const anchor = getPadAnchor(pad);
+            const occupant = findPeripheralForPad(wiring, pad.id);
+            const isHovered = hoveredPadId === pad.id;
+            const accent = occupant?.kind === 'button' ? '#d946ef' : occupant?.kind === 'led' ? '#f59e0b' : '#06b6d4';
 
-          <div className="absolute bottom-4 right-[152px] rounded-[24px] border border-amber-200 bg-amber-50/95 px-4 py-3 shadow-sm">
-            <div className="text-[11px] uppercase tracking-[0.2em] text-amber-600">External LED</div>
-            <div className="mt-1 text-sm font-semibold text-slate-900">{ledPad.connectorTitle} · Pin {ledPad.pinNumber}</div>
-            <div className="text-xs text-slate-600">{ledPad.pinLabel} / {ledPad.mcuPinId}</div>
-            <div className={`mt-2 h-3.5 w-3.5 rounded-full border ${ledOn ? 'border-amber-200 bg-amber-300 shadow-[0_0_18px_rgba(251,191,36,0.85)]' : 'border-slate-300 bg-slate-200'}`} />
-          </div>
+            return (
+              <div key={pad.id}>
+                <button
+                  onClick={() => onAssignPad(pad)}
+                  onPointerEnter={() => setHoveredPadId(pad.id)}
+                  onPointerLeave={() => setHoveredPadId((current) => (current === pad.id ? null : current))}
+                  disabled={simulationRunning}
+                  className={`absolute rounded-full border transition ${
+                    simulationRunning
+                      ? 'cursor-not-allowed border-slate-300/60 bg-white/70'
+                      : occupant
+                        ? 'border-white/90 bg-white shadow-[0_0_0_4px_rgba(255,255,255,0.25)]'
+                        : armedPeripheralId
+                          ? 'border-cyan-300 bg-cyan-200/95 hover:scale-110 hover:bg-cyan-300'
+                          : 'border-slate-300 bg-white/90 hover:border-cyan-300 hover:bg-cyan-100'
+                  }`}
+                  style={{
+                    left: anchor.x - PAD_HOTSPOT_SIZE / 2,
+                    top: anchor.y - PAD_HOTSPOT_SIZE / 2,
+                    width: PAD_HOTSPOT_SIZE,
+                    height: PAD_HOTSPOT_SIZE,
+                    boxShadow: occupant ? `0 0 0 3px ${accent}33` : undefined,
+                  }}
+                  title={describePad(pad)}
+                />
+                {isHovered || occupant ? (
+                  <div
+                    className="pointer-events-none absolute rounded-xl border border-slate-300 bg-white/95 px-2.5 py-1.5 text-[11px] shadow-md"
+                    style={{
+                      left: Math.max(12, Math.min(BOARD_CANVAS_WIDTH - PAD_HOVER_LABEL_WIDTH - 12, anchor.x - PAD_HOVER_LABEL_WIDTH / 2)),
+                      top: anchor.y + 16,
+                      width: PAD_HOVER_LABEL_WIDTH,
+                    }}
+                  >
+                    <div className="font-semibold text-slate-900">{pad.pinLabel}</div>
+                    <div className="mt-0.5 text-slate-600">{pad.mcuPinId}</div>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+
+          {wiring.peripherals.map((peripheral, index) => {
+            const frame = resolveCanvasPosition(peripheral, index);
+            const isButton = peripheral.kind === 'button';
+            const active = isButton ? buttonStates[peripheral.id] : ledStates[peripheral.id];
+            const sourceLabel =
+              peripheral.kind === 'led' && peripheral.sourcePeripheralId
+                ? wiring.peripherals.find((item) => item.id === peripheral.sourcePeripheralId)?.label ?? 'Button'
+                : null;
+
+            return (
+              <div
+                key={peripheral.id}
+                className={`absolute rounded-[24px] border px-4 py-3 shadow-lg transition ${
+                  isButton
+                    ? active
+                      ? 'border-fuchsia-300 bg-fuchsia-500/90 text-white'
+                      : 'border-fuchsia-200 bg-fuchsia-50/95 text-slate-900'
+                    : active
+                      ? 'border-amber-200 bg-amber-300/95 text-slate-950'
+                      : 'border-amber-200 bg-amber-50/95 text-slate-900'
+                }`}
+                style={{ left: frame.x, top: frame.y, width: PERIPHERAL_CARD_WIDTH, minHeight: PERIPHERAL_CARD_HEIGHT }}
+              >
+                <div className="absolute left-1/2 top-[-7px] h-3.5 w-3.5 -translate-x-1/2 rounded-full border-2 border-white bg-slate-900" />
+                <div className="flex items-start justify-between gap-2">
+                  <button
+                    onClick={() => onArmPeripheral(peripheral.id)}
+                    className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
+                      armedPeripheralId === peripheral.id ? 'border-cyan-300 bg-cyan-500/20 text-cyan-50' : 'border-current/25 bg-white/20 text-current/80'
+                    }`}
+                  >
+                    {armedPeripheralId === peripheral.id ? 'Wiring' : 'Wire'}
+                  </button>
+                  <div
+                    onPointerDown={(event) => beginPeripheralDrag(peripheral.id, frame, event)}
+                    onPointerMove={updatePeripheralDrag}
+                    onPointerUp={endPeripheralDrag}
+                    onPointerCancel={endPeripheralDrag}
+                    className={`rounded-full border border-current/25 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
+                      simulationRunning ? 'cursor-not-allowed opacity-50' : 'cursor-grab active:cursor-grabbing'
+                    }`}
+                  >
+                    Drag
+                  </div>
+                </div>
+                <div className="mt-2 text-[11px] uppercase tracking-[0.2em] text-current/70">{peripheral.kind}</div>
+                <div className="mt-1 text-sm font-semibold">{peripheral.label}</div>
+                <div className="mt-2 text-xs text-current/75">
+                  {peripheral.padId ? describePad(resolveSelectablePad(peripheral.padId)) : 'Unplaced device'}
+                </div>
+                <div className="mt-3">
+                  {isButton ? (
+                    <button
+                      onMouseDown={() => onPressPeripheral(peripheral.id, true)}
+                      onMouseUp={() => onPressPeripheral(peripheral.id, false)}
+                      onMouseLeave={() => onPressPeripheral(peripheral.id, false)}
+                      onTouchStart={() => onPressPeripheral(peripheral.id, true)}
+                      onTouchEnd={() => onPressPeripheral(peripheral.id, false)}
+                      disabled={!simulationRunning || !peripheral.padId}
+                      className={`w-full rounded-2xl border px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] ${
+                        simulationRunning && peripheral.padId
+                          ? buttonStates[peripheral.id]
+                            ? 'border-fuchsia-300 bg-fuchsia-500 text-white'
+                            : 'border-current/25 bg-white/20 hover:bg-white/30'
+                          : 'cursor-not-allowed border-current/10 bg-black/5 text-current/45'
+                      }`}
+                    >
+                      {simulationRunning && peripheral.padId ? 'Hold To Drive' : 'Run To Press'}
+                    </button>
+                  ) : (
+                    <div className="rounded-2xl border border-current/20 bg-white/20 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]">
+                      {active ? 'Glow On' : sourceLabel ? `Driven By ${sourceLabel}` : 'Awaiting Button Source'}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
   );
 }
 
-function BoardSummaryCard({
-  buttonPad,
-  ledPad,
-  ledOn,
-  buttonPressed,
+function WiringWorkbench({
+  wiring,
+  armedPeripheralId,
+  ledStates,
+  buttonStates,
   simulationRunning,
-  onButtonPress,
+  showFullPinout,
+  peripheralPositions,
+  onAssign,
+  onAddPeripheral,
+  onArmPeripheral,
+  onDisconnectPeripheral,
+  onRemovePeripheral,
+  onPressPeripheral,
+  onSourceChange,
+  onToggleFullPinout,
+  onMovePeripheral,
 }: {
-  buttonPad: DemoBoardPad;
-  ledPad: DemoBoardPad;
-  ledOn: boolean;
-  buttonPressed: boolean;
+  wiring: DemoWiring;
+  armedPeripheralId: string | null;
+  ledStates: Record<string, boolean>;
+  buttonStates: Record<string, boolean>;
   simulationRunning: boolean;
-  onButtonPress: (pressed: boolean) => void;
+  showFullPinout: boolean;
+  peripheralPositions: Record<string, PeripheralPosition>;
+  onAssign: (pad: DemoBoardPad) => void;
+  onAddPeripheral: (kind: DemoPeripheralKind) => void;
+  onArmPeripheral: (peripheralId: string) => void;
+  onDisconnectPeripheral: (peripheralId: string) => void;
+  onRemovePeripheral: (peripheralId: string) => void;
+  onPressPeripheral: (peripheralId: string, pressed: boolean) => void;
+  onSourceChange: (peripheralId: string, sourceId: string | null) => void;
+  onToggleFullPinout: () => void;
+  onMovePeripheral: (peripheralId: string, position: PeripheralPosition) => void;
 }) {
+  const buttons = getPeripheralsByKind(wiring, 'button');
+  const leds = getPeripheralsByKind(wiring, 'led');
+  const workbenchConnectors = useMemo(() => buildWorkbenchConnectorGroups(wiring, showFullPinout), [wiring, showFullPinout]);
+  const hiddenPadCount = Math.max(0, DEMO_SELECTABLE_PADS.length - workbenchConnectors.visibleSelectablePads);
+  const visibleCanvasPads = useMemo(
+    () => workbenchConnectors.connectors.flatMap((connector) => connector.pins).filter((pad) => pad.selectable),
+    [workbenchConnectors]
+  );
+
   return (
-    <div className="rounded-[36px] border border-slate-800 bg-gradient-to-b from-slate-100 to-slate-200 p-5 text-slate-900 shadow-[0_24px_60px_rgba(15,23,42,0.55)]">
-      <div className="rounded-[28px] border border-slate-300 bg-white/85 p-4 shadow-inner">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <div className="text-xs uppercase tracking-[0.26em] text-slate-500">Board</div>
-            <div className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">{DEMO_BOARD_NAME}</div>
-            <div className="mt-2 max-w-xl text-sm text-slate-600">{DEMO_BOARD_TAGLINE}</div>
+    <div className="min-w-[1320px] space-y-6">
+      <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
+        <div className="rounded-[32px] border border-slate-800 bg-slate-950/70 p-5 shadow-xl">
+          <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Peripheral Library</div>
+          <div className="mt-3 text-sm text-slate-300">
+            Add as many external buttons and LEDs as you need. Arm one device, then click a free board pad to draw its wire.
           </div>
-          <div className="grid gap-2 text-right text-xs text-slate-500">
-            <div className="rounded-2xl border border-slate-300 bg-slate-100 px-3 py-1">Renode board file</div>
-            <div className="font-mono text-slate-700">platforms/boards/nucleo_h753zi.repl</div>
+
+          <div className="mt-5 grid gap-3">
+            <button
+              onClick={() => onAddPeripheral('button')}
+              disabled={wiring.peripherals.length >= MAX_PERIPHERALS || simulationRunning}
+              className={`rounded-3xl border px-4 py-3 text-left transition ${
+                wiring.peripherals.length >= MAX_PERIPHERALS || simulationRunning
+                  ? 'cursor-not-allowed border-slate-800 bg-slate-900/50 text-slate-500'
+                  : 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-100 hover:bg-fuchsia-500/20'
+              }`}
+            >
+              <div className="inline-flex items-center gap-2 text-sm font-semibold">
+                <Plus size={14} />
+                Add Button
+              </div>
+              <div className="mt-1 text-xs text-slate-400">Place a new momentary input and wire it to any free GPIO header pad.</div>
+            </button>
+
+            <button
+              onClick={() => onAddPeripheral('led')}
+              disabled={wiring.peripherals.length >= MAX_PERIPHERALS || simulationRunning}
+              className={`rounded-3xl border px-4 py-3 text-left transition ${
+                wiring.peripherals.length >= MAX_PERIPHERALS || simulationRunning
+                  ? 'cursor-not-allowed border-slate-800 bg-slate-900/50 text-slate-500'
+                  : 'border-amber-500/40 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20'
+              }`}
+            >
+              <div className="inline-flex items-center gap-2 text-sm font-semibold">
+                <Plus size={14} />
+                Add LED
+              </div>
+              <div className="mt-1 text-xs text-slate-400">Drop in another visual output and choose which button will drive it.</div>
+            </button>
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-sm text-slate-300">
+            <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Armed Device</div>
+            <div className="mt-1 font-semibold text-white">
+              {armedPeripheralId
+                ? wiring.peripherals.find((peripheral) => peripheral.id === armedPeripheralId)?.label ?? 'Unknown device'
+                : 'None'}
+            </div>
+            <div className="mt-2 text-xs text-slate-400">
+              {armedPeripheralId ? 'Click any free pad on the board to complete the wire.' : 'Use a device card’s “Connect wire” action to begin wiring.'}
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-sm text-slate-300">
+            <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Device Count</div>
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                <div className="text-xs text-slate-500">Buttons</div>
+                <div className="mt-1 text-lg font-semibold text-white">{buttons.length}</div>
+              </div>
+              <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                <div className="text-xs text-slate-500">LEDs</div>
+                <div className="mt-1 text-lg font-semibold text-white">{leds.length}</div>
+              </div>
+              <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                <div className="text-xs text-slate-500">Free Pads</div>
+                <div className="mt-1 text-lg font-semibold text-white">
+                  {DEMO_SELECTABLE_PADS.length - getConnectedPeripherals(wiring).length}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_1.15fr]">
-          <div className="rounded-[28px] border border-slate-300 bg-slate-50/90 p-4">
-            <div className="flex items-center justify-between gap-3">
+        <div className="rounded-[36px] border border-slate-800 bg-gradient-to-b from-slate-100 to-slate-200 p-5 text-slate-900 shadow-[0_24px_60px_rgba(15,23,42,0.55)]">
+          <div className="rounded-[28px] border border-slate-300 bg-white/85 p-4 shadow-inner">
+            <div className="flex items-center justify-between gap-4">
               <div>
-                <div className="text-xs uppercase tracking-[0.24em] text-slate-500">MCU region</div>
-                <div className="mt-1 text-sm font-semibold text-slate-900">STM32H753ZIT6</div>
+                <div className="text-xs uppercase tracking-[0.26em] text-slate-500">Board</div>
+                <div className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">{DEMO_BOARD_NAME}</div>
+                <div className="mt-2 max-w-3xl text-sm text-slate-600">{DEMO_BOARD_TAGLINE}</div>
               </div>
-              <div className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs uppercase tracking-[0.2em] text-slate-500">
-                Cortex-M7
-              </div>
-            </div>
-
-            <div className="mt-4 grid gap-4 sm:grid-cols-[120px_1fr]">
-              <div className="flex items-center justify-center rounded-[28px] border border-slate-300 bg-slate-900 p-6">
-                <Cpu size={52} className="text-cyan-300" />
-              </div>
-              <div className="grid gap-3">
-                <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
-                  <div className="text-xs uppercase tracking-[0.22em] text-slate-500">External button</div>
-                  <div className="mt-1 text-sm font-semibold text-slate-900">{describePad(buttonPad)}</div>
-                </div>
-                <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
-                  <div className="text-xs uppercase tracking-[0.22em] text-slate-500">External LED</div>
-                  <div className="mt-1 text-sm font-semibold text-slate-900">{describePad(ledPad)}</div>
-                </div>
+              <div className="grid gap-2 text-right text-xs text-slate-500">
+                <div className="rounded-2xl border border-slate-300 bg-slate-100 px-3 py-1">Renode board file</div>
+                <div className="font-mono text-slate-700">platforms/boards/nucleo_h753zi.repl</div>
               </div>
             </div>
 
-            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+            <div className="mt-5 grid gap-3 md:grid-cols-4">
+              <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
+                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Selectable pads</div>
+                <div className="mt-1 text-2xl font-semibold text-slate-900">{DEMO_SELECTABLE_PADS.length}</div>
+              </div>
+              <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
+                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Connected devices</div>
+                <div className="mt-1 text-2xl font-semibold text-slate-900">{getConnectedPeripherals(wiring).length}</div>
+              </div>
+              <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
+                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Compiler target</div>
+                <div className="mt-1 text-sm font-semibold text-slate-900">{DEFAULT_GCC_ARGS.join(' ')}</div>
+              </div>
+              <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
+                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Board I/O</div>
+                <div className="mt-1 text-sm font-semibold text-slate-900">
+                  {showFullPinout ? 'Full connector map exposed' : 'Common pads first, full pinout on demand'}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
               {ONBOARD_FEATURES.map((feature) => (
                 <div key={feature.label} className="rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">
                   <span className="font-semibold text-slate-900">{feature.label}</span> · {feature.detail}
                 </div>
               ))}
             </div>
-          </div>
 
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="rounded-[28px] border border-fuchsia-200 bg-fuchsia-50 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-xs uppercase tracking-[0.24em] text-fuchsia-500">External input</div>
-                  <div className="mt-1 text-lg font-semibold text-slate-900">Momentary button</div>
-                </div>
-                <ToggleLeft size={28} className={buttonPressed ? 'text-fuchsia-500' : 'text-slate-400'} />
-              </div>
-
-              <div className="mt-3 rounded-2xl border border-fuchsia-200 bg-white px-3 py-2 text-sm text-slate-700">
-                Routed to <span className="font-semibold text-slate-900">{buttonPad.pinLabel}</span> on{' '}
-                <span className="font-semibold text-slate-900">{buttonPad.connectorTitle}</span>
-              </div>
-
-              <button
-                onMouseDown={() => onButtonPress(true)}
-                onMouseUp={() => onButtonPress(false)}
-                onMouseLeave={() => onButtonPress(false)}
-                onTouchStart={() => onButtonPress(true)}
-                onTouchEnd={() => onButtonPress(false)}
-                disabled={!simulationRunning}
-                className={`mt-4 w-full rounded-[26px] border px-4 py-5 text-sm font-semibold uppercase tracking-[0.22em] transition ${
-                  simulationRunning
-                    ? buttonPressed
-                      ? 'border-fuchsia-400 bg-fuchsia-500 text-white shadow-[0_16px_32px_rgba(217,70,239,0.35)]'
-                      : 'border-fuchsia-300 bg-white text-fuchsia-700 hover:border-fuchsia-400 hover:bg-fuchsia-100'
-                    : 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'
-                }`}
-              >
-                {simulationRunning ? (buttonPressed ? 'Button held low-level active' : 'Press button') : 'Start Renode to enable'}
-              </button>
-            </div>
-
-            <div className="rounded-[28px] border border-amber-200 bg-amber-50 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-xs uppercase tracking-[0.24em] text-amber-600">External output</div>
-                  <div className="mt-1 text-lg font-semibold text-slate-900">Indicator LED</div>
-                </div>
-                <Lightbulb
-                  size={28}
-                  className={ledOn ? 'text-amber-300 drop-shadow-[0_0_18px_rgba(251,191,36,0.85)]' : 'text-slate-400'}
-                />
-              </div>
-
-              <div className="mt-3 rounded-2xl border border-amber-200 bg-white px-3 py-2 text-sm text-slate-700">
-                Routed to <span className="font-semibold text-slate-900">{ledPad.pinLabel}</span> on{' '}
-                <span className="font-semibold text-slate-900">{ledPad.connectorTitle}</span>
-              </div>
-
-              <div className="mt-4 rounded-[26px] border border-amber-200 bg-white px-4 py-6 text-center">
-                <div className={`mx-auto h-20 w-20 rounded-full border ${ledOn ? 'border-amber-200 bg-amber-300 shadow-[0_0_36px_rgba(251,191,36,0.75)]' : 'border-slate-300 bg-slate-200'}`} />
-                <div className="mt-4 text-sm font-semibold text-slate-900">{ledOn ? 'GPIO high, LED glowing' : 'GPIO low, LED off'}</div>
-              </div>
+            <div className="mt-5">
+              <BoardTopView
+                wiring={wiring}
+                ledStates={ledStates}
+                buttonStates={buttonStates}
+                peripheralPositions={peripheralPositions}
+                visiblePads={visibleCanvasPads}
+                armedPeripheralId={armedPeripheralId}
+                simulationRunning={simulationRunning}
+                onAssignPad={onAssign}
+                onMovePeripheral={onMovePeripheral}
+                onArmPeripheral={onArmPeripheral}
+                onPressPeripheral={onPressPeripheral}
+              />
             </div>
           </div>
         </div>
+      </div>
 
-        <div className="mt-5">
-          <BoardTopView buttonPad={buttonPad} ledPad={ledPad} ledOn={ledOn} buttonPressed={buttonPressed} />
+      <div className="rounded-[32px] border border-slate-800 bg-slate-950/70 p-5 shadow-xl">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Peripheral Rack</div>
+            <div className="mt-2 text-sm text-slate-300">
+              Each card represents an external part. Add, wire, drive, and remove parts without touching the board definition itself.
+            </div>
+          </div>
+          <div className="text-xs uppercase tracking-[0.24em] text-slate-500">
+            {armedPeripheralId ? 'Click a free pad to finish the active wire' : 'Pick any card to start wiring'}
+          </div>
         </div>
 
-        <div className="mt-5 grid gap-3 md:grid-cols-4">
-          <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
-            <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Selectable pads</div>
-            <div className="mt-1 text-2xl font-semibold text-slate-900">{DEMO_SELECTABLE_PADS.length}</div>
+        <div className="mt-5 grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+          {wiring.peripherals.map((peripheral) => (
+            <div key={peripheral.id}>
+              <PeripheralRackCard
+                peripheral={peripheral}
+                buttons={buttons}
+                armed={armedPeripheralId === peripheral.id}
+                simulationRunning={simulationRunning}
+                ledOn={Boolean(ledStates[peripheral.id])}
+                buttonPressed={Boolean(buttonStates[peripheral.id])}
+                onArm={() => onArmPeripheral(peripheral.id)}
+                onDisconnect={() => onDisconnectPeripheral(peripheral.id)}
+                onRemove={() => onRemovePeripheral(peripheral.id)}
+                onPress={(pressed) => onPressPeripheral(peripheral.id, pressed)}
+                onSourceChange={(sourceId) => onSourceChange(peripheral.id, sourceId)}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="rounded-[32px] border border-slate-800 bg-slate-950/70 p-5 shadow-xl">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Pin Chooser</div>
+              <div className="mt-2 text-sm text-slate-300">
+                This view follows the Wokwi idea: only common teaching-friendly pads are shown by default, and any pad you already wired stays visible.
+              </div>
+            </div>
+            <button
+              onClick={onToggleFullPinout}
+              className="inline-flex items-center gap-2 rounded-2xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs font-medium uppercase tracking-[0.18em] text-slate-200 transition hover:border-slate-500 hover:text-white"
+            >
+              <ToggleLeft size={14} />
+              {showFullPinout ? 'Collapse To Common Pins' : 'Show Full Pinout'}
+            </button>
           </div>
-          <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
-            <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Connectors</div>
-            <div className="mt-1 text-2xl font-semibold text-slate-900">{DEMO_CONNECTORS.length}</div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
+              <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Visible pads</div>
+              <div className="mt-1 text-2xl font-semibold text-white">{workbenchConnectors.visibleSelectablePads}</div>
+            </div>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
+              <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Connected pads</div>
+              <div className="mt-1 text-2xl font-semibold text-white">{getConnectedPeripherals(wiring).length}</div>
+            </div>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
+              <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Hidden advanced pads</div>
+              <div className="mt-1 text-2xl font-semibold text-white">{showFullPinout ? 0 : hiddenPadCount}</div>
+            </div>
           </div>
-          <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
-            <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Compiler target</div>
-            <div className="mt-1 text-sm font-semibold text-slate-900">{DEFAULT_GCC_ARGS.join(' ')}</div>
+
+          <div className="mt-5 grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
+            {workbenchConnectors.connectors.map((connector) => (
+              <div key={connector.id}>
+                {connector.layout === 'dual' ? (
+                  <DualConnectorCard
+                    connector={connector}
+                    wiring={wiring}
+                    armedPeripheralId={armedPeripheralId}
+                    ledStates={ledStates}
+                    buttonStates={buttonStates}
+                    disabled={simulationRunning}
+                    onAssign={onAssign}
+                  />
+                ) : (
+                  <SingleConnectorCard
+                    connector={connector}
+                    wiring={wiring}
+                    armedPeripheralId={armedPeripheralId}
+                    ledStates={ledStates}
+                    buttonStates={buttonStates}
+                    disabled={simulationRunning}
+                    onAssign={onAssign}
+                  />
+                )}
+              </div>
+            ))}
           </div>
-          <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
-            <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Flow</div>
-            <div className="mt-1 text-sm font-semibold text-slate-900">Place pins, regenerate, compile, start</div>
+        </div>
+
+        <div className="rounded-[32px] border border-slate-800 bg-slate-950/70 p-5 shadow-xl">
+          <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Wokwi-like flow</div>
+          <div className="mt-4 grid gap-3 text-sm text-slate-300">
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
+              1. Add a <span className="font-semibold text-white">Button</span> or <span className="font-semibold text-white">LED</span> from the library.
+            </div>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
+              2. Click <span className="font-semibold text-white">Connect wire</span> on that device.
+            </div>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
+              3. Pick from the default common pads, or open the full pinout when you need more advanced GPIOs.
+            </div>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
+              4. Any pad you already connected stays visible, so the board never loses the context of your wiring.
+            </div>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
+              5. Compile, start Renode, and press each external button card to drive the wired LEDs in real time.
+            </div>
           </div>
         </div>
       </div>
@@ -763,10 +1447,10 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'code' | 'repl' | 'resc'>('code');
   const [tooling, setTooling] = useState<ToolingReport | null>(null);
   const [logs, setLogs] = useState<RuntimeLog[]>([
-    createLogEntry('NUCLEO-H753ZI workbench ready. Pick a connector pad for the external button and LED, then compile and launch Renode.'),
+    createLogEntry('NUCLEO-H753ZI workbench ready. Add peripherals, wire them to pads, and the app will regenerate firmware and Renode wiring automatically.'),
   ]);
   const [wiring, setWiring] = useState<DemoWiring>(DEFAULT_DEMO_WIRING);
-  const [placementTool, setPlacementTool] = useState<PlacementTool>(null);
+  const [armedPeripheralId, setArmedPeripheralId] = useState<string | null>(null);
   const [buildResult, setBuildResult] = useState<BuildResult | null>(null);
   const [isCompiling, setIsCompiling] = useState(false);
   const [simulation, setSimulation] = useState<SimulationState>({
@@ -776,11 +1460,15 @@ export default function App() {
     gdbPort: DEFAULT_GDB_PORT,
     bridgePort: DEFAULT_BRIDGE_PORT,
   });
-  const [buttonPressed, setButtonPressed] = useState(false);
-  const [ledOn, setLedOn] = useState(false);
+  const [buttonStates, setButtonStates] = useState<Record<string, boolean>>({});
+  const [ledStates, setLedStates] = useState<Record<string, boolean>>({});
   const [codeMode, setCodeMode] = useState<CodeMode>('generated');
   const [code, setCode] = useState(DEFAULT_MAIN_SOURCE);
   const [codeDirty, setCodeDirty] = useState(true);
+  const [showFullPinout, setShowFullPinout] = useState(false);
+  const [peripheralPositions, setPeripheralPositions] = useState<Record<string, PeripheralPosition>>(() =>
+    Object.fromEntries(DEFAULT_DEMO_WIRING.peripherals.map((peripheral, index) => [peripheral.id, createDefaultPeripheralPosition(index)]))
+  );
   const [debugState, setDebugState] = useState<DebugState>({
     connected: false,
     running: false,
@@ -792,10 +1480,11 @@ export default function App() {
   const monacoRef = useRef<any>(null);
   const decorationIdsRef = useRef<string[]>([]);
 
-  const buttonPad = resolveSelectablePad(wiring.buttonPadId);
-  const ledPad = resolveSelectablePad(wiring.ledPadId);
-  const generatedCode = generateDemoMainSource(wiring);
-  const boardRepl = generateBoardRepl(wiring);
+  const connectedButtons = useMemo(() => getConnectedPeripherals(wiring, 'button'), [wiring]);
+  const connectedLeds = useMemo(() => getConnectedPeripherals(wiring, 'led'), [wiring]);
+  const generatedCode = useMemo(() => generateDemoMainSource(wiring), [wiring]);
+  const boardRepl = useMemo(() => generateBoardRepl(wiring), [wiring]);
+  const peripheralManifest = useMemo(() => buildPeripheralManifest(wiring), [wiring]);
   const rescPreview = generateRescPreview({
     elfPath: buildResult?.elfPath ?? null,
     gdbPort: simulation.gdbPort,
@@ -812,8 +1501,7 @@ export default function App() {
       return;
     }
 
-    const report = await window.localWokwi.getTooling();
-    setTooling(report);
+    setTooling(await window.localWokwi.getTooling());
   }, [appendLog]);
 
   const resetDebugState = useCallback((message = 'Debugger idle.') => {
@@ -834,8 +1522,8 @@ export default function App() {
     }));
 
     if (!running) {
-      setButtonPressed(false);
-      setLedOn(false);
+      setButtonStates({});
+      setLedStates({});
     }
   }, []);
 
@@ -849,6 +1537,16 @@ export default function App() {
       setCode(generatedCode);
     }
   }, [codeMode, generatedCode]);
+
+  useEffect(() => {
+    setPeripheralPositions((current) => {
+      const nextEntries = wiring.peripherals.map((peripheral, index) => [
+        peripheral.id,
+        current[peripheral.id] ?? createDefaultPeripheralPosition(index),
+      ] as const);
+      return Object.fromEntries(nextEntries);
+    });
+  }, [wiring.peripherals]);
 
   useEffect(() => {
     const editor = codeEditorRef.current;
@@ -888,7 +1586,10 @@ export default function App() {
       }
 
       if (event.type === 'led') {
-        setLedOn(event.state === 1);
+        setLedStates((current) => ({
+          ...current,
+          [event.id]: event.state === 1,
+        }));
         return;
       }
 
@@ -898,8 +1599,21 @@ export default function App() {
           ...current,
           bridgeConnected: bridgeReady,
         }));
-        if (event.status === 'ready' && event.ledHooked === false) {
-          appendLog(`Bridge connected, but LED hook failed: ${event.ledHookError ?? 'unknown error'}`, 'error');
+
+        if (event.status === 'button-event' && event.id) {
+          setButtonStates((current) => ({
+            ...current,
+            [event.id!]: event.state === 1,
+          }));
+          return;
+        }
+
+        if (event.status === 'ready') {
+          if (event.ledHooked === false) {
+            appendLog(`Bridge connected, but LED hook failed: ${event.ledHookError ?? 'unknown error'}`, 'error');
+          } else {
+            appendLog(`Bridge ready for ${event.peripheralIds?.length ?? peripheralManifest.length} peripheral(s).`);
+          }
         }
         return;
       }
@@ -922,12 +1636,10 @@ export default function App() {
           appendLog(`[GDB] ${event.message}`, 'error');
           return;
         }
-
         if (event.stream === 'console' && event.message) {
           appendLog(`[GDB] ${event.message}`);
           return;
         }
-
         if (event.status === 'connected') {
           setDebugState((current) => ({
             ...current,
@@ -938,13 +1650,11 @@ export default function App() {
           appendLog(`Debugger connected on port ${event.gdbPort ?? simulation.gdbPort}.`);
           return;
         }
-
         if (event.status === 'disconnected') {
           resetDebugState('Debugger disconnected.');
           appendLog('Debugger disconnected.');
           return;
         }
-
         if (event.status === 'running') {
           setDebugState((current) => ({
             ...current,
@@ -954,7 +1664,6 @@ export default function App() {
           }));
           return;
         }
-
         if (event.status === 'stopped') {
           setDebugState((current) => ({
             ...current,
@@ -966,90 +1675,193 @@ export default function App() {
               ? `Stopped at line ${event.frame.line}${event.reason ? ` (${event.reason})` : ''}.`
               : `Stopped${event.reason ? ` (${event.reason})` : ''}.`,
           }));
-          if (event.frame?.line) {
-            appendLog(
-              `Debugger stopped at ${event.frame.fullname ?? event.frame.file ?? 'main.c'}:${event.frame.line}.`
-            );
-          }
           return;
         }
-
         if (event.status === 'error') {
           appendLog(`[GDB] ${event.message ?? event.raw ?? 'Unknown debugger error.'}`, 'error');
           return;
         }
-
-        if (event.status === 'breakpoint' && typeof event.breakpoint === 'object' && event.breakpoint) {
-          appendLog(
-            `Breakpoint ${event.breakpoint.number ?? '?'} registered at ${
-              event.breakpoint.fullname ?? event.breakpoint.file ?? 'main.c'
-            }:${event.breakpoint.line ?? '?'}`
-          );
-        }
       }
     });
-  }, [appendLog, resetDebugState, setRunningVisualState, simulation.gdbPort]);
+  }, [appendLog, peripheralManifest.length, resetDebugState, setRunningVisualState, simulation.gdbPort]);
+
+  const addPeripheral = useCallback(
+    (kind: DemoPeripheralKind) => {
+      if (simulation.running) {
+        appendLog('Stop the simulation before adding or removing external peripherals.', 'warn');
+        return;
+      }
+      if (wiring.peripherals.length >= MAX_PERIPHERALS) {
+        appendLog(`The current workbench is capped at ${MAX_PERIPHERALS} external parts.`, 'warn');
+        return;
+      }
+
+      const ordinal = getPeripheralsByKind(wiring, kind).length + 1;
+      const next = createPeripheral(kind, ordinal);
+      const firstButton = getPeripheralsByKind(wiring, 'button')[0] ?? null;
+      const nextPeripheral: DemoPeripheral =
+        kind === 'led'
+          ? {
+              ...next,
+              sourcePeripheralId: firstButton?.id ?? null,
+            }
+          : next;
+
+      setWiring((current) => ({
+        peripherals: [...current.peripherals, nextPeripheral],
+      }));
+      setArmedPeripheralId(nextPeripheral.id);
+      appendLog(`${nextPeripheral.label} added. Click a free board pad to place it.`);
+    },
+    [appendLog, simulation.running, wiring]
+  );
 
   const assignPeripheralToPad = useCallback(
     (pad: DemoBoardPad) => {
       if (simulation.running) {
-        appendLog('Stop the simulation before moving peripherals to another header pin.', 'warn');
+        appendLog('Stop the simulation before moving wires to another header pin.', 'warn');
         return;
       }
-
-      if (!placementTool) {
-        appendLog('Choose "Place Button" or "Place LED", then click a free connector pad.', 'warn');
+      if (!armedPeripheralId) {
+        appendLog('Choose a device card and click "Connect wire" before selecting a board pad.', 'warn');
         return;
       }
-
       if (!pad.selectable) {
         appendLog(`${pad.connectorTitle} pin ${pad.pinNumber} is not routable for external GPIO wiring.`, 'warn');
         return;
       }
 
-      if (placementTool === 'button' && pad.id === wiring.ledPadId) {
-        appendLog(`${describePad(pad)} is already used by the LED. Pick another connector pad for the button.`, 'warn');
+      const occupiedBy = findPeripheralForPad(wiring, pad.id);
+      if (occupiedBy && occupiedBy.id !== armedPeripheralId) {
+        appendLog(`${describePad(pad)} is already used by ${occupiedBy.label}. Disconnect it first or pick another pad.`, 'warn');
         return;
       }
 
-      if (placementTool === 'led' && pad.id === wiring.buttonPadId) {
-        appendLog(`${describePad(pad)} is already used by the button. Pick another connector pad for the LED.`, 'warn');
+      const peripheral = wiring.peripherals.find((item) => item.id === armedPeripheralId);
+      if (!peripheral) {
         return;
       }
 
       setWiring((current) => ({
-        ...current,
-        buttonPadId: placementTool === 'button' ? pad.id : current.buttonPadId,
-        ledPadId: placementTool === 'led' ? pad.id : current.ledPadId,
+        peripherals: current.peripherals.map((item) =>
+          item.id === armedPeripheralId
+            ? {
+                ...item,
+                padId: pad.id,
+              }
+            : item
+        ),
       }));
-
-      appendLog(
-        `Placed the external ${placementTool} on ${describePad(pad)}. The generated main.c and board.repl were refreshed for that header mapping.`
-      );
+      setArmedPeripheralId(null);
+      appendLog(`Wired ${peripheral.label} to ${describePad(pad)}.`);
     },
-    [appendLog, placementTool, simulation.running, wiring.buttonPadId, wiring.ledPadId]
+    [appendLog, armedPeripheralId, simulation.running, wiring]
   );
 
-  const useGeneratedDemoCode = useCallback(() => {
-    setCode(generatedCode);
-    setCodeMode('generated');
-    setCodeDirty(true);
-    appendLog(
-      `Regenerated demo firmware from the current board wiring: button ${describePad(buttonPad)}, LED ${describePad(ledPad)}.`
-    );
-  }, [appendLog, buttonPad, generatedCode, ledPad]);
+  const toggleArmPeripheral = useCallback((peripheralId: string) => {
+    setArmedPeripheralId((current) => (current === peripheralId ? null : peripheralId));
+  }, []);
+
+  const disconnectPeripheral = useCallback(
+    (peripheralId: string) => {
+      if (simulation.running) {
+        appendLog('Stop the simulation before disconnecting wires.', 'warn');
+        return;
+      }
+
+      setWiring((current) => ({
+        peripherals: current.peripherals.map((item) =>
+          item.id === peripheralId
+            ? {
+                ...item,
+                padId: null,
+              }
+            : item
+        ),
+      }));
+      appendLog('Peripheral wire removed from the board.');
+    },
+    [appendLog, simulation.running]
+  );
+
+  const removePeripheral = useCallback(
+    (peripheralId: string) => {
+      if (simulation.running) {
+        appendLog('Stop the simulation before removing external peripherals.', 'warn');
+        return;
+      }
+
+      const peripheral = wiring.peripherals.find((item) => item.id === peripheralId);
+      if (!peripheral) {
+        return;
+      }
+
+      setWiring((current) => {
+        const nextPeripherals = current.peripherals
+          .filter((item) => item.id !== peripheralId)
+          .map((item) =>
+            item.kind === 'led' && item.sourcePeripheralId === peripheralId
+              ? {
+                  ...item,
+                  sourcePeripheralId: null,
+                }
+              : item
+          );
+        return { peripherals: nextPeripherals };
+      });
+
+      setArmedPeripheralId((current) => (current === peripheralId ? null : current));
+      setButtonStates((current) => {
+        const next = { ...current };
+        delete next[peripheralId];
+        return next;
+      });
+      setLedStates((current) => {
+        const next = { ...current };
+        delete next[peripheralId];
+        return next;
+      });
+      appendLog(`${peripheral.label} removed from the workbench.`);
+    },
+    [appendLog, simulation.running, wiring]
+  );
+
+  const updateLedSource = useCallback((ledId: string, sourceId: string | null) => {
+    setWiring((current) => ({
+      peripherals: current.peripherals.map((item) =>
+        item.id === ledId
+          ? {
+              ...item,
+              sourcePeripheralId: sourceId,
+            }
+          : item
+      ),
+    }));
+  }, []);
+
+  const movePeripheral = useCallback((peripheralId: string, position: PeripheralPosition) => {
+    const rows = Math.max(1, Math.ceil(Math.max(wiring.peripherals.length, 1) / PERIPHERALS_PER_ROW));
+    const canvasHeight = BOARD_CANVAS_BASE_HEIGHT + Math.max(0, rows - 1) * (PERIPHERAL_CARD_HEIGHT + PERIPHERAL_ROW_GAP);
+    setPeripheralPositions((current) => ({
+      ...current,
+      [peripheralId]: clampPeripheralPosition(position, canvasHeight),
+    }));
+  }, [wiring.peripherals.length]);
 
   const sendButtonState = useCallback(
-    async (pressed: boolean) => {
+    async (peripheralId: string, pressed: boolean) => {
       if (!simulation.running || !window.localWokwi) {
         return;
       }
 
-      setButtonPressed(pressed);
+      setButtonStates((current) => ({
+        ...current,
+        [peripheralId]: pressed,
+      }));
 
       const result = await window.localWokwi.sendPeripheralEvent({
         type: 'button',
-        id: 'externalButton',
+        id: peripheralId,
         state: pressed ? 1 : 0,
       });
 
@@ -1059,6 +1871,13 @@ export default function App() {
     },
     [appendLog, simulation.running]
   );
+
+  const useGeneratedDemoCode = useCallback(() => {
+    setCode(generatedCode);
+    setCodeMode('generated');
+    setCodeDirty(true);
+    appendLog(`Regenerated demo firmware from ${connectedButtons.length} button(s) and ${connectedLeds.length} LED(s).`);
+  }, [appendLog, connectedButtons.length, connectedLeds.length, generatedCode]);
 
   const compileFirmware = useCallback(async () => {
     if (!window.localWokwi) {
@@ -1073,7 +1892,7 @@ export default function App() {
 
     setIsCompiling(true);
     appendLog(
-      `Compile requested for ${describePad(buttonPad)} -> ${describePad(ledPad)}. Writing H753 startup, linker and board files...`
+      `Compile requested for ${connectedButtons.length} button(s), ${connectedLeds.length} LED(s), ${peripheralManifest.length} connected peripheral(s).`
     );
 
     const result = await window.localWokwi.compileFirmware({
@@ -1090,7 +1909,7 @@ export default function App() {
 
     if (result.success) {
       setCodeDirty(false);
-      appendLog(`Compilation succeeded: ${result.elfPath}`, 'info');
+      appendLog(`Compilation succeeded: ${result.elfPath}`);
       if (result.workspaceDir) {
         setSimulation((current) => ({
           ...current,
@@ -1113,17 +1932,23 @@ export default function App() {
   }, [
     appendLog,
     buildResult?.workspaceDir,
-    buttonPad,
     code,
     codeMode,
+    connectedButtons.length,
+    connectedLeds.length,
     generatedCode,
-    ledPad,
+    peripheralManifest.length,
     refreshTooling,
   ]);
 
   const startSimulation = useCallback(async () => {
     if (!window.localWokwi) {
       appendLog('Electron preload API is unavailable.', 'warn');
+      return;
+    }
+
+    if (peripheralManifest.length === 0) {
+      appendLog('Connect at least one external peripheral before starting Renode.', 'warn');
       return;
     }
 
@@ -1137,12 +1962,13 @@ export default function App() {
       return;
     }
 
-    appendLog(`Starting Renode with button on ${describePad(buttonPad)} and LED on ${describePad(ledPad)}...`);
+    appendLog(`Starting Renode with ${peripheralManifest.length} connected external peripheral(s)...`);
 
     const result = await window.localWokwi.startSimulation({
       workspaceDir: compileResult.workspaceDir,
       elfPath: compileResult.elfPath,
       boardRepl,
+      peripheralManifest,
       bridgePort: simulation.bridgePort,
       gdbPort: simulation.gdbPort,
       machineName: DEMO_MACHINE_NAME,
@@ -1160,26 +1986,15 @@ export default function App() {
       bridgePort: result.bridgePort ?? current.bridgePort,
       gdbPort: result.gdbPort ?? current.gdbPort,
     }));
-    setButtonPressed(false);
-    setLedOn(false);
-    appendLog('Renode launched. Press and hold the external button card to drive the LED in real time.');
-  }, [
-    appendLog,
-    boardRepl,
-    buildResult,
-    buttonPad,
-    codeDirty,
-    compileFirmware,
-    ledPad,
-    simulation.bridgePort,
-    simulation.gdbPort,
-  ]);
+    setButtonStates({});
+    setLedStates({});
+    appendLog('Renode launched. Use the peripheral rack buttons to drive the wired LEDs.');
+  }, [appendLog, boardRepl, buildResult, codeDirty, compileFirmware, peripheralManifest, simulation.bridgePort, simulation.gdbPort]);
 
   const stopSimulation = useCallback(async () => {
     if (!window.localWokwi) {
       return;
     }
-
     await window.localWokwi.stopSimulation();
     setRunningVisualState(false);
     resetDebugState('Simulation stopped.');
@@ -1191,13 +2006,11 @@ export default function App() {
       appendLog('Compile and start the simulation before attaching GDB.', 'warn');
       return;
     }
-
     const result = await window.localWokwi.startDebugging({
       workspaceDir: buildResult.workspaceDir,
       elfPath: buildResult.elfPath,
       gdbPort: simulation.gdbPort,
     });
-
     if (!result.success) {
       appendLog(result.message, 'error');
     }
@@ -1207,7 +2020,6 @@ export default function App() {
     if (!window.localWokwi) {
       return;
     }
-
     const result = await window.localWokwi.stopDebugging();
     if (!result.success) {
       appendLog(result.message, 'warn');
@@ -1245,12 +2057,12 @@ export default function App() {
                   <span className="text-xs uppercase tracking-[0.28em]">Local Board Lab</span>
                 </div>
                 <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white">
-                  Bind the Renode engine to a real NUCLEO-H753ZI board layout
+                  Build with visible wires on a live NUCLEO-H753ZI board
                 </h1>
                 <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-300">
-                  Choose actual connector pads on CN7, CN8, CN9, CN10, CN11, or CN12. The app regenerates{' '}
-                  <span className="font-semibold text-white">main.c</span>, <span className="font-semibold text-white">board.repl</span>, compiles a
-                  real ELF, starts the local Renode board model, and keeps the external button and LED synchronized with the UI.
+                  Add external peripherals, arm a device, click a free board pad, and the workbench will regenerate{' '}
+                  <span className="font-semibold text-white">main.c</span>, <span className="font-semibold text-white">board.repl</span>,
+                  compile the firmware, and keep the live Renode simulation synchronized with your wiring.
                 </p>
               </div>
 
@@ -1270,177 +2082,24 @@ export default function App() {
           </div>
 
           <div className="min-h-0 flex-1 overflow-auto px-6 py-6">
-            <div className="min-w-[1320px] space-y-6">
-              <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
-                <div className="rounded-[32px] border border-slate-800 bg-slate-950/70 p-5 shadow-xl">
-                  <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Placement Tools</div>
-                  <div className="mt-3 text-sm text-slate-300">
-                    Pick a tool, then click any free connector pad. On-board LEDs and the built-in USER button are shown but blocked from external placement.
-                  </div>
-
-                  <div className="mt-5 grid gap-3">
-                    <PlacementButton
-                      active={placementTool === 'button'}
-                      disabled={simulation.running}
-                      label="Place Button"
-                      detail="Route the external momentary switch to a board header pad."
-                      accent="fuchsia"
-                      onClick={() => setPlacementTool((current) => (current === 'button' ? null : 'button'))}
-                    />
-                    <PlacementButton
-                      active={placementTool === 'led'}
-                      disabled={simulation.running}
-                      label="Place LED"
-                      detail="Route the external LED to a board header pad and watch it glow live."
-                      accent="amber"
-                      onClick={() => setPlacementTool((current) => (current === 'led' ? null : 'led'))}
-                    />
-                  </div>
-
-                  <button
-                    onClick={() => useGeneratedDemoCode()}
-                    disabled={simulation.running}
-                    className={`mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-medium transition ${
-                      simulation.running
-                        ? 'cursor-not-allowed border-slate-800 bg-slate-900 text-slate-500'
-                        : 'border-cyan-500/30 bg-cyan-500/10 text-cyan-100 hover:bg-cyan-500/20'
-                    }`}
-                  >
-                    <RefreshCcw size={15} />
-                    Regenerate Demo Code
-                  </button>
-
-                  <div className="mt-5 space-y-3 text-sm text-slate-300">
-                    <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-                      <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Button assignment</div>
-                      <div className="mt-1 font-semibold text-white">{describePad(buttonPad)}</div>
-                    </div>
-                    <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-                      <div className="text-xs uppercase tracking-[0.24em] text-slate-500">LED assignment</div>
-                      <div className="mt-1 font-semibold text-white">{describePad(ledPad)}</div>
-                    </div>
-                    <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-                      <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Pin selection hint</div>
-                      <div className="mt-1 text-slate-300">
-                        Zio headers are the fastest path. Morpho headers expose almost the full MCU and are perfect when you need less common GPIOs.
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <BoardSummaryCard
-                  buttonPad={buttonPad}
-                  ledPad={ledPad}
-                  ledOn={ledOn}
-                  buttonPressed={buttonPressed}
-                  simulationRunning={simulation.running}
-                  onButtonPress={(pressed) => void sendButtonState(pressed)}
-                />
-              </div>
-
-              <div className="grid gap-4 xl:grid-cols-[minmax(250px,300px)_minmax(280px,340px)_minmax(420px,1fr)_minmax(280px,340px)_minmax(250px,300px)]">
-                {DEMO_LEFT_MORPHO_CONNECTOR ? (
-                  <DualConnectorCard
-                    connector={DEMO_LEFT_MORPHO_CONNECTOR}
-                    wiring={wiring}
-                    placementTool={placementTool}
-                    ledOn={ledOn}
-                    buttonPressed={buttonPressed}
-                    disabled={simulation.running}
-                    onAssign={assignPeripheralToPad}
-                  />
-                ) : (
-                  <div />
-                )}
-
-                <div className="space-y-4">
-                  {DEMO_LEFT_CONNECTORS.map((connector) => (
-                    <div key={connector.id}>
-                      <SingleConnectorCard
-                        connector={connector}
-                        wiring={wiring}
-                        placementTool={placementTool}
-                        ledOn={ledOn}
-                        buttonPressed={buttonPressed}
-                        disabled={simulation.running}
-                        onAssign={assignPeripheralToPad}
-                      />
-                    </div>
-                  ))}
-                </div>
-
-                <div className="rounded-[32px] border border-slate-800 bg-slate-950/70 p-5 shadow-xl">
-                  <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Workflow</div>
-                  <div className="mt-4 grid gap-3 text-sm text-slate-300">
-                    <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-                      1. Choose <span className="font-semibold text-white">Place Button</span> or{' '}
-                      <span className="font-semibold text-white">Place LED</span>.
-                    </div>
-                    <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-                      2. Click any free pad on CN7, CN8, CN9, CN10, CN11, or CN12.
-                    </div>
-                    <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-                      3. The app regenerates <span className="font-semibold text-white">main.c</span> and{' '}
-                      <span className="font-semibold text-white">board.repl</span> for that exact connector mapping.
-                    </div>
-                    <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-                      4. Compile, start Renode, then hold the external button card to drive the LED.
-                    </div>
-                    <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-                      5. Attach GDB if you want source-level stepping on the generated bare-metal firmware.
-                    </div>
-                  </div>
-
-                  <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-sm text-slate-300">
-                    <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Current wiring snapshot</div>
-                    <div className="mt-2 grid gap-2">
-                      <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
-                        Button input: <span className="font-semibold text-white">{describePad(buttonPad)}</span>
-                      </div>
-                      <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
-                        LED output: <span className="font-semibold text-white">{describePad(ledPad)}</span>
-                      </div>
-                    </div>
-                    <div className="mt-4 text-xs text-slate-400">
-                      Workspace:
-                      <div className="mt-1 break-all text-slate-300">
-                        {simulation.workspaceDir || 'No local workspace created yet'}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  {DEMO_RIGHT_CONNECTORS.map((connector) => (
-                    <div key={connector.id}>
-                      <SingleConnectorCard
-                        connector={connector}
-                        wiring={wiring}
-                        placementTool={placementTool}
-                        ledOn={ledOn}
-                        buttonPressed={buttonPressed}
-                        disabled={simulation.running}
-                        onAssign={assignPeripheralToPad}
-                      />
-                    </div>
-                  ))}
-                </div>
-
-                {DEMO_RIGHT_MORPHO_CONNECTOR ? (
-                  <DualConnectorCard
-                    connector={DEMO_RIGHT_MORPHO_CONNECTOR}
-                    wiring={wiring}
-                    placementTool={placementTool}
-                    ledOn={ledOn}
-                    buttonPressed={buttonPressed}
-                    disabled={simulation.running}
-                    onAssign={assignPeripheralToPad}
-                  />
-                ) : (
-                  <div />
-                )}
-              </div>
-            </div>
+            <WiringWorkbench
+              wiring={wiring}
+              armedPeripheralId={armedPeripheralId}
+              ledStates={ledStates}
+              buttonStates={buttonStates}
+              simulationRunning={simulation.running}
+              showFullPinout={showFullPinout}
+              peripheralPositions={peripheralPositions}
+              onAssign={assignPeripheralToPad}
+              onAddPeripheral={addPeripheral}
+              onArmPeripheral={toggleArmPeripheral}
+              onDisconnectPeripheral={disconnectPeripheral}
+              onRemovePeripheral={removePeripheral}
+              onPressPeripheral={(peripheralId, pressed) => void sendButtonState(peripheralId, pressed)}
+              onSourceChange={updateLedSource}
+              onToggleFullPinout={() => setShowFullPinout((current) => !current)}
+              onMovePeripheral={movePeripheral}
+            />
           </div>
         </div>
 
@@ -1450,7 +2109,7 @@ export default function App() {
               <div>
                 <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Control</div>
                 <div className="mt-1 text-sm text-slate-300">
-                  Build the current NUCLEO-H753ZI header wiring into a real ELF, then launch the local Renode runtime.
+                  Build the current peripheral graph into a real ELF, then launch the local Renode runtime.
                 </div>
               </div>
               <div className="flex gap-2">
@@ -1498,9 +2157,11 @@ export default function App() {
                 <div className="mt-1 break-all">{buildResult?.elfPath || 'No ELF generated yet'}</div>
               </div>
               <div className="rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2">
-                <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Wiring snapshot</div>
+                <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Connected peripherals</div>
                 <div className="mt-1">
-                  {buttonPad.pinLabel} ({buttonPad.mcuPinId}) {'->'} {ledPad.pinLabel} ({ledPad.mcuPinId})
+                  {peripheralManifest.length === 0
+                    ? 'No external peripherals connected'
+                    : peripheralManifest.map((item) => item.label).join(', ')}
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-2">
@@ -1612,21 +2273,6 @@ export default function App() {
                 >
                   Step Into
                 </button>
-              </div>
-
-              <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-400">
-                <div className="rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-2">
-                  <div className="uppercase tracking-[0.22em] text-slate-500">Stop reason</div>
-                  <div className="mt-1 text-slate-200">{debugState.lastReason || 'Not stopped'}</div>
-                </div>
-                <div className="rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-2">
-                  <div className="uppercase tracking-[0.22em] text-slate-500">Current frame</div>
-                  <div className="mt-1 break-all text-slate-200">
-                    {debugState.frame?.line
-                      ? `${debugState.frame.fullname ?? debugState.frame.file ?? 'main.c'}:${debugState.frame.line}`
-                      : 'No frame selected'}
-                  </div>
-                </div>
               </div>
             </div>
           </div>
@@ -1762,11 +2408,7 @@ export default function App() {
                 <div
                   key={entry.id}
                   className={`mb-1 whitespace-pre-wrap ${
-                    entry.level === 'error'
-                      ? 'text-rose-300'
-                      : entry.level === 'warn'
-                        ? 'text-amber-300'
-                        : 'text-slate-300'
+                    entry.level === 'error' ? 'text-rose-300' : entry.level === 'warn' ? 'text-amber-300' : 'text-slate-300'
                   }`}
                 >
                   {entry.message}

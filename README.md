@@ -4,11 +4,12 @@
 
 It keeps the visual workflow from the original prototype, but moves execution into a local Electron shell:
 
+- Wokwi-like wiring UX: common pads first, full pinout on demand
 - pin-level placement on a real `NUCLEO-H753ZI` connector layout
 - auto-generated Renode `.repl` and `.resc`
 - local ARM GCC compilation
 - local Renode startup
-- bidirectional peripheral events through a local socket bridge
+- bidirectional GPIO interaction through Renode's built-in `ExternalControlServer`
 - live log and GPIO state visualization
 
 ## Current scope
@@ -18,6 +19,8 @@ The current MVP targets one Renode-backed demo board:
 - `NUCLEO-H753ZI`
 - selectable external `Button` on free pads across `CN7`, `CN8`, `CN9`, `CN10`, `CN11`, and `CN12`
 - selectable external `LED` on the same routed header pads
+- a default pin chooser that surfaces the most common teaching-friendly pads first
+- any already-connected pad remains visible even when the full pinout is collapsed
 - board top-view locator that mirrors those connector groups and highlights the selected pads
 - local `arm-none-eabi-gcc` compilation with generated startup and linker files
 - local Renode launch through the bundled `renode/renode/renode.exe` when present
@@ -68,11 +71,14 @@ The helper launcher `scripts/run-local.ps1` will install dependencies automatica
 
 ## Demo flow
 
-1. Click `Place Button`, then click any free connector pad such as `CN10 pin 3 (D7 / PG12)` or `CN12 pin 19 (PG12)`.
-2. Click `Place LED`, then click another free connector pad such as `CN7 pin 10 (D13 / PA5)`.
-3. The app regenerates `main.c`, `board.repl`, and the Renode launch preview from that wiring.
-4. Click `Compile`, then `Start`.
-5. Press and hold the external button card in the board canvas and watch the LED card update in real time.
+1. Click `Add Button`, then use `Connect wire` on that new device.
+2. Click a hotspot directly on the board canvas, or use the pin chooser on the lower half of the UI.
+3. Drag the new device card around the canvas until the wiring layout feels right.
+4. Click `Add LED`, wire it to another pad, and choose which button drives it.
+5. If you need a less common GPIO, click `Show Full Pinout`.
+6. The app regenerates `main.c`, `board.repl`, and the Renode launch preview from that wiring.
+7. Click `Compile`, then `Start`.
+8. Press and hold the external button card in the board canvas and watch the LED card update in real time.
 
 ## Smoke test
 
@@ -85,7 +91,7 @@ This verifies the local execution chain without requiring the Electron window:
 - compile bare-metal firmware
 - generate `.repl` / `.resc`
 - launch Renode
-- connect the local bridge
+- connect Renode external control
 - toggle the button and observe the LED
 - attach GDB through MI mode
 
@@ -105,11 +111,15 @@ npm run start
   - toolchain detection
   - local compile pipeline
   - Renode process management
-  - TCP bridge connection management
+  - Renode external-control connection management
 - `electron/preload.cjs`
   - safe renderer API exposed as `window.localWokwi`
+- `electron/external-control.cjs`
+  - minimal client for Renode `ExternalControlServer`
+  - GPIO state read/write for live peripherals
 - `src/App.tsx`
-  - NUCLEO-H753ZI board UI with real header groupings
+  - NUCLEO-H753ZI board UI with common-pin-first wiring UX
+  - draggable peripherals and canvas hotspots for more Wokwi-like placement
   - code editor
   - compile/run controls
   - live status/log rendering
@@ -117,8 +127,6 @@ npm run start
   - generated firmware template from selected board pads
   - startup/runtime files
   - `.repl` / `.resc` preview generation
-- `renode_bridge.py`
-  - Renode-side Python bridge for button/LED events
 
 ## What is real now
 
@@ -126,8 +134,10 @@ npm run start
 - run action launches Renode as a child process
 - renderer no longer uses the old fake LED simulation loop
 - connector-pad selection regenerates both bare-metal firmware and Renode platform wiring
-- button presses go to the local bridge
-- LED state comes back from Renode and updates the board view
+- default pin selection follows the Wokwi idea of exposing the most useful pads first
+- external devices can be repositioned directly on the board canvas
+- button presses go through Renode external control
+- LED state is polled back from Renode and updates the board view
 - `npm run smoke` validates compile -> simulate -> interact -> debug end to end
 
 ## What is still next

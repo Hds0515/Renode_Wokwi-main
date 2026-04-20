@@ -9,6 +9,7 @@ const {
   DEFAULT_GCC_ARGS,
   DEFAULT_DEMO_WIRING,
   generateBoardRepl,
+  buildPeripheralManifest,
 } = require('../electron/firmware.cjs');
 
 function wait(ms) {
@@ -66,6 +67,7 @@ async function main() {
     workspaceDir: compileResult.workspaceDir,
     elfPath: compileResult.elfPath,
     boardRepl: generateBoardRepl(DEFAULT_DEMO_WIRING),
+    peripheralManifest: buildPeripheralManifest(DEFAULT_DEMO_WIRING),
   });
 
   if (!startResult.success) {
@@ -83,9 +85,9 @@ async function main() {
     return;
   }
 
-  await runtime.sendPeripheralEvent({ type: 'button', id: 'btn1', state: 1 });
+  await runtime.sendPeripheralEvent({ type: 'button', id: 'button-1', state: 1 });
   await wait(1500);
-  await runtime.sendPeripheralEvent({ type: 'button', id: 'btn1', state: 0 });
+  await runtime.sendPeripheralEvent({ type: 'button', id: 'button-1', state: 0 });
   await wait(1500);
 
   const debugResult = await runtime.startDebugging({
