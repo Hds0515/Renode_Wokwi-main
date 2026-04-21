@@ -1,220 +1,278 @@
-import { DemoWiring, generateDemoMainSource } from './firmware';
+import { BoardSchema, BOARD_SCHEMAS } from './boards';
+import { DemoPeripheral, DemoWiring, generateDemoMainSource } from './firmware';
 import { ProjectDocument, ProjectPeripheralPosition, createProjectDocument } from './project';
 
 export type ExampleProject = {
   id: string;
+  boardId: string;
   title: string;
   summary: string;
   difficulty: 'starter' | 'intermediate';
   project: ProjectDocument;
 };
 
+type BoardExamplePins = {
+  buttonLed: {
+    button: string;
+    led: string;
+  };
+  buttonBuzzer: {
+    button: string;
+    buzzer: string;
+  };
+  rgb: {
+    buttons: [string, string, string];
+    colors: [string, string, string];
+  };
+};
+
+const BOARD_EXAMPLE_PINS: Record<string, BoardExamplePins> = {
+  'nucleo-h753zi': {
+    buttonLed: {
+      button: 'CN10-3',
+      led: 'CN7-10',
+    },
+    buttonBuzzer: {
+      button: 'CN10-3',
+      buzzer: 'CN10-7',
+    },
+    rgb: {
+      buttons: ['CN10-3', 'CN7-14', 'CN7-9'],
+      colors: ['CN9-1', 'CN9-3', 'CN9-5'],
+    },
+  },
+  'stm32f4-discovery': {
+    buttonLed: {
+      button: 'F4A-2',
+      led: 'F4D-1',
+    },
+    buttonBuzzer: {
+      button: 'F4A-3',
+      buzzer: 'F4D-2',
+    },
+    rgb: {
+      buttons: ['F4A-2', 'F4A-3', 'F4A-4'],
+      colors: ['F4A-5', 'F4A-6', 'F4A-7'],
+    },
+  },
+  'stm32f103-gpio-lab': {
+    buttonLed: {
+      button: 'F1A-1',
+      led: 'F1B-1',
+    },
+    buttonBuzzer: {
+      button: 'F1A-2',
+      buzzer: 'F1B-2',
+    },
+    rgb: {
+      buttons: ['F1A-1', 'F1A-2', 'F1A-3'],
+      colors: ['F1B-1', 'F1B-2', 'F1B-4'],
+    },
+  },
+};
+
+function createButton(id: string, label: string, padId: string): DemoPeripheral {
+  return {
+    id,
+    kind: 'button',
+    label,
+    padId,
+    sourcePeripheralId: null,
+    templateKind: 'button',
+    groupId: null,
+    groupLabel: null,
+    endpointId: 'signal',
+    endpointLabel: 'SIG',
+    accentColor: '#d946ef',
+  };
+}
+
+function createOutput(options: {
+  id: string;
+  label: string;
+  padId: string;
+  sourcePeripheralId: string;
+  templateKind: 'led' | 'buzzer' | 'rgb-led';
+  endpointId: string;
+  endpointLabel: string;
+  accentColor: string;
+  groupId?: string | null;
+  groupLabel?: string | null;
+}): DemoPeripheral {
+  return {
+    id: options.id,
+    kind: 'led',
+    label: options.label,
+    padId: options.padId,
+    sourcePeripheralId: options.sourcePeripheralId,
+    templateKind: options.templateKind,
+    groupId: options.groupId ?? null,
+    groupLabel: options.groupLabel ?? null,
+    endpointId: options.endpointId,
+    endpointLabel: options.endpointLabel,
+    accentColor: options.accentColor,
+  };
+}
+
 function buildExampleProject(options: {
+  board: BoardSchema;
   wiring: DemoWiring;
   peripheralPositions: Record<string, ProjectPeripheralPosition>;
   showFullPinout?: boolean;
 }): ProjectDocument {
+  const boardPads = options.board.connectors.all.flatMap((connector) => connector.pins);
   return {
     ...createProjectDocument({
+      board: options.board,
       wiring: options.wiring,
       showFullPinout: options.showFullPinout ?? false,
       peripheralPositions: options.peripheralPositions,
       codeMode: 'generated',
-      mainSource: generateDemoMainSource(options.wiring),
+      mainSource: generateDemoMainSource(options.wiring, options.board.runtime, boardPads),
     }),
     savedAt: '2026-04-21T00:00:00.000Z',
   };
 }
 
-const BUTTON_LED_WIRING: DemoWiring = {
-  peripherals: [
-    {
-      id: 'button-1',
-      kind: 'button',
-      label: 'Button 1',
-      padId: 'CN10-3',
-      sourcePeripheralId: null,
-      templateKind: 'button',
-      groupId: null,
-      groupLabel: null,
-      endpointId: 'signal',
-      endpointLabel: 'SIG',
-      accentColor: '#d946ef',
-    },
-    {
-      id: 'led-1',
-      kind: 'led',
-      label: 'LED 1',
-      padId: 'CN7-10',
-      sourcePeripheralId: 'button-1',
-      templateKind: 'led',
-      groupId: null,
-      groupLabel: null,
-      endpointId: 'signal',
-      endpointLabel: 'SIG',
-      accentColor: '#f59e0b',
-    },
-  ],
-};
+function buildBoardExamples(board: BoardSchema): ExampleProject[] {
+  const pins = BOARD_EXAMPLE_PINS[board.id];
+  if (!pins) {
+    return [];
+  }
 
-const BUTTON_BUZZER_WIRING: DemoWiring = {
-  peripherals: [
-    {
-      id: 'button-1',
-      kind: 'button',
-      label: 'Button 1',
-      padId: 'CN10-3',
-      sourcePeripheralId: null,
-      templateKind: 'button',
-      groupId: null,
-      groupLabel: null,
-      endpointId: 'signal',
-      endpointLabel: 'SIG',
-      accentColor: '#d946ef',
-    },
-    {
-      id: 'buzzer-1',
-      kind: 'led',
-      label: 'Buzzer 1',
-      padId: 'CN10-7',
-      sourcePeripheralId: 'button-1',
-      templateKind: 'buzzer',
-      groupId: null,
-      groupLabel: null,
-      endpointId: 'signal',
-      endpointLabel: 'OUT',
-      accentColor: '#14b8a6',
-    },
-  ],
-};
+  const buttonLedWiring: DemoWiring = {
+    peripherals: [
+      createButton('button-1', 'Button 1', pins.buttonLed.button),
+      createOutput({
+        id: 'led-1',
+        label: 'LED 1',
+        padId: pins.buttonLed.led,
+        sourcePeripheralId: 'button-1',
+        templateKind: 'led',
+        endpointId: 'signal',
+        endpointLabel: 'SIG',
+        accentColor: '#f59e0b',
+      }),
+    ],
+  };
 
-const MULTI_BUTTON_RGB_WIRING: DemoWiring = {
-  peripherals: [
-    {
-      id: 'button-1',
-      kind: 'button',
-      label: 'Red Button',
-      padId: 'CN10-3',
-      sourcePeripheralId: null,
-      templateKind: 'button',
-      groupId: null,
-      groupLabel: null,
-      endpointId: 'signal',
-      endpointLabel: 'SIG',
-      accentColor: '#d946ef',
-    },
-    {
-      id: 'button-2',
-      kind: 'button',
-      label: 'Green Button',
-      padId: 'CN7-14',
-      sourcePeripheralId: null,
-      templateKind: 'button',
-      groupId: null,
-      groupLabel: null,
-      endpointId: 'signal',
-      endpointLabel: 'SIG',
-      accentColor: '#d946ef',
-    },
-    {
-      id: 'button-3',
-      kind: 'button',
-      label: 'Blue Button',
-      padId: 'CN7-9',
-      sourcePeripheralId: null,
-      templateKind: 'button',
-      groupId: null,
-      groupLabel: null,
-      endpointId: 'signal',
-      endpointLabel: 'SIG',
-      accentColor: '#d946ef',
-    },
-    {
-      id: 'rgb-led-1-red',
-      kind: 'led',
-      label: 'RGB LED 1',
-      padId: 'CN9-1',
-      sourcePeripheralId: 'button-1',
-      templateKind: 'rgb-led',
-      groupId: 'rgb-led-1',
-      groupLabel: 'RGB LED 1',
-      endpointId: 'red',
-      endpointLabel: 'RED',
-      accentColor: '#ef4444',
-    },
-    {
-      id: 'rgb-led-1-green',
-      kind: 'led',
-      label: 'RGB LED 1',
-      padId: 'CN9-3',
-      sourcePeripheralId: 'button-2',
-      templateKind: 'rgb-led',
-      groupId: 'rgb-led-1',
-      groupLabel: 'RGB LED 1',
-      endpointId: 'green',
-      endpointLabel: 'GREEN',
-      accentColor: '#22c55e',
-    },
-    {
-      id: 'rgb-led-1-blue',
-      kind: 'led',
-      label: 'RGB LED 1',
-      padId: 'CN9-5',
-      sourcePeripheralId: 'button-3',
-      templateKind: 'rgb-led',
-      groupId: 'rgb-led-1',
-      groupLabel: 'RGB LED 1',
-      endpointId: 'blue',
-      endpointLabel: 'BLUE',
-      accentColor: '#3b82f6',
-    },
-  ],
-};
+  const buttonBuzzerWiring: DemoWiring = {
+    peripherals: [
+      createButton('button-1', 'Button 1', pins.buttonBuzzer.button),
+      createOutput({
+        id: 'buzzer-1',
+        label: 'Buzzer 1',
+        padId: pins.buttonBuzzer.buzzer,
+        sourcePeripheralId: 'button-1',
+        templateKind: 'buzzer',
+        endpointId: 'signal',
+        endpointLabel: 'OUT',
+        accentColor: '#14b8a6',
+      }),
+    ],
+  };
 
-export const EXAMPLE_PROJECTS: readonly ExampleProject[] = [
-  {
-    id: 'button-led',
-    title: 'Button drives LED',
-    summary: 'The smallest end-to-end GPIO loop: press one button and watch one LED react through Renode.',
-    difficulty: 'starter',
-    project: buildExampleProject({
-      wiring: BUTTON_LED_WIRING,
-      peripheralPositions: {
-        'button-1': { x: 96, y: 364 },
-        'led-1': { x: 252, y: 364 },
-      },
-    }),
-  },
-  {
-    id: 'button-buzzer',
-    title: 'Button drives Buzzer',
-    summary: 'A one-button output example that exercises the buzzer template and generated GPIO output path.',
-    difficulty: 'starter',
-    project: buildExampleProject({
-      wiring: BUTTON_BUZZER_WIRING,
-      peripheralPositions: {
-        'button-1': { x: 96, y: 364 },
-        'buzzer-1': { x: 252, y: 364 },
-      },
-    }),
-  },
-  {
-    id: 'multi-button-rgb',
-    title: 'Three buttons mix RGB',
-    summary: 'Three independent buttons drive the red, green, and blue endpoints of one grouped RGB LED.',
-    difficulty: 'intermediate',
-    project: buildExampleProject({
-      wiring: MULTI_BUTTON_RGB_WIRING,
-      peripheralPositions: {
-        'button-1': { x: 96, y: 364 },
-        'button-2': { x: 252, y: 364 },
-        'button-3': { x: 408, y: 364 },
-        'rgb-led-1': { x: 564, y: 364 },
-      },
-    }),
-  },
-];
+  const rgbWiring: DemoWiring = {
+    peripherals: [
+      createButton('button-1', 'Red Button', pins.rgb.buttons[0]),
+      createButton('button-2', 'Green Button', pins.rgb.buttons[1]),
+      createButton('button-3', 'Blue Button', pins.rgb.buttons[2]),
+      createOutput({
+        id: 'rgb-led-1-red',
+        label: 'RGB LED 1',
+        padId: pins.rgb.colors[0],
+        sourcePeripheralId: 'button-1',
+        templateKind: 'rgb-led',
+        endpointId: 'red',
+        endpointLabel: 'RED',
+        accentColor: '#ef4444',
+        groupId: 'rgb-led-1',
+        groupLabel: 'RGB LED 1',
+      }),
+      createOutput({
+        id: 'rgb-led-1-green',
+        label: 'RGB LED 1',
+        padId: pins.rgb.colors[1],
+        sourcePeripheralId: 'button-2',
+        templateKind: 'rgb-led',
+        endpointId: 'green',
+        endpointLabel: 'GREEN',
+        accentColor: '#22c55e',
+        groupId: 'rgb-led-1',
+        groupLabel: 'RGB LED 1',
+      }),
+      createOutput({
+        id: 'rgb-led-1-blue',
+        label: 'RGB LED 1',
+        padId: pins.rgb.colors[2],
+        sourcePeripheralId: 'button-3',
+        templateKind: 'rgb-led',
+        endpointId: 'blue',
+        endpointLabel: 'BLUE',
+        accentColor: '#3b82f6',
+        groupId: 'rgb-led-1',
+        groupLabel: 'RGB LED 1',
+      }),
+    ],
+  };
 
-export function getExampleProject(exampleId: string): ExampleProject | null {
-  return EXAMPLE_PROJECTS.find((example) => example.id === exampleId) ?? null;
+  return [
+    {
+      id: `${board.id}-button-led`,
+      boardId: board.id,
+      title: `${board.name}: Button drives LED`,
+      summary: 'The smallest end-to-end GPIO loop for the selected board.',
+      difficulty: 'starter',
+      project: buildExampleProject({
+        board,
+        wiring: buttonLedWiring,
+        peripheralPositions: {
+          'button-1': { x: 96, y: 364 },
+          'led-1': { x: 252, y: 364 },
+        },
+      }),
+    },
+    {
+      id: `${board.id}-button-buzzer`,
+      boardId: board.id,
+      title: `${board.name}: Button drives Buzzer`,
+      summary: 'A one-button output example using the current board pin map and runtime.',
+      difficulty: 'starter',
+      project: buildExampleProject({
+        board,
+        wiring: buttonBuzzerWiring,
+        peripheralPositions: {
+          'button-1': { x: 96, y: 364 },
+          'buzzer-1': { x: 252, y: 364 },
+        },
+      }),
+    },
+    {
+      id: `${board.id}-multi-button-rgb`,
+      boardId: board.id,
+      title: `${board.name}: Three buttons mix RGB`,
+      summary: 'Three independent inputs drive the red, green, and blue endpoints on the selected board.',
+      difficulty: 'intermediate',
+      project: buildExampleProject({
+        board,
+        wiring: rgbWiring,
+        peripheralPositions: {
+          'button-1': { x: 96, y: 364 },
+          'button-2': { x: 252, y: 364 },
+          'button-3': { x: 408, y: 364 },
+          'rgb-led-1': { x: 564, y: 364 },
+        },
+      }),
+    },
+  ];
+}
+
+export const EXAMPLE_PROJECTS: readonly ExampleProject[] = BOARD_SCHEMAS.flatMap((board) => buildBoardExamples(board));
+
+export function getExamplesForBoard(boardId: string): ExampleProject[] {
+  return EXAMPLE_PROJECTS.filter((example) => example.boardId === boardId);
+}
+
+export function getExampleProject(exampleId: string, boardId?: string): ExampleProject | null {
+  return EXAMPLE_PROJECTS.find((example) => example.id === exampleId && (!boardId || example.boardId === boardId)) ?? null;
 }

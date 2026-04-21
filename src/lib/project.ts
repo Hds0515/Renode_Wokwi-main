@@ -257,7 +257,8 @@ export function normalizeLoadedProjectDocument(value: unknown): ProjectLoadResul
   const layout = isRecord(value.layout) ? value.layout : {};
   const code = isRecord(value.code) ? value.code : {};
   const codeMode: ProjectCodeMode = code.mode === 'manual' ? 'manual' : 'generated';
-  const mainSource = typeof code.mainSource === 'string' ? code.mainSource : generateDemoMainSource(wiring, board.runtime);
+  const boardPads = board.connectors.all.flatMap((connector) => connector.pins);
+  const mainSource = typeof code.mainSource === 'string' ? code.mainSource : generateDemoMainSource(wiring, board.runtime, boardPads);
 
   return {
     project: {

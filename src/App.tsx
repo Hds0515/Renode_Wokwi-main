@@ -53,6 +53,7 @@ import {
   getWorkbenchDeviceId,
   isDemoPeripheralTemplateKind,
   resolveSelectablePad,
+  synchronizeWiringWires,
 } from './lib/firmware';
 import { ACTIVE_BOARD_SCHEMA, BOARD_SCHEMAS, BoardSchema, getBoardSchema } from './lib/boards';
 import {
@@ -60,7 +61,7 @@ import {
   createProjectDocument,
   normalizeLoadedProjectDocument,
 } from './lib/project';
-import { EXAMPLE_PROJECTS, getExampleProject } from './lib/examples';
+import { EXAMPLE_PROJECTS, getExampleProject, getExamplesForBoard } from './lib/examples';
 
 type ToolingStatus = {
   found: boolean;
@@ -120,7 +121,6 @@ type PeripheralPosition = {
 };
 
 const DEFAULT_BOARD = ACTIVE_BOARD_SCHEMA;
-const ONBOARD_FEATURES = DEFAULT_BOARD.visual.onboardFeatures;
 /*
 const ONBOARD_FEATURES = [
   { label: 'LD1', detail: 'PB0 · Green LED' },
@@ -158,6 +158,32 @@ function getCanvasHeightForPeripheralCount(count: number) {
 
 function parseLibraryTemplateKind(rawValue: string | null | undefined): DemoPeripheralTemplateKind | null {
   return isDemoPeripheralTemplateKind(rawValue) ? rawValue : null;
+}
+
+function getBoardPads(board: BoardSchema): DemoBoardPad[] {
+  return board.connectors.all.flatMap((connector) => connector.pins);
+}
+
+function getPadDescription(padId: string | null, board: BoardSchema, fallback: string): string {
+  if (!padId) {
+    return fallback;
+  }
+
+  return describePad(resolveSelectablePad(padId, getBoardPads(board)));
+}
+
+function reconcileWiringForBoard(wiring: DemoWiring, board: BoardSchema): DemoWiring {
+  const selectablePadIds = new Set(board.connectors.selectablePads.map((pad) => pad.id));
+  return synchronizeWiringWires({
+    peripherals: wiring.peripherals.map((peripheral) =>
+      peripheral.padId && !selectablePadIds.has(peripheral.padId)
+        ? {
+            ...peripheral,
+            padId: null,
+          }
+        : peripheral
+    ),
+  });
 }
 
 function getDeviceEndpointAnchor(position: PeripheralPosition, endpointIndex: number, endpointCount: number) {
@@ -761,6 +787,7 @@ function MiniConnectorStrip({
 }
 
 function PeripheralRackCard({
+  board,
   peripheral,
   buttons,
   armed,
@@ -773,6 +800,7 @@ function PeripheralRackCard({
   onPress,
   onSourceChange,
 }: {
+  board: BoardSchema;
   peripheral: DemoPeripheral;
   buttons: DemoPeripheral[];
   armed: boolean;
@@ -820,7 +848,7 @@ function PeripheralRackCard({
       </div>
 
       <div className="mt-3 rounded-2xl border border-current/20 bg-black/10 px-3 py-2 text-sm">
-        {peripheral.padId ? describePad(resolveSelectablePad(peripheral.padId)) : 'Not connected to a board pad'}
+        {getPadDescription(peripheral.padId, board, 'Not connected to a board pad')}
       </div>
 
       {peripheral.kind === 'led' ? (
@@ -950,6 +978,7 @@ function PeripheralLibraryCard({
 }
 
 function BoardTopView({
+  board,
   wiring,
   ledStates,
   buttonStates,
@@ -967,6 +996,7 @@ function BoardTopView({
   onMovePeripheral,
   onPressPeripheral,
 }: {
+  board: BoardSchema;
   wiring: DemoWiring;
   ledStates: Record<string, boolean>;
   buttonStates: Record<string, boolean>;
@@ -1000,6 +1030,7 @@ function BoardTopView({
   const [pointerPosition, setPointerPosition] = useState<{ x: number; y: number } | null>(null);
   const [libraryPreviewPosition, setLibraryPreviewPosition] = useState<PeripheralPosition | null>(null);
   const [selectedWireId, setSelectedWireId] = useState<string | null>(null);
+  const boardPads = useMemo(() => getBoardPads(board), [board]);
 
   const resolveCanvasPosition = useCallback(
     (deviceId: string, index: number) =>
@@ -1050,8 +1081,8 @@ function BoardTopView({
           return null;
         }
 
-        const pad = resolveSelectablePad(wire.padId);
-        const padAnchor = getPadAnchor(pad);
+        const pad = resolveSelectablePad(wire.padId, boardPads);
+        const padAnchor = getPadAnchor(pad, board);
         const cardAnchor = getDeviceEndpointAnchor(
           resolveCanvasPosition(device.id, deviceIndex),
           endpointIndex,
@@ -1078,7 +1109,7 @@ function BoardTopView({
         midpoint: { x: number; y: number };
       }
     >;
-  }, [resolveCanvasPosition, wiring, workbenchDevices]);
+  }, [board, boardPads, resolveCanvasPosition, wiring, workbenchDevices]);
   const selectedWire = selectedWireId ? wires.find((wire) => wire.id === selectedWireId) ?? null : null;
 
   useEffect(() => {
@@ -1120,13 +1151,13 @@ function BoardTopView({
     const armedDevice = workbenchDevices[armedDeviceIndex];
     const endpointIndex = armedDevice.members.findIndex((member) => member.id === armedPeripheral.id);
     const start = getDeviceEndpointAnchor(resolveCanvasPosition(armedDevice.id, armedDeviceIndex), endpointIndex, armedDevice.members.length);
-    const end = hoveredPad ? getPadAnchor(hoveredPad) : pointerPosition;
+    const end = hoveredPad ? getPadAnchor(hoveredPad, board) : pointerPosition;
     if (!end) {
       return null;
     }
 
     return buildWirePath(start, end);
-  }, [armedPeripheral, hoveredPad, pointerPosition, resolveCanvasPosition, workbenchDevices]);
+  }, [armedPeripheral, board, hoveredPad, pointerPosition, resolveCanvasPosition, workbenchDevices]);
 
   const beginPeripheralDrag = useCallback(
     (peripheralId: string, position: PeripheralPosition, event: React.PointerEvent<HTMLDivElement>) => {
@@ -1482,14 +1513,14 @@ function BoardTopView({
             </div>
           ))}
 
-          {DEFAULT_BOARD.connectors.leftMorpho ? (
+          {board.connectors.leftMorpho ? (
             <div className="absolute left-0 top-6 w-[108px]">
-              <MiniConnectorStrip connector={DEFAULT_BOARD.connectors.leftMorpho} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
+              <MiniConnectorStrip connector={board.connectors.leftMorpho} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
             </div>
           ) : null}
 
           <div className="absolute left-[128px] top-[50px] w-[90px]">
-            {DEFAULT_BOARD.connectors.left.map((connector) => (
+            {board.connectors.left.map((connector) => (
               <div key={connector.id} className="mb-3 last:mb-0">
                 <MiniConnectorStrip connector={connector} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
               </div>
@@ -1497,20 +1528,20 @@ function BoardTopView({
           </div>
 
           <div className="absolute right-[128px] top-[50px] w-[90px]">
-            {DEFAULT_BOARD.connectors.right.map((connector) => (
+            {board.connectors.right.map((connector) => (
               <div key={connector.id} className="mb-3 last:mb-0">
                 <MiniConnectorStrip connector={connector} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
               </div>
             ))}
           </div>
 
-          {DEFAULT_BOARD.connectors.rightMorpho ? (
+          {board.connectors.rightMorpho ? (
             <div className="absolute right-0 top-6 w-[108px]">
-              <MiniConnectorStrip connector={DEFAULT_BOARD.connectors.rightMorpho} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
+              <MiniConnectorStrip connector={board.connectors.rightMorpho} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
             </div>
           ) : null}
 
-          {Object.entries(BOARD_CONNECTOR_LAYOUT).map(([connectorId, frame]) => (
+          {Object.entries(board.visual.connectorFrames).map(([connectorId, frame]) => (
             <div
               key={connectorId}
               className="pointer-events-none absolute text-[10px] font-semibold uppercase tracking-[0.24em] text-[#465dd7]"
@@ -1569,12 +1600,12 @@ function BoardTopView({
             Morpho
           </div>
           <div className="pointer-events-none absolute left-1/2 top-[258px] -translate-x-1/2 text-center">
-            <div className="text-sm font-semibold uppercase tracking-[0.32em] text-[#465dd7]">NUCLEO</div>
-            <div className="mt-1 text-[34px] tracking-tight text-[#2e3ab0]">H753ZI</div>
+            <div className="text-sm font-semibold uppercase tracking-[0.32em] text-[#465dd7]">BOARD</div>
+            <div className="mt-1 max-w-[260px] text-[28px] leading-none tracking-tight text-[#2e3ab0]">{board.name}</div>
           </div>
 
           {visiblePads.map((pad) => {
-            const anchor = getPadAnchor(pad);
+            const anchor = getPadAnchor(pad, board);
             const occupant = findPeripheralForPad(wiring, pad.id);
             const isHovered = hoveredPadId === pad.id;
             const accent = occupant?.kind === 'button' ? '#d946ef' : occupant?.accentColor ?? (occupant?.kind === 'led' ? '#f59e0b' : '#06b6d4');
@@ -1707,7 +1738,7 @@ function BoardTopView({
                             <div className="text-[11px] text-slate-500">{active ? 'On' : sourceLabel ? `<= ${sourceLabel}` : 'No driver'}</div>
                           </div>
                           <div className="mt-1 text-[11px] text-slate-600">
-                            {member.padId ? describePad(resolveSelectablePad(member.padId)) : 'Wire this channel to a GPIO pad'}
+                            {getPadDescription(member.padId, board, 'Wire this channel to a GPIO pad')}
                           </div>
                         </div>
                       );
@@ -1779,7 +1810,7 @@ function BoardTopView({
                 <div className="mt-2 text-[11px] uppercase tracking-[0.2em] text-current/70">{palette.title}</div>
                 <div className="mt-1 text-sm font-semibold">{device.label}</div>
                 <div className="mt-2 text-xs text-current/75">
-                  {peripheral.padId ? describePad(resolveSelectablePad(peripheral.padId)) : 'Unplaced device'}
+                  {getPadDescription(peripheral.padId, board, 'Unplaced device')}
                 </div>
                 <div className="mt-3">
                   {isButton ? (
@@ -1842,6 +1873,7 @@ function BoardTopView({
 }
 
 function WiringWorkbench({
+  board,
   wiring,
   armedPeripheralId,
   ledStates,
@@ -1862,6 +1894,7 @@ function WiringWorkbench({
   onToggleFullPinout,
   onMovePeripheral,
 }: {
+  board: BoardSchema;
   wiring: DemoWiring;
   armedPeripheralId: string | null;
   ledStates: Record<string, boolean>;
@@ -1886,8 +1919,8 @@ function WiringWorkbench({
   const leds = getPeripheralsByKind(wiring, 'led');
   const workbenchDevices = useMemo(() => buildWorkbenchDevices(wiring), [wiring]);
   const [libraryDragKind, setLibraryDragKind] = useState<DemoPeripheralTemplateKind | null>(null);
-  const workbenchConnectors = useMemo(() => buildWorkbenchConnectorGroups(wiring, showFullPinout), [wiring, showFullPinout]);
-  const hiddenPadCount = Math.max(0, DEFAULT_BOARD.connectors.selectablePads.length - workbenchConnectors.visibleSelectablePads);
+  const workbenchConnectors = useMemo(() => buildWorkbenchConnectorGroups(wiring, showFullPinout, board), [board, wiring, showFullPinout]);
+  const hiddenPadCount = Math.max(0, board.connectors.selectablePads.length - workbenchConnectors.visibleSelectablePads);
   const deviceCounts = useMemo(
     () => ({
       button: workbenchDevices.filter((device) => device.templateKind === 'button').length,
@@ -1960,7 +1993,7 @@ function WiringWorkbench({
               <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2 col-span-2">
                 <div className="text-xs text-slate-500">Free Pads</div>
                 <div className="mt-1 text-lg font-semibold text-white">
-                  {DEFAULT_BOARD.connectors.selectablePads.length - getConnectedPeripherals(wiring).length}
+                  {board.connectors.selectablePads.length - getConnectedPeripherals(wiring).length}
                 </div>
               </div>
             </div>
@@ -1972,19 +2005,19 @@ function WiringWorkbench({
             <div className="flex items-center justify-between gap-4">
               <div>
                 <div className="text-xs uppercase tracking-[0.26em] text-slate-500">Board</div>
-                <div className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">{DEFAULT_BOARD.name}</div>
-                <div className="mt-2 max-w-3xl text-sm text-slate-600">{DEFAULT_BOARD.tagline}</div>
+                <div className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">{board.name}</div>
+                <div className="mt-2 max-w-3xl text-sm text-slate-600">{board.tagline}</div>
               </div>
               <div className="grid gap-2 text-right text-xs text-slate-500">
                 <div className="rounded-2xl border border-slate-300 bg-slate-100 px-3 py-1">Renode board file</div>
-                <div className="font-mono text-slate-700">{DEFAULT_BOARD.renodePlatformPath}</div>
+                <div className="font-mono text-slate-700">{board.renodePlatformPath}</div>
               </div>
             </div>
 
             <div className="mt-5 grid gap-3 md:grid-cols-4">
               <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
                 <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Selectable pads</div>
-                <div className="mt-1 text-2xl font-semibold text-slate-900">{DEFAULT_BOARD.connectors.selectablePads.length}</div>
+                <div className="mt-1 text-2xl font-semibold text-slate-900">{board.connectors.selectablePads.length}</div>
               </div>
               <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
                 <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Connected devices</div>
@@ -1992,7 +2025,7 @@ function WiringWorkbench({
               </div>
               <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
                 <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Compiler target</div>
-                <div className="mt-1 text-sm font-semibold text-slate-900">{DEFAULT_BOARD.compiler.gccArgs.join(' ')}</div>
+                <div className="mt-1 text-sm font-semibold text-slate-900">{board.compiler.gccArgs.join(' ')}</div>
               </div>
               <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
                 <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Board I/O</div>
@@ -2003,7 +2036,7 @@ function WiringWorkbench({
             </div>
 
             <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-              {ONBOARD_FEATURES.map((feature) => (
+              {board.visual.onboardFeatures.map((feature) => (
                 <div key={feature.label} className="rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">
                   <span className="font-semibold text-slate-900">{feature.label}</span> · {feature.detail}
                 </div>
@@ -2012,6 +2045,7 @@ function WiringWorkbench({
 
             <div className="mt-5">
               <BoardTopView
+                board={board}
                 wiring={wiring}
                 ledStates={ledStates}
                 buttonStates={buttonStates}
@@ -2054,6 +2088,7 @@ function WiringWorkbench({
               return (
                 <div key={device.id}>
                   <PeripheralRackCard
+                    board={board}
                     peripheral={peripheral}
                     buttons={buttons}
                     armed={armedPeripheralId === peripheral.id}
@@ -2116,7 +2151,7 @@ function WiringWorkbench({
                         </button>
                       </div>
                       <div className="mt-2 text-sm text-cyan-50/90">
-                        {member.padId ? describePad(resolveSelectablePad(member.padId)) : 'Not connected to a board pad'}
+                        {getPadDescription(member.padId, board, 'Not connected to a board pad')}
                       </div>
                       <div className="mt-3">
                         <div className="text-xs uppercase tracking-[0.22em] text-current/70">Driven By</div>
@@ -2245,9 +2280,10 @@ function WiringWorkbench({
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'code' | 'repl' | 'resc'>('code');
+  const [selectedBoardId, setSelectedBoardId] = useState(DEFAULT_BOARD.id);
   const [tooling, setTooling] = useState<ToolingReport | null>(null);
   const [logs, setLogs] = useState<RuntimeLog[]>([
-    createLogEntry('NUCLEO-H753ZI workbench ready. Add peripherals, wire them to pads, and the app will regenerate firmware and Renode wiring automatically.'),
+    createLogEntry(`${DEFAULT_BOARD.name} workbench ready. Pick a board, add peripherals, and the app will regenerate firmware and Renode wiring automatically.`),
   ]);
   const [wiring, setWiring] = useState<DemoWiring>(DEFAULT_DEMO_WIRING);
   const [armedPeripheralId, setArmedPeripheralId] = useState<string | null>(null);
@@ -2287,19 +2323,26 @@ export default function App() {
   const projectDirtyMountedRef = useRef(false);
   const suppressNextProjectDirtyRef = useRef(false);
 
+  const selectedBoard = useMemo(() => getBoardSchema(selectedBoardId), [selectedBoardId]);
+  const selectedBoardPads = useMemo(() => getBoardPads(selectedBoard), [selectedBoard]);
   const connectedButtons = useMemo(() => getConnectedPeripherals(wiring, 'button'), [wiring]);
   const connectedLeds = useMemo(() => getConnectedPeripherals(wiring, 'led'), [wiring]);
   const workbenchDevices = useMemo(() => buildWorkbenchDevices(wiring), [wiring]);
-  const generatedCode = useMemo(() => generateDemoMainSource(wiring), [wiring]);
-  const boardRepl = useMemo(() => generateBoardRepl(wiring), [wiring]);
-  const peripheralManifest = useMemo(() => buildPeripheralManifest(wiring), [wiring]);
+  const generatedCode = useMemo(() => generateDemoMainSource(wiring, selectedBoard.runtime, selectedBoardPads), [selectedBoard.runtime, selectedBoardPads, wiring]);
+  const boardRepl = useMemo(() => generateBoardRepl(wiring, selectedBoard.runtime, selectedBoardPads), [selectedBoard.runtime, selectedBoardPads, wiring]);
+  const peripheralManifest = useMemo(
+    () => buildPeripheralManifest(wiring, selectedBoard.runtime, selectedBoardPads),
+    [selectedBoard.runtime, selectedBoardPads, wiring]
+  );
   const rescPreview = generateRescPreview({
     elfPath: buildResult?.elfPath ?? null,
     gdbPort: simulation.gdbPort,
     bridgePort: simulation.bridgePort,
+    machineName: selectedBoard.machineName,
   });
   const projectDisplayName = projectFilePath?.split(/[\\/]/).pop() ?? projectTitle ?? 'Untitled project';
-  const selectedExample = useMemo(() => getExampleProject(selectedExampleId), [selectedExampleId]);
+  const boardExamples = useMemo(() => getExamplesForBoard(selectedBoard.id), [selectedBoard.id]);
+  const selectedExample = useMemo(() => getExampleProject(selectedExampleId, selectedBoard.id), [selectedBoard.id, selectedExampleId]);
 
   const appendLog = useCallback((message: string, level: RuntimeLog['level'] = 'info') => {
     setLogs((current) => [...current, createLogEntry(message, level)]);
@@ -2323,6 +2366,34 @@ export default function App() {
       lastMessage: message,
     });
   }, []);
+
+  const switchBoard = useCallback(
+    (boardId: string) => {
+      if (simulation.running) {
+        appendLog('Stop the simulation before switching boards.', 'warn');
+        return;
+      }
+
+      const nextBoard = getBoardSchema(boardId);
+      if (nextBoard.id === selectedBoard.id) {
+        return;
+      }
+
+      setSelectedBoardId(nextBoard.id);
+      setWiring((current) => reconcileWiringForBoard(current, nextBoard));
+      setShowFullPinout(false);
+      setBuildResult(null);
+      setCodeDirty(true);
+      setArmedPeripheralId(null);
+      setButtonStates({});
+      setLedStates({});
+      setProjectTitle(null);
+      setProjectDirty(true);
+      resetDebugState('Board changed. Debugger idle.');
+      appendLog(`Board switched to ${nextBoard.name}. Incompatible wires were disconnected and generated files now target ${nextBoard.family.toUpperCase()}.`);
+    },
+    [appendLog, resetDebugState, selectedBoard.id, simulation.running]
+  );
 
   const setRunningVisualState = useCallback((running: boolean) => {
     setSimulation((current) => ({
@@ -2349,6 +2420,12 @@ export default function App() {
   }, [codeMode, generatedCode]);
 
   useEffect(() => {
+    if (boardExamples.length > 0 && !boardExamples.some((example) => example.id === selectedExampleId)) {
+      setSelectedExampleId(boardExamples[0].id);
+    }
+  }, [boardExamples, selectedExampleId]);
+
+  useEffect(() => {
     if (!projectDirtyMountedRef.current) {
       projectDirtyMountedRef.current = true;
       return;
@@ -2360,7 +2437,7 @@ export default function App() {
     }
 
     setProjectDirty(true);
-  }, [code, codeMode, peripheralPositions, showFullPinout, wiring]);
+  }, [code, codeMode, peripheralPositions, selectedBoardId, showFullPinout, wiring]);
 
   useEffect(() => {
     setPeripheralPositions((current) => {
@@ -2519,20 +2596,27 @@ export default function App() {
 
   const buildProjectDocument = useCallback(
     (): ProjectDocument => createProjectDocument({
+      board: selectedBoard,
       wiring,
       showFullPinout,
       peripheralPositions,
       codeMode,
       mainSource: codeMode === 'generated' ? generatedCode : code,
     }),
-    [code, codeMode, generatedCode, peripheralPositions, showFullPinout, wiring]
+    [code, codeMode, generatedCode, peripheralPositions, selectedBoard, showFullPinout, wiring]
   );
 
   const applyProjectDocumentToWorkspace = useCallback(
     (project: ProjectDocument, options: { filePath?: string | null; title?: string | null; dirty?: boolean; logMessage: string }) => {
-      const nextCode = project.code.mode === 'generated' ? generateDemoMainSource(project.wiring) : project.code.mainSource;
+      const projectBoard = getBoardSchema(project.board.id);
+      const projectBoardPads = getBoardPads(projectBoard);
+      const nextCode =
+        project.code.mode === 'generated'
+          ? generateDemoMainSource(project.wiring, projectBoard.runtime, projectBoardPads)
+          : project.code.mainSource;
 
       suppressNextProjectDirtyRef.current = true;
+      setSelectedBoardId(projectBoard.id);
       setWiring(project.wiring);
       setShowFullPinout(project.layout.showFullPinout);
       setPeripheralPositions(normalizePeripheralPositions(project.layout.peripheralPositions, project.wiring));
@@ -2547,7 +2631,7 @@ export default function App() {
       setProjectTitle(options.title ?? null);
       setProjectDirty(options.dirty ?? false);
       resetDebugState('Project loaded. Debugger idle.');
-      appendLog(options.logMessage);
+      appendLog(`${options.logMessage} Board: ${projectBoard.name}.`);
     },
     [appendLog, resetDebugState]
   );
@@ -2639,7 +2723,7 @@ export default function App() {
       return;
     }
 
-    const example = getExampleProject(selectedExampleId);
+    const example = getExampleProject(selectedExampleId, selectedBoard.id);
     if (!example) {
       appendLog('Choose a bundled example first.', 'warn');
       return;
@@ -2658,7 +2742,7 @@ export default function App() {
       logMessage: `Example opened: ${example.title}. Use Save As when you want to keep your own copy.`,
     });
     loadResult.warnings.forEach((warning) => appendLog(`[Example] ${warning}`, 'warn'));
-  }, [appendLog, applyProjectDocumentToWorkspace, selectedExampleId, simulation.running]);
+  }, [appendLog, applyProjectDocumentToWorkspace, selectedBoard.id, selectedExampleId, simulation.running]);
 
   const addPeripheral = useCallback(
     (templateKind: DemoPeripheralTemplateKind, preferredPosition?: PeripheralPosition) => {
@@ -2937,9 +3021,9 @@ export default function App() {
       workspaceDir: buildResult?.workspaceDir ?? undefined,
       mainSource: sourceToCompile,
       startupSource: DEFAULT_STARTUP_SOURCE,
-      linkerScript: DEFAULT_LINKER_SCRIPT,
-      linkerFileName: DEFAULT_LINKER_FILENAME,
-      gccArgs: [...DEFAULT_BOARD.compiler.gccArgs],
+      linkerScript: selectedBoard.runtime.compiler.linkerScript,
+      linkerFileName: selectedBoard.runtime.compiler.linkerFileName,
+      gccArgs: [...selectedBoard.runtime.compiler.gccArgs],
     });
 
     setIsCompiling(false);
@@ -2977,6 +3061,9 @@ export default function App() {
     generatedCode,
     peripheralManifest.length,
     refreshTooling,
+    selectedBoard.runtime.compiler.gccArgs,
+    selectedBoard.runtime.compiler.linkerFileName,
+    selectedBoard.runtime.compiler.linkerScript,
   ]);
 
   const startSimulation = useCallback(async () => {
@@ -3009,7 +3096,7 @@ export default function App() {
       peripheralManifest,
       bridgePort: simulation.bridgePort,
       gdbPort: simulation.gdbPort,
-      machineName: DEFAULT_BOARD.machineName,
+      machineName: selectedBoard.machineName,
     });
 
     if (!result.success) {
@@ -3027,7 +3114,7 @@ export default function App() {
     setButtonStates({});
     setLedStates({});
     appendLog('Renode launched. Use the peripheral rack buttons to drive the wired outputs.');
-  }, [appendLog, boardRepl, buildResult, codeDirty, compileFirmware, peripheralManifest, simulation.bridgePort, simulation.gdbPort]);
+  }, [appendLog, boardRepl, buildResult, codeDirty, compileFirmware, peripheralManifest, selectedBoard.machineName, simulation.bridgePort, simulation.gdbPort]);
 
   const stopSimulation = useCallback(async () => {
     if (!window.localWokwi) {
@@ -3095,7 +3182,7 @@ export default function App() {
                   <span className="text-xs uppercase tracking-[0.28em]">Local Board Lab</span>
                 </div>
                 <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white">
-                  Build with visible wires on a live {DEFAULT_BOARD.name} board
+                  Build with visible wires on a live {selectedBoard.name} board
                 </h1>
                 <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-300">
                   Add external peripherals, arm a device, click a free board pad, and the workbench will regenerate{' '}
@@ -3117,10 +3204,39 @@ export default function App() {
               <StatusPill active={simulation.bridgeConnected} label="Bridge online" />
               <StatusPill active={debugState.connected} label="Debugger attached" />
             </div>
+
+            <div className="mt-4 grid gap-3 rounded-[28px] border border-slate-800 bg-slate-950/70 p-4 lg:grid-cols-[minmax(0,1fr)_260px]">
+              <div>
+                <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Board Selector</div>
+                <div className="mt-2 text-sm text-slate-300">
+                  Select an STM32 board profile. The visible pins, generated firmware, Renode platform, compiler target, and examples all follow this choice.
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.18em]">
+                  <span className="rounded-full border border-cyan-500/25 bg-cyan-500/10 px-3 py-1 text-cyan-200">{selectedBoard.family}</span>
+                  <span className="rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-slate-300">{selectedBoard.status}</span>
+                  <span className="rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-slate-300">
+                    {selectedBoard.connectors.selectablePads.length} GPIO pads
+                  </span>
+                </div>
+              </div>
+              <select
+                value={selectedBoard.id}
+                onChange={(event) => switchBoard(event.target.value)}
+                disabled={simulation.running}
+                className="h-12 rounded-2xl border border-slate-700 bg-slate-950 px-3 text-sm font-semibold text-slate-100 outline-none transition hover:border-cyan-500 disabled:cursor-not-allowed disabled:text-slate-500"
+              >
+                {BOARD_SCHEMAS.map((board) => (
+                  <option key={board.id} value={board.id} className="text-slate-950">
+                    {board.name} {board.status === 'experimental' ? '(experimental)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div className="min-h-0 flex-1 overflow-auto px-6 py-6">
             <WiringWorkbench
+              board={selectedBoard}
               wiring={wiring}
               armedPeripheralId={armedPeripheralId}
               ledStates={ledStates}
@@ -3247,7 +3363,7 @@ export default function App() {
                     </div>
                   </div>
                   <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-200">
-                    {EXAMPLE_PROJECTS.length} demos
+                    {boardExamples.length} demos
                   </span>
                 </div>
 
@@ -3258,7 +3374,7 @@ export default function App() {
                     disabled={projectBusy || simulation.running}
                     className="min-w-0 rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition hover:border-slate-500 disabled:cursor-not-allowed disabled:text-slate-500"
                   >
-                    {EXAMPLE_PROJECTS.map((example) => (
+                    {boardExamples.map((example) => (
                       <option key={example.id} value={example.id} className="text-slate-950">
                         {example.title}
                       </option>

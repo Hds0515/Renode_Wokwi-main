@@ -914,24 +914,32 @@ export function resolvePeripheral(peripheralId: string, wiring: DemoWiring): Dem
   return match;
 }
 
-export function resolveConnectedPeripheralPad(peripheral: DemoPeripheral): DemoBoardPad {
+export function resolveConnectedPeripheralPad(
+  peripheral: DemoPeripheral,
+  boardPads: readonly DemoBoardPad[] = DEMO_BOARD_PADS
+): DemoBoardPad {
   if (!peripheral.padId) {
     throw new Error(`Peripheral ${peripheral.id} is not connected to a board pad.`);
   }
-  return resolveSelectablePad(peripheral.padId);
+  return resolveSelectablePad(peripheral.padId, boardPads);
 }
 
 function resolvePeripheralPin(
   peripheral: DemoPeripheral,
-  runtime: DemoBoardRuntime = DEFAULT_BOARD_RUNTIME
+  runtime: DemoBoardRuntime = DEFAULT_BOARD_RUNTIME,
+  boardPads: readonly DemoBoardPad[] = DEMO_BOARD_PADS
 ): DemoBoardPin {
-  const pad = resolveConnectedPeripheralPad(peripheral);
+  const pad = resolveConnectedPeripheralPad(peripheral, boardPads);
   return resolveMcuPin(pad.mcuPinId!, runtime);
 }
 
-export function buildPeripheralManifest(wiring: DemoWiring): DemoPeripheralManifestEntry[] {
+export function buildPeripheralManifest(
+  wiring: DemoWiring,
+  runtime: DemoBoardRuntime = DEFAULT_BOARD_RUNTIME,
+  boardPads: readonly DemoBoardPad[] = DEMO_BOARD_PADS
+): DemoPeripheralManifestEntry[] {
   return getConnectedPeripherals(wiring).map((peripheral) => {
-    const pin = resolvePeripheralPin(peripheral);
+    const pin = resolvePeripheralPin(peripheral, runtime, boardPads);
     const templateKind = getPeripheralTemplateKind(peripheral);
     const manifestLabel =
       templateKind === 'rgb-led' && peripheral.endpointLabel ? `${peripheral.label} ${peripheral.endpointLabel}` : peripheral.label;
@@ -974,8 +982,11 @@ function resolveMcuPin(mcuPinId: string, runtime: DemoBoardRuntime = DEFAULT_BOA
   };
 }
 
-export function resolveBoardPad(padId: string): DemoBoardPad {
-  const match = DEMO_BOARD_PADS.find((pad) => pad.id === padId);
+export function resolveBoardPad(
+  padId: string,
+  boardPads: readonly DemoBoardPad[] = DEMO_BOARD_PADS
+): DemoBoardPad {
+  const match = boardPads.find((pad) => pad.id === padId);
   if (!match) {
     throw new Error(`Unknown board pad id: ${padId}`);
   }
@@ -983,8 +994,11 @@ export function resolveBoardPad(padId: string): DemoBoardPad {
   return match;
 }
 
-export function resolveSelectablePad(padId: string): DemoBoardPad {
-  const pad = resolveBoardPad(padId);
+export function resolveSelectablePad(
+  padId: string,
+  boardPads: readonly DemoBoardPad[] = DEMO_BOARD_PADS
+): DemoBoardPad {
+  const pad = resolveBoardPad(padId, boardPads);
   if (!pad.selectable || !pad.mcuPinId) {
     throw new Error(`Board pad ${padId} is not available for external GPIO wiring.`);
   }
@@ -996,8 +1010,11 @@ export function describePad(pad: DemoBoardPad): string {
   return `${pad.connectorTitle} pin ${pad.pinNumber} (${pad.pinLabel}${mcuPinSuffix})`;
 }
 
-export function describePeripheral(peripheral: DemoPeripheral): string {
-  const padSummary = peripheral.padId ? describePad(resolveSelectablePad(peripheral.padId)) : 'not connected';
+export function describePeripheral(
+  peripheral: DemoPeripheral,
+  boardPads: readonly DemoBoardPad[] = DEMO_BOARD_PADS
+): string {
+  const padSummary = peripheral.padId ? describePad(resolveSelectablePad(peripheral.padId, boardPads)) : 'not connected';
   const endpointSummary = peripheral.endpointLabel ? ` ${peripheral.endpointLabel}` : '';
   return `${peripheral.label}${endpointSummary} (${padSummary})`;
 }
@@ -1207,17 +1224,21 @@ export const DEFAULT_BOARD_RUNTIME: DemoBoardRuntime = {
 
 export const DEFAULT_MAIN_SOURCE = generateDemoMainSource(DEFAULT_DEMO_WIRING, DEFAULT_BOARD_RUNTIME);
 
-export function generateDemoMainSource(wiring: DemoWiring, runtime: DemoBoardRuntime = DEFAULT_BOARD_RUNTIME): string {
+export function generateDemoMainSource(
+  wiring: DemoWiring,
+  runtime: DemoBoardRuntime = DEFAULT_BOARD_RUNTIME,
+  boardPads: readonly DemoBoardPad[] = DEMO_BOARD_PADS
+): string {
   const connectedButtons = getConnectedPeripherals(wiring, 'button');
   const connectedLeds = getConnectedPeripherals(wiring, 'led');
-  const buttonPins = connectedButtons.map((button) => resolvePeripheralPin(button, runtime));
-  const ledPins = connectedLeds.map((led) => resolvePeripheralPin(led, runtime));
+  const buttonPins = connectedButtons.map((button) => resolvePeripheralPin(button, runtime, boardPads));
+  const ledPins = connectedLeds.map((led) => resolvePeripheralPin(led, runtime, boardPads));
   const portEnableExpression = buildPortEnableMaskExpression([...buttonPins, ...ledPins], runtime);
 
   const buttonConstants = connectedButtons
     .map((button, index) => {
       const pin = buttonPins[index];
-      const pad = resolveConnectedPeripheralPad(button);
+      const pad = resolveConnectedPeripheralPad(button, boardPads);
       return [
         `// ${button.label}: ${describePad(pad)}`,
         `#define BUTTON_${index}_GPIO_BASE ${formatHex(pin.baseAddress)}u`,
@@ -1229,7 +1250,7 @@ export function generateDemoMainSource(wiring: DemoWiring, runtime: DemoBoardRun
   const ledConstants = connectedLeds
     .map((led, index) => {
       const pin = ledPins[index];
-      const pad = resolveConnectedPeripheralPad(led);
+      const pad = resolveConnectedPeripheralPad(led, boardPads);
       const driver = resolveLedDriver(led, wiring);
       const driverSummary = driver ? driver.label : 'no assigned button';
       return [
@@ -1264,10 +1285,10 @@ export function generateDemoMainSource(wiring: DemoWiring, runtime: DemoBoardRun
     .join('\n');
 
   const wiringSummary = [
-    ...connectedButtons.map((button) => `// Input  ${button.label}: ${describePeripheral(button)}`),
+    ...connectedButtons.map((button) => `// Input  ${button.label}: ${describePeripheral(button, boardPads)}`),
     ...connectedLeds.map((led) => {
       const driver = resolveLedDriver(led, wiring);
-      return `// Output ${led.label}: ${describePeripheral(led)}${driver ? ` <= ${driver.label}` : ''}`;
+      return `// Output ${led.label}: ${describePeripheral(led, boardPads)}${driver ? ` <= ${driver.label}` : ''}`;
     }),
   ].join('\n');
 
@@ -1327,13 +1348,17 @@ ${ledWrites || '        // No LED states to update.'}
 `;
 }
 
-export function generateBoardRepl(wiring: DemoWiring, runtime: DemoBoardRuntime = DEFAULT_BOARD_RUNTIME): string {
+export function generateBoardRepl(
+  wiring: DemoWiring,
+  runtime: DemoBoardRuntime = DEFAULT_BOARD_RUNTIME,
+  boardPads: readonly DemoBoardPad[] = DEMO_BOARD_PADS
+): string {
   const connectedButtons = getConnectedPeripherals(wiring, 'button');
   const connectedLeds = getConnectedPeripherals(wiring, 'led');
 
   const buttonBlocks = connectedButtons.map((button) => {
-    const pin = resolvePeripheralPin(button);
-    const pad = resolveConnectedPeripheralPad(button);
+    const pin = resolvePeripheralPin(button, runtime, boardPads);
+    const pad = resolveConnectedPeripheralPad(button, boardPads);
     const renodeName = `externalButton__${sanitizeIdentifier(button.id)}`;
 
     return [
@@ -1346,8 +1371,8 @@ export function generateBoardRepl(wiring: DemoWiring, runtime: DemoBoardRuntime 
 
   const ledMappings = new Map<GpioPortLetter, string[]>();
   const ledBlocks = connectedLeds.map((led) => {
-    const pin = resolvePeripheralPin(led);
-    const pad = resolveConnectedPeripheralPad(led);
+    const pin = resolvePeripheralPin(led, runtime, boardPads);
+    const pad = resolveConnectedPeripheralPad(led, boardPads);
     const renodeName = `externalLed__${sanitizeIdentifier(led.id)}`;
     const currentMappings = ledMappings.get(pin.portLetter) ?? [];
     currentMappings.push(`    ${pin.number} -> ${renodeName}@0`);
@@ -1375,11 +1400,13 @@ export function generateRescPreview(options: {
   elfPath: string | null;
   gdbPort: number;
   bridgePort: number;
+  machineName?: string;
 }): string {
   const elfPath = options.elfPath ?? '${workspace}/build/firmware.elf';
+  const machineName = options.machineName ?? MACHINE_NAME;
 
   return [
-    `$name?="${MACHINE_NAME}"`,
+    `$name?="${machineName}"`,
     'mach create $name',
     '',
     'machine LoadPlatformDescription @${workspace}/board.repl',

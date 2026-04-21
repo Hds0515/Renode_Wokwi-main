@@ -5,7 +5,8 @@
 It keeps the visual workflow from the original prototype, but moves execution into a local Electron shell:
 
 - Wokwi-like wiring UX: common pads first, full pinout on demand
-- pin-level placement on a real `NUCLEO-H753ZI` connector layout
+- board selector for `NUCLEO-H753ZI`, experimental `STM32F4 Discovery`, and experimental `STM32F103 GPIO Lab`
+- pin-level placement on the selected board's connector layout
 - drag-in peripheral templates, wire-stub-to-pad gestures, and selectable wires on the main canvas
 - local project save/load as `.renode-wokwi.json`
 - bundled example projects that can be opened from the control panel
@@ -17,15 +18,17 @@ It keeps the visual workflow from the original prototype, but moves execution in
 
 ## Current scope
 
-The current MVP targets one Renode-backed demo board:
+The current MVP has one validated Renode-backed board plus experimental STM32F1/F4 board profiles:
 
-- `NUCLEO-H753ZI`
-- selectable external `Button` on free pads across `CN7`, `CN8`, `CN9`, `CN10`, `CN11`, and `CN12`
-- selectable external `LED`, `Buzzer`, and grouped `RGB LED` outputs on the same routed header pads
+- `NUCLEO-H753ZI` is the default validated board.
+- `STM32F4 Discovery` is available as an experimental STM32F4 GPIO profile.
+- `STM32F103 GPIO Lab` is available as an experimental STM32F1 GPIO profile.
+- selectable external `Button`, `LED`, `Buzzer`, and grouped `RGB LED` endpoints on the selected board's teaching-friendly pads
 - a default pin chooser that surfaces the most common teaching-friendly pads first
 - any already-connected pad remains visible even when the full pinout is collapsed
 - board top view with a more Wokwi-like workbench area, live hotspots, grouped multi-endpoint devices, and pad highlights
-- first board schema abstraction for active board metadata, visual frames, curated pins, and compiler settings
+- board schema abstraction for board metadata, visual frames, curated pins, compiler settings, linker scripts, GPIO register model, and Renode platform path
+- board-aware generated `main.c`, `board.repl`, `.resc`, compiler args, and bundled example projects
 - first project document schema for wiring, workbench layout, code mode, and template catalog metadata
 - local `arm-none-eabi-gcc` compilation with generated startup and linker files
 - local Renode launch through the bundled `renode/renode/renode.exe` when present
@@ -76,23 +79,24 @@ The helper launcher `scripts/run-local.ps1` will install dependencies automatica
 
 ## Demo flow
 
-1. Drag a `Button`, `LED`, `Buzzer`, or `RGB LED` template from the peripheral library into the workbench area below the board, or click the matching add button.
-2. Pull the device's cyan wire stub directly onto a hotspot on the board canvas, or use the pin chooser on the lower half of the UI.
-3. Click any existing wire to open the inline wire action popover. From there you can `Rewire`, `Delete`, or press `Delete` / `Backspace`.
-4. Drag the device card around the workbench until the layout feels right.
-5. For `Buzzer` and `RGB LED`, choose which button drives each output endpoint from the rack below the board.
-6. If you need a less common GPIO, click `Show Full Pinout`.
-7. The app regenerates `main.c`, `board.repl`, and the Renode launch preview from that wiring.
-8. Use `Save`, `Save As`, or `Load` in the control panel to persist the wiring and workbench layout.
-9. Or choose a bundled example in `Control -> Project -> Examples` and click `Open Example`.
-10. Click `Compile`, then `Start`.
-11. Press and hold the external button card in the board canvas and watch the output cards update in real time.
+1. Choose a board in `Board Selector`. Switching boards updates the visible pins, compiler target, Renode platform, generated code, and bundled examples.
+2. Drag a `Button`, `LED`, `Buzzer`, or `RGB LED` template from the peripheral library into the workbench area below the board, or click the matching add button.
+3. Pull the device's cyan wire stub directly onto a hotspot on the board canvas, or use the pin chooser on the lower half of the UI.
+4. Click any existing wire to open the inline wire action popover. From there you can `Rewire`, `Delete`, or press `Delete` / `Backspace`.
+5. Drag the device card around the workbench until the layout feels right.
+6. For `Buzzer` and `RGB LED`, choose which button drives each output endpoint from the rack below the board.
+7. If you need a less common GPIO, click `Show Full Pinout`.
+8. The app regenerates `main.c`, `board.repl`, and the Renode launch preview from that board and wiring.
+9. Use `Save`, `Save As`, or `Load` in the control panel to persist the board choice, wiring, and workbench layout.
+10. Or choose a bundled board-specific example in `Control -> Project -> Examples` and click `Open Example`.
+11. Click `Compile`, then `Start`.
+12. Press and hold the external button card in the board canvas and watch the output cards update in real time.
 
 ## Project files
 
 The desktop shell can save and load local `.renode-wokwi.json` files. A saved project currently stores:
 
-- board identity for the NUCLEO-H753ZI demo
+- board identity for the selected board profile
 - the external peripheral wiring graph
 - explicit `wiring.wires[]` entries for each GPIO connection, derived from the endpoint-to-pad assignment
 - Wokwi-like workbench card positions
@@ -104,13 +108,13 @@ The schema is intentionally small for now so future board templates and richer e
 
 ## Bundled Examples
 
-The `examples/` folder contains ready-to-load `.renode-wokwi.json` project files:
+The `examples/` folder contains ready-to-load NUCLEO project files:
 
 - `button-led.renode-wokwi.json`
 - `button-buzzer.renode-wokwi.json`
 - `multi-button-rgb.renode-wokwi.json`
 
-The same examples are also registered in `src/lib/examples.ts`, so the desktop app can open them directly without using a file picker.
+The desktop app also generates board-specific bundled examples from `src/lib/examples.ts`, so the example dropdown switches between NUCLEO, STM32F4, and STM32F1 projects with the board selector.
 
 ## Smoke test
 
@@ -151,9 +155,9 @@ npm run start
   - minimal client for Renode `ExternalControlServer`
   - GPIO state read/write for live peripherals
 - `src/lib/boards.ts`
-  - active board schema for board identity, connector groups, teaching-friendly pad selection, board canvas coordinates, and compiler defaults
+  - board schemas for identity, connector groups, teaching-friendly pad selection, board canvas coordinates, compiler defaults, linker scripts, and Renode runtime metadata
 - `src/App.tsx`
-  - NUCLEO-H753ZI board UI with common-pin-first wiring UX
+  - board selector plus common-pin-first wiring UX for the selected board
   - draggable peripherals, drag-in templates, grouped RGB devices, selectable wires, and wire-stub hotspots for more Wokwi-like placement
   - code editor
   - compile/run controls
@@ -162,9 +166,9 @@ npm run start
   - `.renode-wokwi.json` project document schema
   - project load normalization and forward-compatible warning collection
 - `src/lib/examples.ts`
-  - bundled project catalog used by the control-panel example opener
+  - board-specific bundled project catalog used by the control-panel example opener
 - `src/lib/firmware.ts`
-  - board pad map, workbench device grouping, and first external-peripheral template schema
+  - board-aware pad lookup, workbench device grouping, and first external-peripheral template schema
   - generated firmware template from selected board pads
   - startup/runtime files
   - `.repl` / `.resc` preview generation
@@ -175,6 +179,7 @@ npm run start
 - run action launches Renode as a child process
 - renderer no longer uses the old fake LED simulation loop
 - connector-pad selection regenerates both bare-metal firmware and Renode platform wiring
+- board selector switches visible pins, generated firmware, `.repl`, `.resc`, compiler args, linker script, and bundled examples
 - default pin selection follows the Wokwi idea of exposing the most useful pads first
 - external devices can be dragged in from the library and repositioned directly on the board canvas
 - each external device has a draggable wire stub that can be dropped on a board hotspot
@@ -190,7 +195,7 @@ npm run start
 ## What is still next
 
 - more exact board artwork polish and richer silkscreen detail
-- reusable board/device templates beyond the NUCLEO-H753ZI demo
+- validate the experimental STM32F1/F4 board profiles against more real Renode board files and hardware examples
 - explicit project schema migrations when v2 fields are introduced
 - UART terminal and waveform panels
 - richer device libraries
