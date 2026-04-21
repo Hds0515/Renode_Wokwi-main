@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('localWokwi', {
   startDebugging: (request) => ipcRenderer.invoke('local-wokwi:start-debugging', request),
   stopDebugging: () => ipcRenderer.invoke('local-wokwi:stop-debugging'),
   debugAction: (request) => ipcRenderer.invoke('local-wokwi:debug-action', request),
+  saveProject: (request) => ipcRenderer.invoke('local-wokwi:save-project', request),
+  loadProject: (request) => ipcRenderer.invoke('local-wokwi:load-project', request),
   onSimulationEvent: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('local-wokwi:event', listener);

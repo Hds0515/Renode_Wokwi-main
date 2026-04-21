@@ -83,6 +83,68 @@ type DebugActionRequest = {
   line?: number;
 };
 
+type LocalProjectDocument = {
+  app: 'renode-local-visualizer';
+  schemaVersion: 1;
+  savedAt: string;
+  board: {
+    id: string;
+    name: string;
+  };
+  templates?: {
+    catalogVersion: number;
+    kinds: string[];
+  };
+  wiring: {
+    peripherals: Array<{
+      id: string;
+      kind: 'button' | 'led';
+      label: string;
+      padId: string | null;
+      sourcePeripheralId: string | null;
+      templateKind?: 'button' | 'led' | 'buzzer' | 'rgb-led';
+      groupId?: string | null;
+      groupLabel?: string | null;
+      endpointId?: string | null;
+      endpointLabel?: string | null;
+      accentColor?: string | null;
+    }>;
+  };
+  layout: {
+    showFullPinout: boolean;
+    peripheralPositions: Record<string, { x: number; y: number }>;
+  };
+  code: {
+    mode: 'generated' | 'manual';
+    mainSource: string;
+  };
+};
+
+type SaveProjectRequest = {
+  filePath?: string;
+  saveAs?: boolean;
+  project: LocalProjectDocument;
+};
+
+type SaveProjectResult = {
+  success: boolean;
+  canceled?: boolean;
+  message: string;
+  filePath?: string;
+};
+
+type LoadProjectRequest = {
+  filePath?: string;
+};
+
+type LoadProjectResult = {
+  success: boolean;
+  canceled?: boolean;
+  message: string;
+  filePath?: string;
+  project?: unknown;
+};
+
 type RuntimeEvent =
   | {
       type: 'log';
@@ -142,6 +204,8 @@ declare global {
       startDebugging: (request: StartDebuggingRequest) => Promise<StartDebuggingResult>;
       stopDebugging: () => Promise<{ success: boolean; message: string }>;
       debugAction: (request: DebugActionRequest) => Promise<{ success: boolean; message?: string; token?: number }>;
+      saveProject: (request: SaveProjectRequest) => Promise<SaveProjectResult>;
+      loadProject: (request?: LoadProjectRequest) => Promise<LoadProjectResult>;
       onSimulationEvent: (callback: (event: RuntimeEvent) => void) => () => void;
     };
   }

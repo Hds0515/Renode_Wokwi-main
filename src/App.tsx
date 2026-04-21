@@ -5,6 +5,7 @@ import {
   Cpu,
   FileCode2,
   FileJson,
+  FolderOpen,
   Lightbulb,
   LoaderCircle,
   Play,
@@ -33,6 +34,7 @@ import {
   DEMO_LEFT_CONNECTORS,
   DEMO_LEFT_MORPHO_CONNECTOR,
   DEMO_MACHINE_NAME,
+  DEMO_PERIPHERAL_TEMPLATES,
   DEMO_RIGHT_CONNECTORS,
   DEMO_RIGHT_MORPHO_CONNECTOR,
   DEMO_SELECTABLE_PADS,
@@ -42,8 +44,11 @@ import {
   DemoPeripheral,
   DemoPeripheralKind,
   DemoPeripheralTemplateKind,
+  DemoWorkbenchDevice,
   DemoWiring,
   buildPeripheralManifest,
+  buildWorkbenchDevices,
+  countPeripheralTemplateInstances,
   createPeripheralTemplate,
   describePad,
   generateBoardRepl,
@@ -51,9 +56,17 @@ import {
   generateRescPreview,
   getConnectedPeripherals,
   getPeripheralsByKind,
+  getPeripheralTemplateDefinition,
   getPeripheralTemplateKind,
+  getWorkbenchDeviceId,
+  isDemoPeripheralTemplateKind,
   resolveSelectablePad,
 } from './lib/firmware';
+import {
+  ProjectDocument,
+  createProjectDocument,
+  normalizeLoadedProjectDocument,
+} from './lib/project';
 
 type ToolingStatus = {
   found: boolean;
@@ -110,13 +123,6 @@ type CodeMode = 'generated' | 'manual';
 type PeripheralPosition = {
   x: number;
   y: number;
-};
-
-type WorkbenchDevice = {
-  id: string;
-  label: string;
-  templateKind: DemoPeripheralTemplateKind;
-  members: DemoPeripheral[];
 };
 
 const ONBOARD_FEATURES = [
@@ -187,40 +193,7 @@ function getCanvasHeightForPeripheralCount(count: number) {
 }
 
 function parseLibraryTemplateKind(rawValue: string | null | undefined): DemoPeripheralTemplateKind | null {
-  return rawValue === 'button' || rawValue === 'led' || rawValue === 'buzzer' || rawValue === 'rgb-led' ? rawValue : null;
-}
-
-function getWorkbenchDeviceId(peripheral: DemoPeripheral) {
-  return peripheral.groupId ?? peripheral.id;
-}
-
-function buildWorkbenchDevices(wiring: DemoWiring): WorkbenchDevice[] {
-  const orderedDeviceIds: string[] = [];
-  const membersById = new Map<string, DemoPeripheral[]>();
-
-  wiring.peripherals.forEach((peripheral) => {
-    const deviceId = getWorkbenchDeviceId(peripheral);
-    if (!membersById.has(deviceId)) {
-      orderedDeviceIds.push(deviceId);
-      membersById.set(deviceId, []);
-    }
-    membersById.get(deviceId)!.push(peripheral);
-  });
-
-  return orderedDeviceIds.map((deviceId) => {
-    const members = membersById.get(deviceId)!;
-    const lead = members[0];
-    return {
-      id: deviceId,
-      label: lead.groupLabel ?? lead.label,
-      templateKind: getPeripheralTemplateKind(lead),
-      members,
-    };
-  });
-}
-
-function countTemplateInstances(wiring: DemoWiring, templateKind: DemoPeripheralTemplateKind) {
-  return buildWorkbenchDevices(wiring).filter((device) => device.templateKind === templateKind).length;
+  return isDemoPeripheralTemplateKind(rawValue) ? rawValue : null;
 }
 
 function getDeviceEndpointAnchor(position: PeripheralPosition, endpointIndex: number, endpointCount: number) {
@@ -236,10 +209,12 @@ function getDeviceEndpointAnchor(position: PeripheralPosition, endpointIndex: nu
 }
 
 function getTemplatePalette(templateKind: DemoPeripheralTemplateKind) {
+  const definition = getPeripheralTemplateDefinition(templateKind);
+
   if (templateKind === 'button') {
     return {
-      title: 'Button',
-      subtitle: 'Momentary digital input',
+      title: definition.title,
+      subtitle: definition.subtitle,
       accent: 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-100 hover:bg-fuchsia-500/20',
       ghost: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700',
       icon: ToggleLeft,
@@ -248,8 +223,8 @@ function getTemplatePalette(templateKind: DemoPeripheralTemplateKind) {
 
   if (templateKind === 'buzzer') {
     return {
-      title: 'Buzzer',
-      subtitle: 'Single-pin audible output',
+      title: definition.title,
+      subtitle: definition.subtitle,
       accent: 'border-teal-500/40 bg-teal-500/10 text-teal-100 hover:bg-teal-500/20',
       ghost: 'border-teal-200 bg-teal-50 text-teal-700',
       icon: Wrench,
@@ -258,8 +233,8 @@ function getTemplatePalette(templateKind: DemoPeripheralTemplateKind) {
 
   if (templateKind === 'rgb-led') {
     return {
-      title: 'RGB LED',
-      subtitle: 'Three output pins, one mixed glow',
+      title: definition.title,
+      subtitle: definition.subtitle,
       accent: 'border-cyan-500/40 bg-cyan-500/10 text-cyan-100 hover:bg-cyan-500/20',
       ghost: 'border-cyan-200 bg-cyan-50 text-cyan-700',
       icon: Cpu,
@@ -267,15 +242,15 @@ function getTemplatePalette(templateKind: DemoPeripheralTemplateKind) {
   }
 
   return {
-    title: 'LED',
-    subtitle: 'Visual digital output',
+    title: definition.title,
+    subtitle: definition.subtitle,
     accent: 'border-amber-500/40 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20',
     ghost: 'border-amber-200 bg-amber-50 text-amber-700',
     icon: Lightbulb,
   };
 }
 
-function getRgbDeviceGlow(device: WorkbenchDevice, ledStates: Record<string, boolean>) {
+function getRgbDeviceGlow(device: DemoWorkbenchDevice, ledStates: Record<string, boolean>) {
   const activeColors = device.members
     .filter((member) => Boolean(ledStates[member.id]))
     .map((member) => member.accentColor ?? '#ffffff');
@@ -682,6 +657,45 @@ function buildWirePath(start: { x: number; y: number }, end: { x: number; y: num
   return `M ${start.x} ${start.y} C ${start.x} ${start.y - controlOffset}, ${end.x} ${end.y + controlOffset}, ${end.x} ${end.y}`;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizeProjectPosition(value: unknown): PeripheralPosition | null {
+  if (!isRecord(value) || typeof value.x !== 'number' || typeof value.y !== 'number') {
+    return null;
+  }
+
+  return {
+    x: value.x,
+    y: value.y,
+  };
+}
+
+function buildDefaultPeripheralPositions(wiring: DemoWiring): Record<string, PeripheralPosition> {
+  const devices = buildWorkbenchDevices(wiring);
+  const canvasHeight = getCanvasHeightForPeripheralCount(devices.length);
+  return Object.fromEntries(
+    devices.map((device, index) => [device.id, clampPeripheralPosition(createDefaultPeripheralPosition(index), canvasHeight)])
+  );
+}
+
+function normalizePeripheralPositions(value: unknown, wiring: DemoWiring): Record<string, PeripheralPosition> {
+  const defaults = buildDefaultPeripheralPositions(wiring);
+  if (!isRecord(value)) {
+    return defaults;
+  }
+
+  const devices = buildWorkbenchDevices(wiring);
+  const canvasHeight = getCanvasHeightForPeripheralCount(devices.length);
+  return Object.fromEntries(
+    devices.map((device) => {
+      const candidate = normalizeProjectPosition(value[device.id]);
+      return [device.id, candidate ? clampPeripheralPosition(candidate, canvasHeight) : defaults[device.id]];
+    })
+  );
+}
+
 function MiniConnectorStrip({
   connector,
   wiring,
@@ -984,7 +998,7 @@ function BoardTopView({
   visiblePads: DemoBoardPad[];
   armedPeripheralId: string | null;
   libraryDragKind: DemoPeripheralTemplateKind | null;
-  workbenchDevices: WorkbenchDevice[];
+  workbenchDevices: DemoWorkbenchDevice[];
   simulationRunning: boolean;
   onAssignPad: (pad: DemoBoardPad) => void;
   onAssignPadToPeripheral: (peripheralId: string, pad: DemoBoardPad) => void;
@@ -1788,33 +1802,16 @@ function WiringWorkbench({
           </div>
 
           <div className="mt-5 grid gap-3">
-            <PeripheralLibraryCard
-              kind="button"
-              disabled={workbenchDevices.length >= MAX_PERIPHERALS || simulationRunning}
-              onAdd={() => onAddPeripheral('button')}
-              onDragStateChange={setLibraryDragKind}
-            />
-
-            <PeripheralLibraryCard
-              kind="led"
-              disabled={workbenchDevices.length >= MAX_PERIPHERALS || simulationRunning}
-              onAdd={() => onAddPeripheral('led')}
-              onDragStateChange={setLibraryDragKind}
-            />
-
-            <PeripheralLibraryCard
-              kind="buzzer"
-              disabled={workbenchDevices.length >= MAX_PERIPHERALS || simulationRunning}
-              onAdd={() => onAddPeripheral('buzzer')}
-              onDragStateChange={setLibraryDragKind}
-            />
-
-            <PeripheralLibraryCard
-              kind="rgb-led"
-              disabled={workbenchDevices.length >= MAX_PERIPHERALS || simulationRunning}
-              onAdd={() => onAddPeripheral('rgb-led')}
-              onDragStateChange={setLibraryDragKind}
-            />
+            {DEMO_PERIPHERAL_TEMPLATES.map((template) => (
+              <div key={template.kind}>
+                <PeripheralLibraryCard
+                  kind={template.kind}
+                  disabled={workbenchDevices.length >= MAX_PERIPHERALS || simulationRunning}
+                  onAdd={() => onAddPeripheral(template.kind)}
+                  onDragStateChange={setLibraryDragKind}
+                />
+              </div>
+            ))}
           </div>
 
           <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-sm text-slate-300">
@@ -2157,6 +2154,9 @@ export default function App() {
   const [codeMode, setCodeMode] = useState<CodeMode>('generated');
   const [code, setCode] = useState(DEFAULT_MAIN_SOURCE);
   const [codeDirty, setCodeDirty] = useState(true);
+  const [projectFilePath, setProjectFilePath] = useState<string | null>(null);
+  const [projectDirty, setProjectDirty] = useState(false);
+  const [projectBusy, setProjectBusy] = useState(false);
   const [showFullPinout, setShowFullPinout] = useState(false);
   const [peripheralPositions, setPeripheralPositions] = useState<Record<string, PeripheralPosition>>(() =>
     Object.fromEntries(buildWorkbenchDevices(DEFAULT_DEMO_WIRING).map((device, index) => [device.id, createDefaultPeripheralPosition(index)]))
@@ -2171,6 +2171,8 @@ export default function App() {
   const codeEditorRef = useRef<any>(null);
   const monacoRef = useRef<any>(null);
   const decorationIdsRef = useRef<string[]>([]);
+  const projectDirtyMountedRef = useRef(false);
+  const suppressNextProjectDirtyRef = useRef(false);
 
   const connectedButtons = useMemo(() => getConnectedPeripherals(wiring, 'button'), [wiring]);
   const connectedLeds = useMemo(() => getConnectedPeripherals(wiring, 'led'), [wiring]);
@@ -2183,6 +2185,7 @@ export default function App() {
     gdbPort: simulation.gdbPort,
     bridgePort: simulation.bridgePort,
   });
+  const projectDisplayName = projectFilePath?.split(/[\\/]/).pop() ?? 'Untitled project';
 
   const appendLog = useCallback((message: string, level: RuntimeLog['level'] = 'info') => {
     setLogs((current) => [...current, createLogEntry(message, level)]);
@@ -2232,12 +2235,34 @@ export default function App() {
   }, [codeMode, generatedCode]);
 
   useEffect(() => {
+    if (!projectDirtyMountedRef.current) {
+      projectDirtyMountedRef.current = true;
+      return;
+    }
+
+    if (suppressNextProjectDirtyRef.current) {
+      suppressNextProjectDirtyRef.current = false;
+      return;
+    }
+
+    setProjectDirty(true);
+  }, [code, codeMode, peripheralPositions, showFullPinout, wiring]);
+
+  useEffect(() => {
     setPeripheralPositions((current) => {
       const nextEntries = workbenchDevices.map((device, index) => [
         device.id,
         current[device.id] ?? createDefaultPeripheralPosition(index),
       ] as const);
-      return Object.fromEntries(nextEntries);
+      const next = Object.fromEntries(nextEntries);
+      const currentKeys = Object.keys(current);
+      if (
+        currentKeys.length === nextEntries.length &&
+        nextEntries.every(([deviceId, position]) => current[deviceId]?.x === position.x && current[deviceId]?.y === position.y)
+      ) {
+        return current;
+      }
+      return next;
     });
   }, [workbenchDevices]);
 
@@ -2378,6 +2403,109 @@ export default function App() {
     });
   }, [appendLog, peripheralManifest.length, resetDebugState, setRunningVisualState, simulation.gdbPort]);
 
+  const buildProjectDocument = useCallback(
+    (): ProjectDocument => createProjectDocument({
+      wiring,
+      showFullPinout,
+      peripheralPositions,
+      codeMode,
+      mainSource: codeMode === 'generated' ? generatedCode : code,
+    }),
+    [code, codeMode, generatedCode, peripheralPositions, showFullPinout, wiring]
+  );
+
+  const saveProject = useCallback(
+    async (saveAs = false) => {
+      if (!window.localWokwi) {
+        appendLog('Electron preload API is unavailable. Project files can only be saved from the desktop shell.', 'warn');
+        return;
+      }
+
+      setProjectBusy(true);
+      let result;
+      try {
+        result = await window.localWokwi.saveProject({
+          filePath: saveAs ? undefined : projectFilePath ?? undefined,
+          saveAs,
+          project: buildProjectDocument(),
+        });
+      } catch (error) {
+        setProjectBusy(false);
+        appendLog(error instanceof Error ? error.message : 'Project save failed.', 'error');
+        return;
+      }
+      setProjectBusy(false);
+
+      if (result.success) {
+        setProjectFilePath(result.filePath ?? projectFilePath);
+        setProjectDirty(false);
+        appendLog(result.message || `Project saved${result.filePath ? `: ${result.filePath}` : ''}.`);
+        return;
+      }
+
+      if (!result.canceled) {
+        appendLog(result.message || 'Project save failed.', 'error');
+      }
+    },
+    [appendLog, buildProjectDocument, projectFilePath]
+  );
+
+  const loadProject = useCallback(async () => {
+    if (simulation.running) {
+      appendLog('Stop the simulation before loading another project file.', 'warn');
+      return;
+    }
+
+    if (!window.localWokwi) {
+      appendLog('Electron preload API is unavailable. Project files can only be loaded from the desktop shell.', 'warn');
+      return;
+    }
+
+    setProjectBusy(true);
+    let result;
+    try {
+      result = await window.localWokwi.loadProject();
+    } catch (error) {
+      setProjectBusy(false);
+      appendLog(error instanceof Error ? error.message : 'Project load failed.', 'error');
+      return;
+    }
+    setProjectBusy(false);
+
+    if (!result.success) {
+      if (!result.canceled) {
+        appendLog(result.message || 'Project load failed.', 'error');
+      }
+      return;
+    }
+
+    const loadResult = normalizeLoadedProjectDocument(result.project);
+    if (!loadResult) {
+      appendLog('The selected file is not a valid Renode Local Visualizer project.', 'error');
+      return;
+    }
+
+    const { project } = loadResult;
+    const nextCode = project.code.mode === 'generated' ? generateDemoMainSource(project.wiring) : project.code.mainSource;
+
+    suppressNextProjectDirtyRef.current = true;
+    setWiring(project.wiring);
+    setShowFullPinout(project.layout.showFullPinout);
+    setPeripheralPositions(normalizePeripheralPositions(project.layout.peripheralPositions, project.wiring));
+    setCodeMode(project.code.mode);
+    setCode(nextCode);
+    setCodeDirty(true);
+    setBuildResult(null);
+    setArmedPeripheralId(null);
+    setButtonStates({});
+    setLedStates({});
+    setProjectFilePath(result.filePath ?? null);
+    setProjectDirty(false);
+    resetDebugState('Project loaded. Debugger idle.');
+    appendLog(`Project loaded${result.filePath ? `: ${result.filePath}` : ''}.`);
+    loadResult.warnings.forEach((warning) => appendLog(`[Project] ${warning}`, 'warn'));
+  }, [appendLog, resetDebugState, simulation.running]);
+
   const addPeripheral = useCallback(
     (templateKind: DemoPeripheralTemplateKind, preferredPosition?: PeripheralPosition) => {
       if (simulation.running) {
@@ -2391,7 +2519,7 @@ export default function App() {
       }
 
       const firstButton = getPeripheralsByKind(wiring, 'button')[0] ?? null;
-      const ordinal = countTemplateInstances(wiring, templateKind) + 1;
+      const ordinal = countPeripheralTemplateInstances(wiring, templateKind) + 1;
       const nextPeripherals = createPeripheralTemplate(templateKind, ordinal).map((peripheral) =>
         peripheral.kind === 'led'
           ? {
@@ -2907,6 +3035,53 @@ export default function App() {
                     Start
                   </button>
                 )}
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-3xl border border-slate-800 bg-slate-900/70 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Project</div>
+                  <div className="mt-1 flex items-center gap-2 text-sm text-slate-300">
+                    <span className="truncate font-semibold text-white">{projectDisplayName}</span>
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] ${
+                      projectDirty ? 'bg-amber-500/15 text-amber-200' : 'bg-emerald-500/15 text-emerald-200'
+                    }`}>
+                      {projectDirty ? 'Unsaved' : 'Saved'}
+                    </span>
+                  </div>
+                  <div className="mt-1 max-w-[360px] truncate text-xs text-slate-500">
+                    {projectFilePath ?? 'Save this wiring as a .renode-wokwi.json project file.'}
+                  </div>
+                </div>
+                <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                  <button
+                    onClick={() => void saveProject(false)}
+                    disabled={projectBusy}
+                    className={`inline-flex items-center gap-2 rounded-2xl px-3 py-2 text-xs font-medium transition ${
+                      projectBusy ? 'cursor-not-allowed bg-slate-800 text-slate-500' : 'bg-slate-100 text-slate-950 hover:bg-white'
+                    }`}
+                  >
+                    {projectBusy ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />}
+                    Save
+                  </button>
+                  <button
+                    onClick={() => void saveProject(true)}
+                    disabled={projectBusy}
+                    className="inline-flex items-center gap-2 rounded-2xl border border-slate-700 bg-slate-950/60 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500 hover:text-white disabled:cursor-not-allowed disabled:text-slate-500"
+                  >
+                    <FileJson size={14} />
+                    Save As
+                  </button>
+                  <button
+                    onClick={() => void loadProject()}
+                    disabled={projectBusy || simulation.running}
+                    className="inline-flex items-center gap-2 rounded-2xl border border-slate-700 bg-slate-950/60 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500 hover:text-white disabled:cursor-not-allowed disabled:text-slate-500"
+                  >
+                    <FolderOpen size={14} />
+                    Load
+                  </button>
+                </div>
               </div>
             </div>
 

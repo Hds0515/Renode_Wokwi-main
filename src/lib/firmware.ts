@@ -60,6 +60,25 @@ export type DemoBoardPin = {
 export type DemoPeripheralKind = 'button' | 'led';
 export type DemoPeripheralTemplateKind = 'button' | 'led' | 'buzzer' | 'rgb-led';
 
+export type DemoPeripheralTemplateEndpointDefinition = {
+  id: string;
+  label: string;
+  kind: DemoPeripheralKind;
+  accentColor: string;
+  defaultSignalLabel: string;
+};
+
+export type DemoPeripheralTemplateDefinition = {
+  kind: DemoPeripheralTemplateKind;
+  title: string;
+  subtitle: string;
+  description: string;
+  labelPrefix: string;
+  accentColor: string;
+  category: 'input' | 'output' | 'grouped-output';
+  endpoints: DemoPeripheralTemplateEndpointDefinition[];
+};
+
 export type DemoPeripheral = {
   id: string;
   kind: DemoPeripheralKind;
@@ -87,6 +106,123 @@ export type DemoPeripheralManifestEntry = {
 export type DemoWiring = {
   peripherals: DemoPeripheral[];
 };
+
+export type DemoWorkbenchDevice = {
+  id: string;
+  label: string;
+  templateKind: DemoPeripheralTemplateKind;
+  members: DemoPeripheral[];
+};
+
+export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinition[] = [
+  {
+    kind: 'button',
+    title: 'Button',
+    subtitle: 'Momentary digital input',
+    description: 'A one-pin digital input that can be pressed from the visual workbench.',
+    labelPrefix: 'Button',
+    accentColor: '#d946ef',
+    category: 'input',
+    endpoints: [
+      {
+        id: 'signal',
+        label: 'SIG',
+        kind: 'button',
+        accentColor: '#d946ef',
+        defaultSignalLabel: 'SIG',
+      },
+    ],
+  },
+  {
+    kind: 'led',
+    title: 'LED',
+    subtitle: 'Visual digital output',
+    description: 'A one-pin digital output that mirrors Renode GPIO state in the board canvas.',
+    labelPrefix: 'LED',
+    accentColor: '#f59e0b',
+    category: 'output',
+    endpoints: [
+      {
+        id: 'signal',
+        label: 'SIG',
+        kind: 'led',
+        accentColor: '#f59e0b',
+        defaultSignalLabel: 'SIG',
+      },
+    ],
+  },
+  {
+    kind: 'buzzer',
+    title: 'Buzzer',
+    subtitle: 'Single-pin audible output',
+    description: 'A teaching-friendly output that currently reuses LED-style GPIO polling and visualizes active/idle state.',
+    labelPrefix: 'Buzzer',
+    accentColor: '#14b8a6',
+    category: 'output',
+    endpoints: [
+      {
+        id: 'signal',
+        label: 'OUT',
+        kind: 'led',
+        accentColor: '#14b8a6',
+        defaultSignalLabel: 'OUT',
+      },
+    ],
+  },
+  {
+    kind: 'rgb-led',
+    title: 'RGB LED',
+    subtitle: 'Three output pins, one mixed glow',
+    description: 'A grouped device with red, green, and blue endpoints that share one draggable workbench card.',
+    labelPrefix: 'RGB LED',
+    accentColor: '#06b6d4',
+    category: 'grouped-output',
+    endpoints: [
+      {
+        id: 'red',
+        label: 'RED',
+        kind: 'led',
+        accentColor: '#ef4444',
+        defaultSignalLabel: 'RED',
+      },
+      {
+        id: 'green',
+        label: 'GREEN',
+        kind: 'led',
+        accentColor: '#22c55e',
+        defaultSignalLabel: 'GREEN',
+      },
+      {
+        id: 'blue',
+        label: 'BLUE',
+        kind: 'led',
+        accentColor: '#3b82f6',
+        defaultSignalLabel: 'BLUE',
+      },
+    ],
+  },
+];
+
+const DEMO_PERIPHERAL_TEMPLATE_KIND_SET = new Set<DemoPeripheralTemplateKind>(
+  DEMO_PERIPHERAL_TEMPLATES.map((template) => template.kind)
+);
+const DEMO_PERIPHERAL_TEMPLATE_MAP = new Map<DemoPeripheralTemplateKind, DemoPeripheralTemplateDefinition>(
+  DEMO_PERIPHERAL_TEMPLATES.map((template) => [template.kind, template])
+);
+
+export function isDemoPeripheralTemplateKind(value: unknown): value is DemoPeripheralTemplateKind {
+  return typeof value === 'string' && DEMO_PERIPHERAL_TEMPLATE_KIND_SET.has(value as DemoPeripheralTemplateKind);
+}
+
+export function getPeripheralTemplateDefinition(
+  templateKind: DemoPeripheralTemplateKind
+): DemoPeripheralTemplateDefinition {
+  const definition = DEMO_PERIPHERAL_TEMPLATE_MAP.get(templateKind);
+  if (!definition) {
+    throw new Error(`Unknown peripheral template kind: ${templateKind}`);
+  }
+  return definition;
+}
 
 type SingleConnectorPinDefinition = {
   pinNumber: number;
@@ -606,89 +742,79 @@ function sanitizeIdentifier(value: string): string {
 }
 
 export function getPeripheralTemplateKind(peripheral: DemoPeripheral): DemoPeripheralTemplateKind {
-  if (peripheral.templateKind) {
+  if (isDemoPeripheralTemplateKind(peripheral.templateKind)) {
     return peripheral.templateKind;
   }
   return peripheral.kind === 'button' ? 'button' : 'led';
 }
 
-function buildSinglePeripheral(
-  templateKind: DemoPeripheralTemplateKind,
+export function getWorkbenchDeviceId(peripheral: DemoPeripheral): string {
+  return peripheral.groupId ?? peripheral.id;
+}
+
+export function buildWorkbenchDevices(wiring: DemoWiring): DemoWorkbenchDevice[] {
+  const orderedDeviceIds: string[] = [];
+  const membersById = new Map<string, DemoPeripheral[]>();
+
+  wiring.peripherals.forEach((peripheral) => {
+    const deviceId = getWorkbenchDeviceId(peripheral);
+    if (!membersById.has(deviceId)) {
+      orderedDeviceIds.push(deviceId);
+      membersById.set(deviceId, []);
+    }
+    membersById.get(deviceId)!.push(peripheral);
+  });
+
+  return orderedDeviceIds.map((deviceId) => {
+    const members = membersById.get(deviceId)!;
+    const lead = members[0];
+    return {
+      id: deviceId,
+      label: lead.groupLabel ?? lead.label,
+      templateKind: getPeripheralTemplateKind(lead),
+      members,
+    };
+  });
+}
+
+export function countPeripheralTemplateInstances(
+  wiring: DemoWiring,
+  templateKind: DemoPeripheralTemplateKind
+): number {
+  return buildWorkbenchDevices(wiring).filter((device) => device.templateKind === templateKind).length;
+}
+
+function buildTemplatePeripheral(
+  definition: DemoPeripheralTemplateDefinition,
+  endpoint: DemoPeripheralTemplateEndpointDefinition,
   ordinal: number,
   options?: Partial<DemoPeripheral>
 ): DemoPeripheral {
-  const kind = templateKind === 'button' ? 'button' : 'led';
-  const defaultLabel =
-    templateKind === 'button'
-      ? `Button ${ordinal}`
-      : templateKind === 'buzzer'
-        ? `Buzzer ${ordinal}`
-        : `LED ${ordinal}`;
-  const defaultEndpointLabel = templateKind === 'button' ? 'SIG' : templateKind === 'buzzer' ? 'OUT' : 'SIG';
-  const defaultAccent =
-    templateKind === 'button' ? '#d946ef' : templateKind === 'buzzer' ? '#14b8a6' : '#f59e0b';
+  const grouped = definition.endpoints.length > 1;
+  const groupId = grouped ? `${definition.kind}-${ordinal}` : null;
+  const groupLabel = grouped ? `${definition.labelPrefix} ${ordinal}` : null;
+  const label = grouped ? groupLabel! : `${definition.labelPrefix} ${ordinal}`;
+  const id = grouped ? `${groupId}-${endpoint.id}` : `${definition.kind}-${ordinal}`;
 
   return {
-    id: `${templateKind}-${ordinal}`,
-    kind,
-    label: options?.label ?? defaultLabel,
+    id,
+    kind: endpoint.kind,
+    label: options?.label ?? label,
     padId: null,
-    sourcePeripheralId: kind === 'led' ? options?.sourcePeripheralId ?? null : null,
-    templateKind,
-    groupId: null,
-    groupLabel: null,
-    endpointId: options?.endpointId ?? 'signal',
-    endpointLabel: options?.endpointLabel ?? defaultEndpointLabel,
-    accentColor: options?.accentColor ?? defaultAccent,
+    sourcePeripheralId: endpoint.kind === 'led' ? options?.sourcePeripheralId ?? null : null,
+    templateKind: definition.kind,
+    groupId,
+    groupLabel,
+    endpointId: options?.endpointId ?? endpoint.id,
+    endpointLabel: options?.endpointLabel ?? endpoint.defaultSignalLabel,
+    accentColor: options?.accentColor ?? endpoint.accentColor,
     ...options,
   };
 }
 
 export function createPeripheralTemplate(templateKind: DemoPeripheralTemplateKind, ordinal: number): DemoPeripheral[] {
-  if (templateKind === 'rgb-led') {
-    const groupId = `rgb-led-${ordinal}`;
-    const groupLabel = `RGB LED ${ordinal}`;
-    return [
-      {
-        ...buildSinglePeripheral('led', ordinal, {
-          id: `${groupId}-r`,
-          label: groupLabel,
-          templateKind: 'rgb-led',
-          groupId,
-          groupLabel,
-          endpointId: 'red',
-          endpointLabel: 'RED',
-          accentColor: '#ef4444',
-        }),
-      },
-      {
-        ...buildSinglePeripheral('led', ordinal, {
-          id: `${groupId}-g`,
-          label: groupLabel,
-          templateKind: 'rgb-led',
-          groupId,
-          groupLabel,
-          endpointId: 'green',
-          endpointLabel: 'GREEN',
-          accentColor: '#22c55e',
-        }),
-      },
-      {
-        ...buildSinglePeripheral('led', ordinal, {
-          id: `${groupId}-b`,
-          label: groupLabel,
-          templateKind: 'rgb-led',
-          groupId,
-          groupLabel,
-          endpointId: 'blue',
-          endpointLabel: 'BLUE',
-          accentColor: '#3b82f6',
-        }),
-      },
-    ];
-  }
-
-  return [buildSinglePeripheral(templateKind, ordinal)];
+  const definition = getPeripheralTemplateDefinition(templateKind);
+  return definition.endpoints.map((endpoint) => buildTemplatePeripheral(definition, endpoint, ordinal));
 }
 
 export function createPeripheral(kind: DemoPeripheralKind, ordinal: number): DemoPeripheral {

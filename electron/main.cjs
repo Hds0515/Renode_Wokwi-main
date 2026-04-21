@@ -1,4 +1,5 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain } = require('electron');
+const fs = require('fs');
 const path = require('path');
 const { createRuntimeService } = require('./runtime.cjs');
 
@@ -13,6 +14,23 @@ const runtime = createRuntimeService({
 });
 
 let runtimeWindow = null;
+
+const PROJECT_FILE_EXTENSION = '.renode-wokwi.json';
+const PROJECT_FILE_FILTERS = [
+  { name: 'Renode Wokwi Project (*.renode-wokwi.json)', extensions: ['json'] },
+  { name: 'JSON', extensions: ['json'] },
+];
+
+function ensureProjectFileExtension(filePath) {
+  if (filePath.endsWith(PROJECT_FILE_EXTENSION) || filePath.endsWith('.json')) {
+    return filePath;
+  }
+  return `${filePath}${PROJECT_FILE_EXTENSION}`;
+}
+
+function formatError(error) {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function createWindow() {
   const preload = path.join(__dirname, 'preload.cjs');
@@ -45,6 +63,88 @@ ipcMain.handle('local-wokwi:send-peripheral-event', async (_event, request) => r
 ipcMain.handle('local-wokwi:start-debugging', async (_event, request) => runtime.startDebugging(request));
 ipcMain.handle('local-wokwi:stop-debugging', async () => runtime.stopDebugging());
 ipcMain.handle('local-wokwi:debug-action', async (_event, request) => runtime.debugAction(request));
+ipcMain.handle('local-wokwi:save-project', async (_event, request = {}) => {
+  try {
+    if (!request.project || typeof request.project !== 'object') {
+      return {
+        success: false,
+        message: 'Project payload is missing.',
+      };
+    }
+
+    let filePath = request.filePath;
+    if (!filePath || request.saveAs) {
+      const result = await dialog.showSaveDialog(runtimeWindow, {
+        title: 'Save Renode Wokwi Project',
+        defaultPath: filePath || 'Renode_Wokwi_Project.renode-wokwi.json',
+        filters: PROJECT_FILE_FILTERS,
+      });
+
+      if (result.canceled || !result.filePath) {
+        return {
+          success: false,
+          canceled: true,
+          message: 'Save canceled.',
+        };
+      }
+
+      filePath = result.filePath;
+    }
+
+    const targetPath = ensureProjectFileExtension(filePath);
+    await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.promises.writeFile(targetPath, `${JSON.stringify(request.project, null, 2)}\n`, 'utf8');
+
+    return {
+      success: true,
+      message: `Project saved: ${targetPath}`,
+      filePath: targetPath,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: `Project save failed: ${formatError(error)}`,
+    };
+  }
+});
+
+ipcMain.handle('local-wokwi:load-project', async (_event, request = {}) => {
+  try {
+    let filePath = request.filePath;
+    if (!filePath) {
+      const result = await dialog.showOpenDialog(runtimeWindow, {
+        title: 'Load Renode Wokwi Project',
+        properties: ['openFile'],
+        filters: PROJECT_FILE_FILTERS,
+      });
+
+      if (result.canceled || result.filePaths.length === 0) {
+        return {
+          success: false,
+          canceled: true,
+          message: 'Load canceled.',
+        };
+      }
+
+      filePath = result.filePaths[0];
+    }
+
+    const content = await fs.promises.readFile(filePath, 'utf8');
+    const project = JSON.parse(content);
+
+    return {
+      success: true,
+      message: `Project loaded: ${filePath}`,
+      filePath,
+      project,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: `Project load failed: ${formatError(error)}`,
+    };
+  }
+});
 
 app.whenReady().then(createWindow);
 

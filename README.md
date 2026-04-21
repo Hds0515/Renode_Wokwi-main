@@ -7,6 +7,7 @@ It keeps the visual workflow from the original prototype, but moves execution in
 - Wokwi-like wiring UX: common pads first, full pinout on demand
 - pin-level placement on a real `NUCLEO-H753ZI` connector layout
 - drag-in peripheral templates and wire-stub-to-pad gestures on the main canvas
+- local project save/load as `.renode-wokwi.json`
 - auto-generated Renode `.repl` and `.resc`
 - local ARM GCC compilation
 - local Renode startup
@@ -23,6 +24,7 @@ The current MVP targets one Renode-backed demo board:
 - a default pin chooser that surfaces the most common teaching-friendly pads first
 - any already-connected pad remains visible even when the full pinout is collapsed
 - board top view with a more Wokwi-like workbench area, live hotspots, grouped multi-endpoint devices, and pad highlights
+- first project document schema for wiring, workbench layout, code mode, and template catalog metadata
 - local `arm-none-eabi-gcc` compilation with generated startup and linker files
 - local Renode launch through the bundled `renode/renode/renode.exe` when present
 - GDB server enabled on port `3333`
@@ -78,8 +80,22 @@ The helper launcher `scripts/run-local.ps1` will install dependencies automatica
 4. For `Buzzer` and `RGB LED`, choose which button drives each output endpoint from the rack below the board.
 5. If you need a less common GPIO, click `Show Full Pinout`.
 6. The app regenerates `main.c`, `board.repl`, and the Renode launch preview from that wiring.
-7. Click `Compile`, then `Start`.
-8. Press and hold the external button card in the board canvas and watch the output cards update in real time.
+7. Use `Save`, `Save As`, or `Load` in the control panel to persist the wiring and workbench layout.
+8. Click `Compile`, then `Start`.
+9. Press and hold the external button card in the board canvas and watch the output cards update in real time.
+
+## Project files
+
+The desktop shell can save and load local `.renode-wokwi.json` files. A saved project currently stores:
+
+- board identity for the NUCLEO-H753ZI demo
+- the external peripheral wiring graph
+- Wokwi-like workbench card positions
+- collapsed/full pinout view state
+- generated/manual source mode and manual `main.c` content
+- a template catalog version and the template kinds used by this build
+
+The schema is intentionally small for now so future board templates and richer external devices can evolve without changing the Renode runtime pipeline.
 
 ## Smoke test
 
@@ -115,6 +131,7 @@ npm run start
   - Renode external-control connection management
 - `electron/preload.cjs`
   - safe renderer API exposed as `window.localWokwi`
+  - local project save/load bridge
 - `electron/external-control.cjs`
   - minimal client for Renode `ExternalControlServer`
   - GPIO state read/write for live peripherals
@@ -124,7 +141,11 @@ npm run start
   - code editor
   - compile/run controls
   - live status/log rendering
+- `src/lib/project.ts`
+  - `.renode-wokwi.json` project document schema
+  - project load normalization and forward-compatible warning collection
 - `src/lib/firmware.ts`
+  - board pad map, workbench device grouping, and first external-peripheral template schema
   - generated firmware template from selected board pads
   - startup/runtime files
   - `.repl` / `.resc` preview generation
@@ -139,6 +160,8 @@ npm run start
 - external devices can be dragged in from the library and repositioned directly on the board canvas
 - each external device has a draggable wire stub that can be dropped on a board hotspot
 - grouped devices such as `RGB LED` share one workbench card while still exposing multiple GPIO endpoints
+- projects can be saved and loaded locally as `.renode-wokwi.json`
+- project loading now normalizes compatible files and reports schema/pad/reference warnings in the log
 - button presses go through Renode external control
 - LED state is polled back from Renode and updates the board view
 - `npm run smoke` validates compile -> simulate -> interact -> debug end to end
@@ -147,5 +170,6 @@ npm run start
 
 - more exact board artwork polish and richer silkscreen detail
 - reusable board/device templates beyond the NUCLEO-H753ZI demo
+- explicit project schema migrations when v2 fields are introduced
 - UART terminal and waveform panels
-- persistent projects and device libraries
+- richer device libraries
