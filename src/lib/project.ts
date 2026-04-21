@@ -1,7 +1,5 @@
 import {
-  DEMO_BOARD_NAME,
   DEMO_PERIPHERAL_TEMPLATES,
-  DEMO_SELECTABLE_PADS,
   DemoPeripheral,
   DemoPeripheralTemplateKind,
   DemoWiring,
@@ -9,6 +7,7 @@ import {
   generateDemoMainSource,
   isDemoPeripheralTemplateKind,
 } from './firmware';
+import { ACTIVE_BOARD_SCHEMA } from './boards';
 
 export type ProjectCodeMode = 'generated' | 'manual';
 
@@ -22,7 +21,7 @@ export type ProjectDocument = {
   schemaVersion: 1;
   savedAt: string;
   board: {
-    id: 'nucleo-h753zi';
+    id: string;
     name: string;
   };
   templates: {
@@ -49,7 +48,7 @@ export const PROJECT_APP_ID = 'renode-local-visualizer';
 export const PROJECT_SCHEMA_VERSION = 1;
 export const PROJECT_TEMPLATE_CATALOG_VERSION = 1;
 
-const SELECTABLE_PAD_IDS = new Set(DEMO_SELECTABLE_PADS.map((pad) => pad.id));
+const SELECTABLE_PAD_IDS = new Set(ACTIVE_BOARD_SCHEMA.connectors.selectablePads.map((pad) => pad.id));
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -181,8 +180,8 @@ export function createProjectDocument(options: {
     schemaVersion: PROJECT_SCHEMA_VERSION,
     savedAt: new Date().toISOString(),
     board: {
-      id: 'nucleo-h753zi',
-      name: DEMO_BOARD_NAME,
+      id: ACTIVE_BOARD_SCHEMA.id,
+      name: ACTIVE_BOARD_SCHEMA.name,
     },
     templates: {
       catalogVersion: PROJECT_TEMPLATE_CATALOG_VERSION,
@@ -229,8 +228,8 @@ export function normalizeLoadedProjectDocument(value: unknown): ProjectLoadResul
       schemaVersion: PROJECT_SCHEMA_VERSION,
       savedAt: typeof value.savedAt === 'string' ? value.savedAt : new Date().toISOString(),
       board: {
-        id: 'nucleo-h753zi',
-        name: DEMO_BOARD_NAME,
+        id: ACTIVE_BOARD_SCHEMA.id,
+        name: ACTIVE_BOARD_SCHEMA.name,
       },
       templates: {
         catalogVersion: PROJECT_TEMPLATE_CATALOG_VERSION,

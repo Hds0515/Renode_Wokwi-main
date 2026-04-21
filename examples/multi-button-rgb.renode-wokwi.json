@@ -1,0 +1,108 @@
+{
+  "app": "renode-local-visualizer",
+  "schemaVersion": 1,
+  "savedAt": "2026-04-21T00:00:00.000Z",
+  "board": {
+    "id": "nucleo-h753zi",
+    "name": "NUCLEO-H753ZI"
+  },
+  "templates": {
+    "catalogVersion": 1,
+    "kinds": ["button", "led", "buzzer", "rgb-led"]
+  },
+  "wiring": {
+    "peripherals": [
+      {
+        "id": "button-1",
+        "kind": "button",
+        "label": "Red Button",
+        "padId": "CN10-3",
+        "sourcePeripheralId": null,
+        "templateKind": "button",
+        "groupId": null,
+        "groupLabel": null,
+        "endpointId": "signal",
+        "endpointLabel": "SIG",
+        "accentColor": "#d946ef"
+      },
+      {
+        "id": "button-2",
+        "kind": "button",
+        "label": "Green Button",
+        "padId": "CN7-14",
+        "sourcePeripheralId": null,
+        "templateKind": "button",
+        "groupId": null,
+        "groupLabel": null,
+        "endpointId": "signal",
+        "endpointLabel": "SIG",
+        "accentColor": "#d946ef"
+      },
+      {
+        "id": "button-3",
+        "kind": "button",
+        "label": "Blue Button",
+        "padId": "CN7-9",
+        "sourcePeripheralId": null,
+        "templateKind": "button",
+        "groupId": null,
+        "groupLabel": null,
+        "endpointId": "signal",
+        "endpointLabel": "SIG",
+        "accentColor": "#d946ef"
+      },
+      {
+        "id": "rgb-led-1-red",
+        "kind": "led",
+        "label": "RGB LED 1",
+        "padId": "CN9-1",
+        "sourcePeripheralId": "button-1",
+        "templateKind": "rgb-led",
+        "groupId": "rgb-led-1",
+        "groupLabel": "RGB LED 1",
+        "endpointId": "red",
+        "endpointLabel": "RED",
+        "accentColor": "#ef4444"
+      },
+      {
+        "id": "rgb-led-1-green",
+        "kind": "led",
+        "label": "RGB LED 1",
+        "padId": "CN9-3",
+        "sourcePeripheralId": "button-2",
+        "templateKind": "rgb-led",
+        "groupId": "rgb-led-1",
+        "groupLabel": "RGB LED 1",
+        "endpointId": "green",
+        "endpointLabel": "GREEN",
+        "accentColor": "#22c55e"
+      },
+      {
+        "id": "rgb-led-1-blue",
+        "kind": "led",
+        "label": "RGB LED 1",
+        "padId": "CN9-5",
+        "sourcePeripheralId": "button-3",
+        "templateKind": "rgb-led",
+        "groupId": "rgb-led-1",
+        "groupLabel": "RGB LED 1",
+        "endpointId": "blue",
+        "endpointLabel": "BLUE",
+        "accentColor": "#3b82f6"
+      }
+    ]
+  },
+  "layout": {
+    "showFullPinout": false,
+    "peripheralPositions": {
+      "button-1": { "x": 96, "y": 364 },
+      "button-2": { "x": 252, "y": 364 },
+      "button-3": { "x": 408, "y": 364 },
+      "rgb-led-1": { "x": 564, "y": 364 }
+    }
+  },
+  "code": {
+    "mode": "generated",
+    "mainSource": ""
+  }
+}

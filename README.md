@@ -8,6 +8,7 @@ It keeps the visual workflow from the original prototype, but moves execution in
 - pin-level placement on a real `NUCLEO-H753ZI` connector layout
 - drag-in peripheral templates and wire-stub-to-pad gestures on the main canvas
 - local project save/load as `.renode-wokwi.json`
+- bundled example projects that can be opened from the control panel
 - auto-generated Renode `.repl` and `.resc`
 - local ARM GCC compilation
 - local Renode startup
@@ -24,6 +25,7 @@ The current MVP targets one Renode-backed demo board:
 - a default pin chooser that surfaces the most common teaching-friendly pads first
 - any already-connected pad remains visible even when the full pinout is collapsed
 - board top view with a more Wokwi-like workbench area, live hotspots, grouped multi-endpoint devices, and pad highlights
+- first board schema abstraction for active board metadata, visual frames, curated pins, and compiler settings
 - first project document schema for wiring, workbench layout, code mode, and template catalog metadata
 - local `arm-none-eabi-gcc` compilation with generated startup and linker files
 - local Renode launch through the bundled `renode/renode/renode.exe` when present
@@ -81,8 +83,9 @@ The helper launcher `scripts/run-local.ps1` will install dependencies automatica
 5. If you need a less common GPIO, click `Show Full Pinout`.
 6. The app regenerates `main.c`, `board.repl`, and the Renode launch preview from that wiring.
 7. Use `Save`, `Save As`, or `Load` in the control panel to persist the wiring and workbench layout.
-8. Click `Compile`, then `Start`.
-9. Press and hold the external button card in the board canvas and watch the output cards update in real time.
+8. Or choose a bundled example in `Control -> Project -> Examples` and click `Open Example`.
+9. Click `Compile`, then `Start`.
+10. Press and hold the external button card in the board canvas and watch the output cards update in real time.
 
 ## Project files
 
@@ -96,6 +99,16 @@ The desktop shell can save and load local `.renode-wokwi.json` files. A saved pr
 - a template catalog version and the template kinds used by this build
 
 The schema is intentionally small for now so future board templates and richer external devices can evolve without changing the Renode runtime pipeline.
+
+## Bundled Examples
+
+The `examples/` folder contains ready-to-load `.renode-wokwi.json` project files:
+
+- `button-led.renode-wokwi.json`
+- `button-buzzer.renode-wokwi.json`
+- `multi-button-rgb.renode-wokwi.json`
+
+The same examples are also registered in `src/lib/examples.ts`, so the desktop app can open them directly without using a file picker.
 
 ## Smoke test
 
@@ -135,6 +148,8 @@ npm run start
 - `electron/external-control.cjs`
   - minimal client for Renode `ExternalControlServer`
   - GPIO state read/write for live peripherals
+- `src/lib/boards.ts`
+  - active board schema for board identity, connector groups, teaching-friendly pad selection, board canvas coordinates, and compiler defaults
 - `src/App.tsx`
   - NUCLEO-H753ZI board UI with common-pin-first wiring UX
   - draggable peripherals, drag-in templates, grouped RGB devices, and wire-stub hotspots for more Wokwi-like placement
@@ -144,6 +159,8 @@ npm run start
 - `src/lib/project.ts`
   - `.renode-wokwi.json` project document schema
   - project load normalization and forward-compatible warning collection
+- `src/lib/examples.ts`
+  - bundled project catalog used by the control-panel example opener
 - `src/lib/firmware.ts`
   - board pad map, workbench device grouping, and first external-peripheral template schema
   - generated firmware template from selected board pads
@@ -162,6 +179,7 @@ npm run start
 - grouped devices such as `RGB LED` share one workbench card while still exposing multiple GPIO endpoints
 - projects can be saved and loaded locally as `.renode-wokwi.json`
 - project loading now normalizes compatible files and reports schema/pad/reference warnings in the log
+- bundled examples can be opened from the control panel and mirrored as project files under `examples/`
 - button presses go through Renode external control
 - LED state is polled back from Renode and updates the board view
 - `npm run smoke` validates compile -> simulate -> interact -> debug end to end

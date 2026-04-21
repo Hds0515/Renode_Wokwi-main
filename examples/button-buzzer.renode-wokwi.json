@@ -1,0 +1,54 @@
+{
+  "app": "renode-local-visualizer",
+  "schemaVersion": 1,
+  "savedAt": "2026-04-21T00:00:00.000Z",
+  "board": {
+    "id": "nucleo-h753zi",
+    "name": "NUCLEO-H753ZI"
+  },
+  "templates": {
+    "catalogVersion": 1,
+    "kinds": ["button", "led", "buzzer", "rgb-led"]
+  },
+  "wiring": {
+    "peripherals": [
+      {
+        "id": "button-1",
+        "kind": "button",
+        "label": "Button 1",
+        "padId": "CN10-3",
+        "sourcePeripheralId": null,
+        "templateKind": "button",
+        "groupId": null,
+        "groupLabel": null,
+        "endpointId": "signal",
+        "endpointLabel": "SIG",
+        "accentColor": "#d946ef"
+      },
+      {
+        "id": "buzzer-1",
+        "kind": "led",
+        "label": "Buzzer 1",
+        "padId": "CN10-7",
+        "sourcePeripheralId": "button-1",
+        "templateKind": "buzzer",
+        "groupId": null,
+        "groupLabel": null,
+        "endpointId": "signal",
+        "endpointLabel": "OUT",
+        "accentColor": "#14b8a6"
+      }
+    ]
+  },
+  "layout": {
+    "showFullPinout": false,
+    "peripheralPositions": {
+      "button-1": { "x": 96, "y": 364 },
+      "buzzer-1": { "x": 252, "y": 364 }
+    }
+  },
+  "code": {
+    "mode": "generated",
+    "mainSource": ""
+  }
+}

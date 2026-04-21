@@ -22,22 +22,12 @@ import Editor from '@monaco-editor/react';
 import {
   DEFAULT_BRIDGE_PORT,
   DEFAULT_DEMO_WIRING,
-  DEFAULT_GCC_ARGS,
   DEFAULT_GDB_PORT,
   DEFAULT_LINKER_FILENAME,
   DEFAULT_LINKER_SCRIPT,
   DEFAULT_MAIN_SOURCE,
   DEFAULT_STARTUP_SOURCE,
-  DEMO_BOARD_NAME,
-  DEMO_BOARD_TAGLINE,
-  DEMO_CONNECTORS,
-  DEMO_LEFT_CONNECTORS,
-  DEMO_LEFT_MORPHO_CONNECTOR,
-  DEMO_MACHINE_NAME,
   DEMO_PERIPHERAL_TEMPLATES,
-  DEMO_RIGHT_CONNECTORS,
-  DEMO_RIGHT_MORPHO_CONNECTOR,
-  DEMO_SELECTABLE_PADS,
   MAX_PERIPHERALS,
   DemoBoardConnector,
   DemoBoardPad,
@@ -62,11 +52,13 @@ import {
   isDemoPeripheralTemplateKind,
   resolveSelectablePad,
 } from './lib/firmware';
+import { ACTIVE_BOARD_SCHEMA } from './lib/boards';
 import {
   ProjectDocument,
   createProjectDocument,
   normalizeLoadedProjectDocument,
 } from './lib/project';
+import { EXAMPLE_PROJECTS, getExampleProject } from './lib/examples';
 
 type ToolingStatus = {
   found: boolean;
@@ -125,60 +117,30 @@ type PeripheralPosition = {
   y: number;
 };
 
+const ACTIVE_BOARD = ACTIVE_BOARD_SCHEMA;
+const ONBOARD_FEATURES = ACTIVE_BOARD.visual.onboardFeatures;
+/*
 const ONBOARD_FEATURES = [
   { label: 'LD1', detail: 'PB0 · Green LED' },
   { label: 'LD2', detail: 'PE1 · Yellow LED' },
   { label: 'LD3', detail: 'PB14 · Red LED' },
   { label: 'B1', detail: 'PC13 · User Button' },
 ];
+*/
 
-const BOARD_CONNECTOR_LAYOUT = {
-  CN11: { x: 0, y: 24, width: 108, layout: 'dual' as const },
-  CN7: { x: 128, y: 50, width: 90, layout: 'single' as const },
-  CN8: { x: 128, y: 228, width: 90, layout: 'single' as const },
-  CN9: { x: 542, y: 50, width: 90, layout: 'single' as const },
-  CN10: { x: 542, y: 228, width: 90, layout: 'single' as const },
-  CN12: { x: 652, y: 24, width: 108, layout: 'dual' as const },
-};
+const BOARD_CONNECTOR_LAYOUT = ACTIVE_BOARD.visual.connectorFrames;
 
-const WOKWI_CURATED_PAD_IDS = new Set<string>([
-  'CN7-8',
-  'CN7-9',
-  'CN7-10',
-  'CN7-11',
-  'CN7-12',
-  'CN7-13',
-  'CN7-14',
-  'CN7-15',
-  'CN8-1',
-  'CN8-2',
-  'CN8-3',
-  'CN8-4',
-  'CN8-5',
-  'CN8-6',
-  'CN8-7',
-  'CN8-8',
-  'CN8-9',
-  'CN8-10',
-  'CN9-1',
-  'CN9-3',
-  'CN9-5',
-  'CN9-7',
-  'CN10-3',
-  'CN10-5',
-  'CN10-7',
-  'CN10-9',
-]);
+const WOKWI_CURATED_PAD_IDS = new Set<string>(ACTIVE_BOARD.teaching.curatedPadIds);
 
-const BOARD_CANVAS_WIDTH = 760;
-const BOARD_CANVAS_BASE_HEIGHT = 510;
-const PERIPHERAL_CARD_WIDTH = 138;
-const PERIPHERAL_CARD_HEIGHT = 86;
-const PERIPHERALS_PER_ROW = 4;
-const PERIPHERAL_ROW_GAP = 18;
-const PAD_HOTSPOT_SIZE = 18;
-const PAD_HOVER_LABEL_WIDTH = 140;
-const BOARD_TOP_VIEW_HEIGHT = 312;
+const BOARD_CANVAS_WIDTH = ACTIVE_BOARD.visual.canvas.width;
+const BOARD_CANVAS_BASE_HEIGHT = ACTIVE_BOARD.visual.canvas.baseHeight;
+const PERIPHERAL_CARD_WIDTH = ACTIVE_BOARD.visual.canvas.peripheralCardWidth;
+const PERIPHERAL_CARD_HEIGHT = ACTIVE_BOARD.visual.canvas.peripheralCardHeight;
+const PERIPHERALS_PER_ROW = ACTIVE_BOARD.visual.canvas.peripheralsPerRow;
+const PERIPHERAL_ROW_GAP = ACTIVE_BOARD.visual.canvas.peripheralRowGap;
+const PAD_HOTSPOT_SIZE = ACTIVE_BOARD.visual.canvas.padHotspotSize;
+const PAD_HOVER_LABEL_WIDTH = ACTIVE_BOARD.visual.canvas.padHoverLabelWidth;
+const BOARD_TOP_VIEW_HEIGHT = ACTIVE_BOARD.visual.canvas.boardTopViewHeight;
 const LIBRARY_TEMPLATE_MIME = 'application/x-local-wokwi-peripheral';
 
 const createLogEntry = (message: string, level: RuntimeLog['level'] = 'info'): RuntimeLog => ({
@@ -411,10 +373,10 @@ function buildWorkbenchConnectorGroups(wiring: DemoWiring, showFullPinout: boole
     return pins.length > 0 ? { ...connector, pins } : null;
   };
 
-  const leftMorpho = filterConnector(DEMO_LEFT_MORPHO_CONNECTOR);
-  const left = DEMO_LEFT_CONNECTORS.map(filterConnector).filter((connector): connector is DemoBoardConnector => Boolean(connector));
-  const right = DEMO_RIGHT_CONNECTORS.map(filterConnector).filter((connector): connector is DemoBoardConnector => Boolean(connector));
-  const rightMorpho = filterConnector(DEMO_RIGHT_MORPHO_CONNECTOR);
+  const leftMorpho = filterConnector(ACTIVE_BOARD.connectors.leftMorpho);
+  const left = ACTIVE_BOARD.connectors.left.map(filterConnector).filter((connector): connector is DemoBoardConnector => Boolean(connector));
+  const right = ACTIVE_BOARD.connectors.right.map(filterConnector).filter((connector): connector is DemoBoardConnector => Boolean(connector));
+  const rightMorpho = filterConnector(ACTIVE_BOARD.connectors.rightMorpho);
 
   const connectors = [
     ...(leftMorpho ? [leftMorpho] : []),
@@ -600,7 +562,7 @@ function getPadAnchor(pad: DemoBoardPad): { x: number; y: number } {
   }
 
   if (frame.layout === 'single') {
-    const connector = DEMO_CONNECTORS.find((item) => item.id === pad.connectorId)!;
+    const connector = ACTIVE_BOARD.connectors.all.find((item) => item.id === pad.connectorId)!;
     const index = connector.pins.findIndex((item) => item.id === pad.id);
     const dotX = frame.x + 18;
     const dotY = frame.y + 28 + index * 12;
@@ -610,7 +572,7 @@ function getPadAnchor(pad: DemoBoardPad): { x: number; y: number } {
     };
   }
 
-  const connector = DEMO_CONNECTORS.find((item) => item.id === pad.connectorId)!;
+  const connector = ACTIVE_BOARD.connectors.all.find((item) => item.id === pad.connectorId)!;
   if (pad.column === 'odd') {
     const oddPins = connector.pins.filter((item) => item.column === 'odd');
     const index = oddPins.findIndex((item) => item.id === pad.id);
@@ -1372,14 +1334,14 @@ function BoardTopView({
             </div>
           ))}
 
-          {DEMO_LEFT_MORPHO_CONNECTOR ? (
+          {ACTIVE_BOARD.connectors.leftMorpho ? (
             <div className="absolute left-0 top-6 w-[108px]">
-              <MiniConnectorStrip connector={DEMO_LEFT_MORPHO_CONNECTOR} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
+              <MiniConnectorStrip connector={ACTIVE_BOARD.connectors.leftMorpho} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
             </div>
           ) : null}
 
           <div className="absolute left-[128px] top-[50px] w-[90px]">
-            {DEMO_LEFT_CONNECTORS.map((connector) => (
+            {ACTIVE_BOARD.connectors.left.map((connector) => (
               <div key={connector.id} className="mb-3 last:mb-0">
                 <MiniConnectorStrip connector={connector} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
               </div>
@@ -1387,16 +1349,16 @@ function BoardTopView({
           </div>
 
           <div className="absolute right-[128px] top-[50px] w-[90px]">
-            {DEMO_RIGHT_CONNECTORS.map((connector) => (
+            {ACTIVE_BOARD.connectors.right.map((connector) => (
               <div key={connector.id} className="mb-3 last:mb-0">
                 <MiniConnectorStrip connector={connector} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
               </div>
             ))}
           </div>
 
-          {DEMO_RIGHT_MORPHO_CONNECTOR ? (
+          {ACTIVE_BOARD.connectors.rightMorpho ? (
             <div className="absolute right-0 top-6 w-[108px]">
-              <MiniConnectorStrip connector={DEMO_RIGHT_MORPHO_CONNECTOR} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
+              <MiniConnectorStrip connector={ACTIVE_BOARD.connectors.rightMorpho} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
             </div>
           ) : null}
 
@@ -1777,7 +1739,7 @@ function WiringWorkbench({
   const workbenchDevices = useMemo(() => buildWorkbenchDevices(wiring), [wiring]);
   const [libraryDragKind, setLibraryDragKind] = useState<DemoPeripheralTemplateKind | null>(null);
   const workbenchConnectors = useMemo(() => buildWorkbenchConnectorGroups(wiring, showFullPinout), [wiring, showFullPinout]);
-  const hiddenPadCount = Math.max(0, DEMO_SELECTABLE_PADS.length - workbenchConnectors.visibleSelectablePads);
+  const hiddenPadCount = Math.max(0, ACTIVE_BOARD.connectors.selectablePads.length - workbenchConnectors.visibleSelectablePads);
   const deviceCounts = useMemo(
     () => ({
       button: workbenchDevices.filter((device) => device.templateKind === 'button').length,
@@ -1850,7 +1812,7 @@ function WiringWorkbench({
               <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2 col-span-2">
                 <div className="text-xs text-slate-500">Free Pads</div>
                 <div className="mt-1 text-lg font-semibold text-white">
-                  {DEMO_SELECTABLE_PADS.length - getConnectedPeripherals(wiring).length}
+                  {ACTIVE_BOARD.connectors.selectablePads.length - getConnectedPeripherals(wiring).length}
                 </div>
               </div>
             </div>
@@ -1862,19 +1824,19 @@ function WiringWorkbench({
             <div className="flex items-center justify-between gap-4">
               <div>
                 <div className="text-xs uppercase tracking-[0.26em] text-slate-500">Board</div>
-                <div className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">{DEMO_BOARD_NAME}</div>
-                <div className="mt-2 max-w-3xl text-sm text-slate-600">{DEMO_BOARD_TAGLINE}</div>
+                <div className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">{ACTIVE_BOARD.name}</div>
+                <div className="mt-2 max-w-3xl text-sm text-slate-600">{ACTIVE_BOARD.tagline}</div>
               </div>
               <div className="grid gap-2 text-right text-xs text-slate-500">
                 <div className="rounded-2xl border border-slate-300 bg-slate-100 px-3 py-1">Renode board file</div>
-                <div className="font-mono text-slate-700">platforms/boards/nucleo_h753zi.repl</div>
+                <div className="font-mono text-slate-700">{ACTIVE_BOARD.renodePlatformPath}</div>
               </div>
             </div>
 
             <div className="mt-5 grid gap-3 md:grid-cols-4">
               <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
                 <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Selectable pads</div>
-                <div className="mt-1 text-2xl font-semibold text-slate-900">{DEMO_SELECTABLE_PADS.length}</div>
+                <div className="mt-1 text-2xl font-semibold text-slate-900">{ACTIVE_BOARD.connectors.selectablePads.length}</div>
               </div>
               <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
                 <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Connected devices</div>
@@ -1882,7 +1844,7 @@ function WiringWorkbench({
               </div>
               <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
                 <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Compiler target</div>
-                <div className="mt-1 text-sm font-semibold text-slate-900">{DEFAULT_GCC_ARGS.join(' ')}</div>
+                <div className="mt-1 text-sm font-semibold text-slate-900">{ACTIVE_BOARD.compiler.gccArgs.join(' ')}</div>
               </div>
               <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
                 <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Board I/O</div>
@@ -2155,8 +2117,10 @@ export default function App() {
   const [code, setCode] = useState(DEFAULT_MAIN_SOURCE);
   const [codeDirty, setCodeDirty] = useState(true);
   const [projectFilePath, setProjectFilePath] = useState<string | null>(null);
+  const [projectTitle, setProjectTitle] = useState<string | null>(null);
   const [projectDirty, setProjectDirty] = useState(false);
   const [projectBusy, setProjectBusy] = useState(false);
+  const [selectedExampleId, setSelectedExampleId] = useState(EXAMPLE_PROJECTS[0]?.id ?? '');
   const [showFullPinout, setShowFullPinout] = useState(false);
   const [peripheralPositions, setPeripheralPositions] = useState<Record<string, PeripheralPosition>>(() =>
     Object.fromEntries(buildWorkbenchDevices(DEFAULT_DEMO_WIRING).map((device, index) => [device.id, createDefaultPeripheralPosition(index)]))
@@ -2185,7 +2149,8 @@ export default function App() {
     gdbPort: simulation.gdbPort,
     bridgePort: simulation.bridgePort,
   });
-  const projectDisplayName = projectFilePath?.split(/[\\/]/).pop() ?? 'Untitled project';
+  const projectDisplayName = projectFilePath?.split(/[\\/]/).pop() ?? projectTitle ?? 'Untitled project';
+  const selectedExample = useMemo(() => getExampleProject(selectedExampleId), [selectedExampleId]);
 
   const appendLog = useCallback((message: string, level: RuntimeLog['level'] = 'info') => {
     setLogs((current) => [...current, createLogEntry(message, level)]);
@@ -2414,6 +2379,30 @@ export default function App() {
     [code, codeMode, generatedCode, peripheralPositions, showFullPinout, wiring]
   );
 
+  const applyProjectDocumentToWorkspace = useCallback(
+    (project: ProjectDocument, options: { filePath?: string | null; title?: string | null; dirty?: boolean; logMessage: string }) => {
+      const nextCode = project.code.mode === 'generated' ? generateDemoMainSource(project.wiring) : project.code.mainSource;
+
+      suppressNextProjectDirtyRef.current = true;
+      setWiring(project.wiring);
+      setShowFullPinout(project.layout.showFullPinout);
+      setPeripheralPositions(normalizePeripheralPositions(project.layout.peripheralPositions, project.wiring));
+      setCodeMode(project.code.mode);
+      setCode(nextCode);
+      setCodeDirty(true);
+      setBuildResult(null);
+      setArmedPeripheralId(null);
+      setButtonStates({});
+      setLedStates({});
+      setProjectFilePath(options.filePath ?? null);
+      setProjectTitle(options.title ?? null);
+      setProjectDirty(options.dirty ?? false);
+      resetDebugState('Project loaded. Debugger idle.');
+      appendLog(options.logMessage);
+    },
+    [appendLog, resetDebugState]
+  );
+
   const saveProject = useCallback(
     async (saveAs = false) => {
       if (!window.localWokwi) {
@@ -2438,6 +2427,7 @@ export default function App() {
 
       if (result.success) {
         setProjectFilePath(result.filePath ?? projectFilePath);
+        setProjectTitle(null);
         setProjectDirty(false);
         appendLog(result.message || `Project saved${result.filePath ? `: ${result.filePath}` : ''}.`);
         return;
@@ -2485,26 +2475,41 @@ export default function App() {
       return;
     }
 
-    const { project } = loadResult;
-    const nextCode = project.code.mode === 'generated' ? generateDemoMainSource(project.wiring) : project.code.mainSource;
-
-    suppressNextProjectDirtyRef.current = true;
-    setWiring(project.wiring);
-    setShowFullPinout(project.layout.showFullPinout);
-    setPeripheralPositions(normalizePeripheralPositions(project.layout.peripheralPositions, project.wiring));
-    setCodeMode(project.code.mode);
-    setCode(nextCode);
-    setCodeDirty(true);
-    setBuildResult(null);
-    setArmedPeripheralId(null);
-    setButtonStates({});
-    setLedStates({});
-    setProjectFilePath(result.filePath ?? null);
-    setProjectDirty(false);
-    resetDebugState('Project loaded. Debugger idle.');
-    appendLog(`Project loaded${result.filePath ? `: ${result.filePath}` : ''}.`);
+    applyProjectDocumentToWorkspace(loadResult.project, {
+      filePath: result.filePath ?? null,
+      title: null,
+      dirty: false,
+      logMessage: `Project loaded${result.filePath ? `: ${result.filePath}` : ''}.`,
+    });
     loadResult.warnings.forEach((warning) => appendLog(`[Project] ${warning}`, 'warn'));
-  }, [appendLog, resetDebugState, simulation.running]);
+  }, [appendLog, applyProjectDocumentToWorkspace, simulation.running]);
+
+  const openExampleProject = useCallback(() => {
+    if (simulation.running) {
+      appendLog('Stop the simulation before opening a bundled example.', 'warn');
+      return;
+    }
+
+    const example = getExampleProject(selectedExampleId);
+    if (!example) {
+      appendLog('Choose a bundled example first.', 'warn');
+      return;
+    }
+
+    const loadResult = normalizeLoadedProjectDocument(example.project);
+    if (!loadResult) {
+      appendLog(`Bundled example "${example.title}" is not a valid project document.`, 'error');
+      return;
+    }
+
+    applyProjectDocumentToWorkspace(loadResult.project, {
+      filePath: null,
+      title: example.title,
+      dirty: true,
+      logMessage: `Example opened: ${example.title}. Use Save As when you want to keep your own copy.`,
+    });
+    loadResult.warnings.forEach((warning) => appendLog(`[Example] ${warning}`, 'warn'));
+  }, [appendLog, applyProjectDocumentToWorkspace, selectedExampleId, simulation.running]);
 
   const addPeripheral = useCallback(
     (templateKind: DemoPeripheralTemplateKind, preferredPosition?: PeripheralPosition) => {
@@ -2785,7 +2790,7 @@ export default function App() {
       startupSource: DEFAULT_STARTUP_SOURCE,
       linkerScript: DEFAULT_LINKER_SCRIPT,
       linkerFileName: DEFAULT_LINKER_FILENAME,
-      gccArgs: [...DEFAULT_GCC_ARGS],
+      gccArgs: [...ACTIVE_BOARD.compiler.gccArgs],
     });
 
     setIsCompiling(false);
@@ -2855,7 +2860,7 @@ export default function App() {
       peripheralManifest,
       bridgePort: simulation.bridgePort,
       gdbPort: simulation.gdbPort,
-      machineName: DEMO_MACHINE_NAME,
+      machineName: ACTIVE_BOARD.machineName,
     });
 
     if (!result.success) {
@@ -2941,7 +2946,7 @@ export default function App() {
                   <span className="text-xs uppercase tracking-[0.28em]">Local Board Lab</span>
                 </div>
                 <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white">
-                  Build with visible wires on a live NUCLEO-H753ZI board
+                  Build with visible wires on a live {ACTIVE_BOARD.name} board
                 </h1>
                 <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-300">
                   Add external peripherals, arm a device, click a free board pad, and the workbench will regenerate{' '}
@@ -3082,6 +3087,51 @@ export default function App() {
                     Load
                   </button>
                 </div>
+              </div>
+
+              <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Examples</div>
+                    <div className="mt-1 text-xs text-slate-400">
+                      Open a known-good project and run it immediately, then Save As to make your own copy.
+                    </div>
+                  </div>
+                  <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-200">
+                    {EXAMPLE_PROJECTS.length} demos
+                  </span>
+                </div>
+
+                <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                  <select
+                    value={selectedExampleId}
+                    onChange={(event) => setSelectedExampleId(event.target.value)}
+                    disabled={projectBusy || simulation.running}
+                    className="min-w-0 rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition hover:border-slate-500 disabled:cursor-not-allowed disabled:text-slate-500"
+                  >
+                    {EXAMPLE_PROJECTS.map((example) => (
+                      <option key={example.id} value={example.id} className="text-slate-950">
+                        {example.title}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => openExampleProject()}
+                    disabled={projectBusy || simulation.running || !selectedExample}
+                    className="inline-flex items-center justify-center gap-2 rounded-2xl bg-cyan-500 px-3 py-2 text-xs font-medium text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+                  >
+                    <FolderOpen size={14} />
+                    Open Example
+                  </button>
+                </div>
+
+                {selectedExample ? (
+                  <div className="mt-2 rounded-2xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs text-slate-400">
+                    <span className="font-semibold uppercase tracking-[0.16em] text-slate-300">{selectedExample.difficulty}</span>
+                    <span className="mx-2 text-slate-600">/</span>
+                    {selectedExample.summary}
+                  </div>
+                ) : null}
               </div>
             </div>
 
