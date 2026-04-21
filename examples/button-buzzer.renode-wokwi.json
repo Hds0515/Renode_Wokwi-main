@@ -38,6 +38,26 @@
         "endpointLabel": "OUT",
         "accentColor": "#14b8a6"
       }
+    ],
+    "wires": [
+      {
+        "id": "wire-button_1",
+        "kind": "gpio",
+        "peripheralId": "button-1",
+        "padId": "CN10-3",
+        "endpointId": "signal",
+        "label": "Button 1 SIG",
+        "color": "#d946ef"
+      },
+      {
+        "id": "wire-buzzer_1",
+        "kind": "gpio",
+        "peripheralId": "buzzer-1",
+        "padId": "CN10-7",
+        "endpointId": "signal",
+        "label": "Buzzer 1 OUT",
+        "color": "#14b8a6"
+      }
     ]
   },
   "layout": {

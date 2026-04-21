@@ -7,6 +7,29 @@ const GPIO_PORT_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K'
 const NUCLEO_REPL_PATH = 'platforms/boards/nucleo_h753zi.repl';
 const MACHINE_NAME = 'NUCLEO-H753ZI GPIO Workbench';
 
+export type DemoGpioRegisterModel = 'stm32-modern' | 'stm32f1';
+
+export type DemoBoardRuntime = {
+  id: string;
+  name: string;
+  machineName: string;
+  renodePlatformPath: string;
+  compiler: {
+    gccArgs: readonly string[];
+    linkerFileName: string;
+    linkerScript: string;
+  };
+  gpio: {
+    registerModel: DemoGpioRegisterModel;
+    portBaseAddress: number;
+    portStride: number;
+    portClockBitOffset: number;
+    rccBaseAddress: number;
+    rccEnableRegisterOffset: number;
+    rccEnableRegisterName: string;
+  };
+};
+
 const RESERVED_MCU_PINS = new Map<string, string>([
   ['PB0', 'Reserved by on-board LD1 (green LED).'],
   ['PE1', 'Reserved by on-board LD2 (yellow LED).'],
@@ -93,6 +116,16 @@ export type DemoPeripheral = {
   accentColor?: string | null;
 };
 
+export type DemoWire = {
+  id: string;
+  kind: 'gpio';
+  peripheralId: string;
+  padId: string;
+  endpointId: string | null;
+  label: string;
+  color: string | null;
+};
+
 export type DemoPeripheralManifestEntry = {
   id: string;
   kind: DemoPeripheralKind;
@@ -105,6 +138,7 @@ export type DemoPeripheralManifestEntry = {
 
 export type DemoWiring = {
   peripherals: DemoPeripheral[];
+  wires?: DemoWire[];
 };
 
 export type DemoWorkbenchDevice = {
@@ -784,6 +818,47 @@ export function countPeripheralTemplateInstances(
   return buildWorkbenchDevices(wiring).filter((device) => device.templateKind === templateKind).length;
 }
 
+export function buildPeripheralWireId(peripheralId: string): string {
+  return `wire-${sanitizeIdentifier(peripheralId)}`;
+}
+
+export function createWireFromPeripheral(peripheral: DemoPeripheral): DemoWire | null {
+  if (!peripheral.padId) {
+    return null;
+  }
+
+  return {
+    id: buildPeripheralWireId(peripheral.id),
+    kind: 'gpio',
+    peripheralId: peripheral.id,
+    padId: peripheral.padId,
+    endpointId: peripheral.endpointId ?? null,
+    label: peripheral.endpointLabel ? `${peripheral.label} ${peripheral.endpointLabel}` : peripheral.label,
+    color: peripheral.accentColor ?? null,
+  };
+}
+
+export function buildWiresFromPeripherals(wiring: DemoWiring): DemoWire[] {
+  return wiring.peripherals
+    .map((peripheral) => createWireFromPeripheral(peripheral))
+    .filter((wire): wire is DemoWire => Boolean(wire));
+}
+
+export function synchronizeWiringWires(wiring: DemoWiring): DemoWiring {
+  return {
+    ...wiring,
+    wires: buildWiresFromPeripherals(wiring),
+  };
+}
+
+export function getWiringWires(wiring: DemoWiring): DemoWire[] {
+  if (!wiring.wires || wiring.wires.length === 0) {
+    return buildWiresFromPeripherals(wiring);
+  }
+
+  return wiring.wires;
+}
+
 function buildTemplatePeripheral(
   definition: DemoPeripheralTemplateDefinition,
   endpoint: DemoPeripheralTemplateEndpointDefinition,
@@ -846,9 +921,12 @@ export function resolveConnectedPeripheralPad(peripheral: DemoPeripheral): DemoB
   return resolveSelectablePad(peripheral.padId);
 }
 
-function resolvePeripheralPin(peripheral: DemoPeripheral): DemoBoardPin {
+function resolvePeripheralPin(
+  peripheral: DemoPeripheral,
+  runtime: DemoBoardRuntime = DEFAULT_BOARD_RUNTIME
+): DemoBoardPin {
   const pad = resolveConnectedPeripheralPad(peripheral);
-  return resolveMcuPin(pad.mcuPinId!);
+  return resolveMcuPin(pad.mcuPinId!, runtime);
 }
 
 export function buildPeripheralManifest(wiring: DemoWiring): DemoPeripheralManifestEntry[] {
@@ -874,7 +952,7 @@ function formatHex(value: number): string {
   return `0x${value.toString(16).toUpperCase()}`;
 }
 
-function resolveMcuPin(mcuPinId: string): DemoBoardPin {
+function resolveMcuPin(mcuPinId: string, runtime: DemoBoardRuntime = DEFAULT_BOARD_RUNTIME): DemoBoardPin {
   const normalized = normalizeMcuPinId(mcuPinId);
   if (!normalized) {
     throw new Error(`Unsupported MCU GPIO pin id: ${mcuPinId}`);
@@ -892,7 +970,7 @@ function resolveMcuPin(mcuPinId: string): DemoBoardPin {
     portLetter,
     portIndex,
     number,
-    baseAddress: PORT_BASE_ADDRESS + portIndex * PORT_STRIDE,
+    baseAddress: runtime.gpio.portBaseAddress + portIndex * runtime.gpio.portStride,
   };
 }
 
@@ -924,13 +1002,13 @@ export function describePeripheral(peripheral: DemoPeripheral): string {
   return `${peripheral.label}${endpointSummary} (${padSummary})`;
 }
 
-function buildPortEnableMaskExpression(pins: DemoBoardPin[]): string {
+function buildPortEnableMaskExpression(pins: DemoBoardPin[], runtime: DemoBoardRuntime = DEFAULT_BOARD_RUNTIME): string {
   const uniquePortIndexes = [...new Set(pins.map((pin) => pin.portIndex))];
   if (uniquePortIndexes.length === 0) {
     return '0u';
   }
 
-  return uniquePortIndexes.map((portIndex) => `(1u << ${portIndex}u)`).join(' | ');
+  return uniquePortIndexes.map((portIndex) => `(1u << ${portIndex + runtime.gpio.portClockBitOffset}u)`).join(' | ');
 }
 
 function resolveLedDriver(led: DemoPeripheral, wiring: DemoWiring): DemoPeripheral | null {
@@ -945,7 +1023,46 @@ function resolveLedDriver(led: DemoPeripheral, wiring: DemoWiring): DemoPeripher
   return preferredButton ?? connectedButtons[0];
 }
 
-export const DEFAULT_MAIN_SOURCE = generateDemoMainSource(DEFAULT_DEMO_WIRING);
+function createGpioRuntimeSource(runtime: DemoBoardRuntime): string {
+  if (runtime.gpio.registerModel === 'stm32f1') {
+    return `#define GPIO_CRL(base)      (*(volatile uint32_t *)((base) + 0x00u))
+#define GPIO_CRH(base)      (*(volatile uint32_t *)((base) + 0x04u))
+#define GPIO_BRR(base)      (*(volatile uint32_t *)((base) + 0x14u))
+
+static volatile uint32_t *gpio_config_register(uint32_t base, uint32_t pin) {
+    return pin < 8u ? &GPIO_CRL(base) : &GPIO_CRH(base);
+}
+
+static void configure_output(uint32_t base, uint32_t pin) {
+    volatile uint32_t *config = gpio_config_register(base, pin);
+    const uint32_t shift = (pin & 7u) * 4u;
+    *config &= ~(0xFu << shift);
+    *config |=  (0x3u << shift);
+}
+
+static void configure_input(uint32_t base, uint32_t pin) {
+    volatile uint32_t *config = gpio_config_register(base, pin);
+    const uint32_t shift = (pin & 7u) * 4u;
+    *config &= ~(0xFu << shift);
+    *config |=  (0x8u << shift);
+    GPIO_BRR(base) = (1u << pin);
+}`;
+  }
+
+  return `#define GPIO_MODER(base)    (*(volatile uint32_t *)((base) + 0x00u))
+#define GPIO_PUPDR(base)    (*(volatile uint32_t *)((base) + 0x0Cu))
+
+static void configure_output(uint32_t base, uint32_t pin) {
+    GPIO_MODER(base) &= ~(3u << (pin * 2u));
+    GPIO_MODER(base) |=  (1u << (pin * 2u));
+}
+
+static void configure_input(uint32_t base, uint32_t pin) {
+    GPIO_MODER(base) &= ~(3u << (pin * 2u));
+    GPIO_PUPDR(base) &= ~(3u << (pin * 2u));
+    GPIO_PUPDR(base) |=  (2u << (pin * 2u));
+}`;
+}
 
 export const DEFAULT_STARTUP_SOURCE = `typedef unsigned int uint32_t;
 
@@ -1067,12 +1184,35 @@ SECTIONS
 }
 `;
 
-export function generateDemoMainSource(wiring: DemoWiring): string {
+export const DEFAULT_BOARD_RUNTIME: DemoBoardRuntime = {
+  id: 'nucleo-h753zi',
+  name: 'NUCLEO-H753ZI',
+  machineName: MACHINE_NAME,
+  renodePlatformPath: NUCLEO_REPL_PATH,
+  compiler: {
+    gccArgs: DEFAULT_GCC_ARGS,
+    linkerFileName: DEFAULT_LINKER_FILENAME,
+    linkerScript: DEFAULT_LINKER_SCRIPT,
+  },
+  gpio: {
+    registerModel: 'stm32-modern',
+    portBaseAddress: PORT_BASE_ADDRESS,
+    portStride: PORT_STRIDE,
+    portClockBitOffset: 0,
+    rccBaseAddress: 0x58024400,
+    rccEnableRegisterOffset: 0xe0,
+    rccEnableRegisterName: 'RCC_AHB4ENR',
+  },
+};
+
+export const DEFAULT_MAIN_SOURCE = generateDemoMainSource(DEFAULT_DEMO_WIRING, DEFAULT_BOARD_RUNTIME);
+
+export function generateDemoMainSource(wiring: DemoWiring, runtime: DemoBoardRuntime = DEFAULT_BOARD_RUNTIME): string {
   const connectedButtons = getConnectedPeripherals(wiring, 'button');
   const connectedLeds = getConnectedPeripherals(wiring, 'led');
-  const buttonPins = connectedButtons.map((button) => resolvePeripheralPin(button));
-  const ledPins = connectedLeds.map((led) => resolvePeripheralPin(led));
-  const portEnableExpression = buildPortEnableMaskExpression([...buttonPins, ...ledPins]);
+  const buttonPins = connectedButtons.map((button) => resolvePeripheralPin(button, runtime));
+  const ledPins = connectedLeds.map((led) => resolvePeripheralPin(led, runtime));
+  const portEnableExpression = buildPortEnableMaskExpression([...buttonPins, ...ledPins], runtime);
 
   const buttonConstants = connectedButtons
     .map((button, index) => {
@@ -1136,13 +1276,15 @@ export function generateDemoMainSource(wiring: DemoWiring): string {
   const noLedsNotice =
     connectedLeds.length === 0 ? '// No external LEDs are connected. The loop still samples buttons.\n' : '';
 
-  return `// Auto-generated demo firmware for the Renode NUCLEO-H753ZI workbench.
+  const gpioRuntime = createGpioRuntimeSource(runtime);
+
+  return `// Auto-generated demo firmware for the Renode ${runtime.name} workbench.
 ${wiringSummary || '// No peripherals are connected yet.'}
 
 typedef unsigned int uint32_t;
 
-#define RCC_BASE            0x58024400u
-#define RCC_AHB4ENR         (*(volatile uint32_t *)(RCC_BASE + 0xE0u))
+#define RCC_BASE            ${formatHex(runtime.gpio.rccBaseAddress)}u
+#define ${runtime.gpio.rccEnableRegisterName}         (*(volatile uint32_t *)(RCC_BASE + ${formatHex(runtime.gpio.rccEnableRegisterOffset)}u))
 
 #define PERIPHERAL_PORT_ENABLE_MASK ${portEnableExpression}
 
@@ -1150,25 +1292,14 @@ ${buttonConstants || '// No external button constants generated.'}
 
 ${ledConstants || '// No external LED constants generated.'}
 
-#define GPIO_MODER(base)    (*(volatile uint32_t *)((base) + 0x00u))
-#define GPIO_PUPDR(base)    (*(volatile uint32_t *)((base) + 0x0Cu))
 #define GPIO_IDR(base)      (*(volatile uint32_t *)((base) + 0x10u))
 #define GPIO_BSRR(base)     (*(volatile uint32_t *)((base) + 0x18u))
 
 static void enable_gpio_clocks(void) {
-    RCC_AHB4ENR |= PERIPHERAL_PORT_ENABLE_MASK;
+    ${runtime.gpio.rccEnableRegisterName} |= PERIPHERAL_PORT_ENABLE_MASK;
 }
 
-static void configure_output(uint32_t base, uint32_t pin) {
-    GPIO_MODER(base) &= ~(3u << (pin * 2u));
-    GPIO_MODER(base) |=  (1u << (pin * 2u));
-}
-
-static void configure_input(uint32_t base, uint32_t pin) {
-    GPIO_MODER(base) &= ~(3u << (pin * 2u));
-    GPIO_PUPDR(base) &= ~(3u << (pin * 2u));
-    GPIO_PUPDR(base) |=  (2u << (pin * 2u));
-}
+${gpioRuntime}
 
 static int read_input(uint32_t base, uint32_t pin) {
     return (GPIO_IDR(base) & (1u << pin)) != 0;
@@ -1196,7 +1327,7 @@ ${ledWrites || '        // No LED states to update.'}
 `;
 }
 
-export function generateBoardRepl(wiring: DemoWiring): string {
+export function generateBoardRepl(wiring: DemoWiring, runtime: DemoBoardRuntime = DEFAULT_BOARD_RUNTIME): string {
   const connectedButtons = getConnectedPeripherals(wiring, 'button');
   const connectedLeds = getConnectedPeripherals(wiring, 'led');
 
@@ -1230,7 +1361,7 @@ export function generateBoardRepl(wiring: DemoWiring): string {
   );
 
   return [
-    `using "${NUCLEO_REPL_PATH}"`,
+    `using "${runtime.renodePlatformPath}"`,
     '',
     '// External lab peripherals attached from the visual board editor.',
     '',

@@ -6,8 +6,9 @@ import {
   buildWorkbenchDevices,
   generateDemoMainSource,
   isDemoPeripheralTemplateKind,
+  synchronizeWiringWires,
 } from './firmware';
-import { ACTIVE_BOARD_SCHEMA } from './boards';
+import { ACTIVE_BOARD_SCHEMA, BoardSchema, getBoardSchema } from './boards';
 
 export type ProjectCodeMode = 'generated' | 'manual';
 
@@ -47,8 +48,6 @@ export type ProjectLoadResult = {
 export const PROJECT_APP_ID = 'renode-local-visualizer';
 export const PROJECT_SCHEMA_VERSION = 1;
 export const PROJECT_TEMPLATE_CATALOG_VERSION = 1;
-
-const SELECTABLE_PAD_IDS = new Set(ACTIVE_BOARD_SCHEMA.connectors.selectablePads.map((pad) => pad.id));
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -95,12 +94,36 @@ function normalizeProjectPositions(value: unknown, wiring: DemoWiring, warnings:
   return positions;
 }
 
-function normalizeProjectWiring(value: unknown, warnings: string[]): DemoWiring | null {
+function normalizeProjectWiring(value: unknown, board: BoardSchema, warnings: string[]): DemoWiring | null {
   if (!isRecord(value) || !Array.isArray(value.peripherals)) {
     return null;
   }
 
+  const selectablePadIds = new Set(board.connectors.selectablePads.map((pad) => pad.id));
   const usedIds = new Set<string>();
+  const wirePadIds = new Map<string, string>();
+  if (Array.isArray(value.wires)) {
+    value.wires.forEach((rawWire, index) => {
+      if (!isRecord(rawWire)) {
+        warnings.push(`Ignored invalid wire at index ${index}.`);
+        return;
+      }
+
+      const peripheralId = normalizeNullableString(rawWire.peripheralId);
+      const padId = normalizeNullableString(rawWire.padId);
+      if (!peripheralId || !padId) {
+        warnings.push(`Ignored incomplete wire at index ${index}.`);
+        return;
+      }
+      if (!selectablePadIds.has(padId)) {
+        warnings.push(`Ignored wire from "${peripheralId}" to unavailable pad "${padId}".`);
+        return;
+      }
+
+      wirePadIds.set(peripheralId, padId);
+    });
+  }
+
   const peripherals = value.peripherals
     .map((rawPeripheral, index): DemoPeripheral | null => {
       if (!isRecord(rawPeripheral)) {
@@ -122,10 +145,15 @@ function normalizeProjectWiring(value: unknown, warnings: string[]): DemoWiring 
       }
       usedIds.add(uniqueId);
 
-      const padId = normalizeNullableString(rawPeripheral.padId);
-      if (padId && !SELECTABLE_PAD_IDS.has(padId)) {
-        warnings.push(`Disconnected "${uniqueId}" from unavailable pad "${padId}".`);
+      const rawPadId = normalizeNullableString(rawPeripheral.padId);
+      const wirePadId = wirePadIds.get(id) ?? wirePadIds.get(uniqueId) ?? null;
+      if (rawPadId && !selectablePadIds.has(rawPadId)) {
+        warnings.push(`Disconnected "${uniqueId}" from unavailable pad "${rawPadId}".`);
       }
+      if (rawPadId && wirePadId && rawPadId !== wirePadId) {
+        warnings.push(`Wire for "${uniqueId}" overrides legacy pad "${rawPadId}" with "${wirePadId}".`);
+      }
+      const padId = wirePadId ?? rawPadId;
 
       const templateKind = isDemoPeripheralTemplateKind(rawPeripheral.templateKind)
         ? rawPeripheral.templateKind
@@ -137,7 +165,7 @@ function normalizeProjectWiring(value: unknown, warnings: string[]): DemoWiring 
         id: uniqueId,
         kind: rawKind,
         label: normalizeNullableString(rawPeripheral.label) ?? `${rawKind === 'button' ? 'Button' : 'LED'} ${index + 1}`,
-        padId: padId && SELECTABLE_PAD_IDS.has(padId) ? padId : null,
+        padId: padId && selectablePadIds.has(padId) ? padId : null,
         sourcePeripheralId: normalizeNullableString(rawPeripheral.sourcePeripheralId),
         templateKind,
         groupId: normalizeNullableString(rawPeripheral.groupId),
@@ -150,7 +178,7 @@ function normalizeProjectWiring(value: unknown, warnings: string[]): DemoWiring 
     .filter((peripheral): peripheral is DemoPeripheral => Boolean(peripheral));
 
   const peripheralIds = new Set(peripherals.map((peripheral) => peripheral.id));
-  return {
+  return synchronizeWiringWires({
     peripherals: peripherals.map((peripheral) => {
       const sourcePeripheralId =
         peripheral.kind === 'led' && peripheral.sourcePeripheralId && peripheralIds.has(peripheral.sourcePeripheralId)
@@ -165,29 +193,31 @@ function normalizeProjectWiring(value: unknown, warnings: string[]): DemoWiring 
         sourcePeripheralId,
       };
     }),
-  };
+  });
 }
 
 export function createProjectDocument(options: {
+  board?: BoardSchema;
   wiring: DemoWiring;
   showFullPinout: boolean;
   peripheralPositions: Record<string, ProjectPeripheralPosition>;
   codeMode: ProjectCodeMode;
   mainSource: string;
 }): ProjectDocument {
+  const board = options.board ?? ACTIVE_BOARD_SCHEMA;
   return {
     app: PROJECT_APP_ID,
     schemaVersion: PROJECT_SCHEMA_VERSION,
     savedAt: new Date().toISOString(),
     board: {
-      id: ACTIVE_BOARD_SCHEMA.id,
-      name: ACTIVE_BOARD_SCHEMA.name,
+      id: board.id,
+      name: board.name,
     },
     templates: {
       catalogVersion: PROJECT_TEMPLATE_CATALOG_VERSION,
       kinds: DEMO_PERIPHERAL_TEMPLATES.map((template) => template.kind),
     },
-    wiring: options.wiring,
+    wiring: synchronizeWiringWires(options.wiring),
     layout: {
       showFullPinout: options.showFullPinout,
       peripheralPositions: options.peripheralPositions,
@@ -212,7 +242,14 @@ export function normalizeLoadedProjectDocument(value: unknown): ProjectLoadResul
     warnings.push(`Project schema v${value.schemaVersion} is newer than this app supports; loading compatible fields only.`);
   }
 
-  const wiring = normalizeProjectWiring(value.wiring, warnings);
+  const rawBoard = isRecord(value.board) ? value.board : {};
+  const boardId = typeof rawBoard.id === 'string' ? rawBoard.id : ACTIVE_BOARD_SCHEMA.id;
+  const board = getBoardSchema(boardId);
+  if (board.id !== boardId) {
+    warnings.push(`Unknown board "${boardId}"; loaded with ${board.name} instead.`);
+  }
+
+  const wiring = normalizeProjectWiring(value.wiring, board, warnings);
   if (!wiring) {
     return null;
   }
@@ -220,7 +257,7 @@ export function normalizeLoadedProjectDocument(value: unknown): ProjectLoadResul
   const layout = isRecord(value.layout) ? value.layout : {};
   const code = isRecord(value.code) ? value.code : {};
   const codeMode: ProjectCodeMode = code.mode === 'manual' ? 'manual' : 'generated';
-  const mainSource = typeof code.mainSource === 'string' ? code.mainSource : generateDemoMainSource(wiring);
+  const mainSource = typeof code.mainSource === 'string' ? code.mainSource : generateDemoMainSource(wiring, board.runtime);
 
   return {
     project: {
@@ -228,8 +265,8 @@ export function normalizeLoadedProjectDocument(value: unknown): ProjectLoadResul
       schemaVersion: PROJECT_SCHEMA_VERSION,
       savedAt: typeof value.savedAt === 'string' ? value.savedAt : new Date().toISOString(),
       board: {
-        id: ACTIVE_BOARD_SCHEMA.id,
-        name: ACTIVE_BOARD_SCHEMA.name,
+        id: board.id,
+        name: board.name,
       },
       templates: {
         catalogVersion: PROJECT_TEMPLATE_CATALOG_VERSION,

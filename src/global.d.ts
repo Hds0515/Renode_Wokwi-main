@@ -109,6 +109,15 @@ type LocalProjectDocument = {
       endpointLabel?: string | null;
       accentColor?: string | null;
     }>;
+    wires?: Array<{
+      id: string;
+      kind: 'gpio';
+      peripheralId: string;
+      padId: string;
+      endpointId: string | null;
+      label: string;
+      color: string | null;
+    }>;
   };
   layout: {
     showFullPinout: boolean;

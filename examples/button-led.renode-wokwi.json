@@ -38,6 +38,26 @@
         "endpointLabel": "SIG",
         "accentColor": "#f59e0b"
       }
+    ],
+    "wires": [
+      {
+        "id": "wire-button_1",
+        "kind": "gpio",
+        "peripheralId": "button-1",
+        "padId": "CN10-3",
+        "endpointId": "signal",
+        "label": "Button 1 SIG",
+        "color": "#d946ef"
+      },
+      {
+        "id": "wire-led_1",
+        "kind": "gpio",
+        "peripheralId": "led-1",
+        "padId": "CN7-10",
+        "endpointId": "signal",
+        "label": "LED 1 SIG",
+        "color": "#f59e0b"
+      }
     ]
   },
   "layout": {

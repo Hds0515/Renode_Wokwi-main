@@ -6,7 +6,7 @@ It keeps the visual workflow from the original prototype, but moves execution in
 
 - Wokwi-like wiring UX: common pads first, full pinout on demand
 - pin-level placement on a real `NUCLEO-H753ZI` connector layout
-- drag-in peripheral templates and wire-stub-to-pad gestures on the main canvas
+- drag-in peripheral templates, wire-stub-to-pad gestures, and selectable wires on the main canvas
 - local project save/load as `.renode-wokwi.json`
 - bundled example projects that can be opened from the control panel
 - auto-generated Renode `.repl` and `.resc`
@@ -78,14 +78,15 @@ The helper launcher `scripts/run-local.ps1` will install dependencies automatica
 
 1. Drag a `Button`, `LED`, `Buzzer`, or `RGB LED` template from the peripheral library into the workbench area below the board, or click the matching add button.
 2. Pull the device's cyan wire stub directly onto a hotspot on the board canvas, or use the pin chooser on the lower half of the UI.
-3. Drag the device card around the workbench until the layout feels right.
-4. For `Buzzer` and `RGB LED`, choose which button drives each output endpoint from the rack below the board.
-5. If you need a less common GPIO, click `Show Full Pinout`.
-6. The app regenerates `main.c`, `board.repl`, and the Renode launch preview from that wiring.
-7. Use `Save`, `Save As`, or `Load` in the control panel to persist the wiring and workbench layout.
-8. Or choose a bundled example in `Control -> Project -> Examples` and click `Open Example`.
-9. Click `Compile`, then `Start`.
-10. Press and hold the external button card in the board canvas and watch the output cards update in real time.
+3. Click any existing wire to open the inline wire action popover. From there you can `Rewire`, `Delete`, or press `Delete` / `Backspace`.
+4. Drag the device card around the workbench until the layout feels right.
+5. For `Buzzer` and `RGB LED`, choose which button drives each output endpoint from the rack below the board.
+6. If you need a less common GPIO, click `Show Full Pinout`.
+7. The app regenerates `main.c`, `board.repl`, and the Renode launch preview from that wiring.
+8. Use `Save`, `Save As`, or `Load` in the control panel to persist the wiring and workbench layout.
+9. Or choose a bundled example in `Control -> Project -> Examples` and click `Open Example`.
+10. Click `Compile`, then `Start`.
+11. Press and hold the external button card in the board canvas and watch the output cards update in real time.
 
 ## Project files
 
@@ -93,6 +94,7 @@ The desktop shell can save and load local `.renode-wokwi.json` files. A saved pr
 
 - board identity for the NUCLEO-H753ZI demo
 - the external peripheral wiring graph
+- explicit `wiring.wires[]` entries for each GPIO connection, derived from the endpoint-to-pad assignment
 - Wokwi-like workbench card positions
 - collapsed/full pinout view state
 - generated/manual source mode and manual `main.c` content
@@ -152,7 +154,7 @@ npm run start
   - active board schema for board identity, connector groups, teaching-friendly pad selection, board canvas coordinates, and compiler defaults
 - `src/App.tsx`
   - NUCLEO-H753ZI board UI with common-pin-first wiring UX
-  - draggable peripherals, drag-in templates, grouped RGB devices, and wire-stub hotspots for more Wokwi-like placement
+  - draggable peripherals, drag-in templates, grouped RGB devices, selectable wires, and wire-stub hotspots for more Wokwi-like placement
   - code editor
   - compile/run controls
   - live status/log rendering
@@ -176,6 +178,7 @@ npm run start
 - default pin selection follows the Wokwi idea of exposing the most useful pads first
 - external devices can be dragged in from the library and repositioned directly on the board canvas
 - each external device has a draggable wire stub that can be dropped on a board hotspot
+- placed wires are selectable, can be deleted, and can be put back into rewire mode from the board canvas
 - grouped devices such as `RGB LED` share one workbench card while still exposing multiple GPIO endpoints
 - projects can be saved and loaded locally as `.renode-wokwi.json`
 - project loading now normalizes compatible files and reports schema/pad/reference warnings in the log

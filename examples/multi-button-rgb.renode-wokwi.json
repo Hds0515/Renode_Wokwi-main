@@ -90,6 +90,62 @@
         "endpointLabel": "BLUE",
         "accentColor": "#3b82f6"
       }
+    ],
+    "wires": [
+      {
+        "id": "wire-button_1",
+        "kind": "gpio",
+        "peripheralId": "button-1",
+        "padId": "CN10-3",
+        "endpointId": "signal",
+        "label": "Red Button SIG",
+        "color": "#d946ef"
+      },
+      {
+        "id": "wire-button_2",
+        "kind": "gpio",
+        "peripheralId": "button-2",
+        "padId": "CN7-14",
+        "endpointId": "signal",
+        "label": "Green Button SIG",
+        "color": "#d946ef"
+      },
+      {
+        "id": "wire-button_3",
+        "kind": "gpio",
+        "peripheralId": "button-3",
+        "padId": "CN7-9",
+        "endpointId": "signal",
+        "label": "Blue Button SIG",
+        "color": "#d946ef"
+      },
+      {
+        "id": "wire-rgb_led_1_red",
+        "kind": "gpio",
+        "peripheralId": "rgb-led-1-red",
+        "padId": "CN9-1",
+        "endpointId": "red",
+        "label": "RGB LED 1 RED",
+        "color": "#ef4444"
+      },
+      {
+        "id": "wire-rgb_led_1_green",
+        "kind": "gpio",
+        "peripheralId": "rgb-led-1-green",
+        "padId": "CN9-3",
+        "endpointId": "green",
+        "label": "RGB LED 1 GREEN",
+        "color": "#22c55e"
+      },
+      {
+        "id": "wire-rgb_led_1_blue",
+        "kind": "gpio",
+        "peripheralId": "rgb-led-1-blue",
+        "padId": "CN9-5",
+        "endpointId": "blue",
+        "label": "RGB LED 1 BLUE",
+        "color": "#3b82f6"
+      }
     ]
   },
   "layout": {
