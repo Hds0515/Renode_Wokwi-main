@@ -186,6 +186,66 @@ function reconcileWiringForBoard(wiring: DemoWiring, board: BoardSchema): DemoWi
   });
 }
 
+function getBoardArtwork(board: BoardSchema) {
+  if (board.family === 'stm32f4') {
+    return {
+      surface: '#c9d8db',
+      pcb: 'linear-gradient(180deg, #12343b 0%, #0f2f35 100%)',
+      pcbInset: 'linear-gradient(180deg, #16424a 0%, #0f343d 100%)',
+      pcbBorder: '#8fd3db',
+      text: '#dffcff',
+      mutedText: '#8fd3db',
+      railLeft: 'GPIOA / Arduino',
+      railRight: 'GPIOB-C / GPIOD',
+      sideLeft: 'DISCOVERY',
+      sideRight: 'EXP GPIO',
+      centerKicker: 'STM32F4',
+      centerTitle: 'DISCOVERY',
+      usbLabel: 'USB OTG / ST-LINK',
+      chipLabel: 'STM32F407VG',
+      badge: 'F4 DISCOVERY',
+    };
+  }
+
+  if (board.family === 'stm32f1') {
+    return {
+      surface: '#c5d7ef',
+      pcb: 'linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%)',
+      pcbInset: 'linear-gradient(180deg, #3b82f6 0%, #1e40af 100%)',
+      pcbBorder: '#93c5fd',
+      text: '#eff6ff',
+      mutedText: '#bfdbfe',
+      railLeft: 'GPIOA header',
+      railRight: 'GPIOB header',
+      sideLeft: 'BLUE PILL',
+      sideRight: 'F103C8',
+      centerKicker: 'STM32F103',
+      centerTitle: 'GPIO LAB',
+      usbLabel: 'Micro USB',
+      chipLabel: 'STM32F103C8',
+      badge: 'BLUE PILL STYLE',
+    };
+  }
+
+  return {
+    surface: '#d5d9e0',
+    pcb: 'linear-gradient(180deg, #fbfbf8 0%, #f4f3ee 100%)',
+    pcbInset: 'linear-gradient(180deg, #fbfbf8 0%, #f4f3ee 100%)',
+    pcbBorder: '#deded8',
+    text: '#465dd7',
+    mutedText: '#465dd7',
+    railLeft: 'Arduino / Zio',
+    railRight: 'Arduino / Zio',
+    sideLeft: 'Morpho',
+    sideRight: 'Morpho',
+    centerKicker: 'NUCLEO',
+    centerTitle: 'H753ZI',
+    usbLabel: 'ST-LINK USB',
+    chipLabel: 'STM32H753ZI',
+    badge: 'NUCLEO-144',
+  };
+}
+
 function getDeviceEndpointAnchor(position: PeripheralPosition, endpointIndex: number, endpointCount: number) {
   if (endpointCount <= 1) {
     return getPeripheralCardAnchor(position);
@@ -1031,6 +1091,7 @@ function BoardTopView({
   const [libraryPreviewPosition, setLibraryPreviewPosition] = useState<PeripheralPosition | null>(null);
   const [selectedWireId, setSelectedWireId] = useState<string | null>(null);
   const boardPads = useMemo(() => getBoardPads(board), [board]);
+  const artwork = useMemo(() => getBoardArtwork(board), [board]);
 
   const resolveCanvasPosition = useCallback(
     (deviceId: string, index: number) =>
@@ -1370,9 +1431,14 @@ function BoardTopView({
 
       <div
         className={`relative overflow-hidden rounded-[30px] border px-5 py-5 shadow-inner transition ${
-          libraryDragKind ? 'border-cyan-400 bg-[#dfe6f0]' : 'border-slate-300 bg-[#d5d9e0]'
+          libraryDragKind ? 'border-cyan-400' : 'border-slate-300'
         }`}
-        style={{ minHeight: canvasHeight + 32 }}
+        style={{
+          minHeight: canvasHeight + 32,
+          background: libraryDragKind
+            ? `linear-gradient(180deg, rgba(14,165,233,0.16), rgba(255,255,255,0.24)), ${artwork.surface}`
+            : artwork.surface,
+        }}
       >
         <div className="mb-4 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-slate-500">
           <div className="rounded-full border border-white/80 bg-white/80 px-3 py-1">1. Drag a device in</div>
@@ -1490,10 +1556,19 @@ function BoardTopView({
             </div>
           ) : null}
 
-          <div className="absolute inset-x-6 top-6 h-[290px] rounded-[36px] border border-[#deded8] bg-[#f8f7f2] shadow-[0_16px_28px_rgba(15,23,42,0.12)]" />
           <div
-            className="absolute inset-x-10 top-10 h-[282px] rounded-[34px] border border-[#ebeae4]"
-            style={{ backgroundImage: 'linear-gradient(180deg, #fbfbf8 0%, #f4f3ee 100%)' }}
+            className="absolute inset-x-6 top-6 h-[290px] rounded-[36px] border shadow-[0_16px_28px_rgba(15,23,42,0.12)]"
+            style={{
+              background: artwork.pcb,
+              borderColor: artwork.pcbBorder,
+            }}
+          />
+          <div
+            className="absolute inset-x-10 top-10 h-[282px] rounded-[34px] border"
+            style={{
+              background: artwork.pcbInset,
+              borderColor: artwork.pcbBorder,
+            }}
           />
           <div className="absolute left-12 right-12 top-[338px] bottom-5 rounded-[30px] border border-dashed border-slate-400/60 bg-white/40 shadow-inner" />
           <div className="pointer-events-none absolute left-16 top-[350px] rounded-full border border-slate-300 bg-white/80 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
@@ -1554,24 +1629,65 @@ function BoardTopView({
             </div>
           ))}
 
-          <div className="absolute left-1/2 top-0 h-14 w-24 -translate-x-1/2 rounded-b-[18px] border border-slate-400 bg-slate-300 shadow-md" />
+          <div
+            className="absolute left-1/2 top-0 h-14 w-24 -translate-x-1/2 rounded-b-[18px] border shadow-md"
+            style={{
+              background: board.family === 'stm32f1' ? '#1d4ed8' : '#cbd5e1',
+              borderColor: artwork.pcbBorder,
+            }}
+          />
+          <div
+            className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2 rounded-full border px-3 py-1 text-[9px] font-semibold uppercase tracking-[0.18em]"
+            style={{
+              borderColor: artwork.pcbBorder,
+              background: 'rgba(15,23,42,0.2)',
+              color: artwork.text,
+            }}
+          >
+            {artwork.usbLabel}
+          </div>
           <div className="absolute left-1/2 top-[72px] h-5 w-10 -translate-x-1/2 rounded-full border border-slate-500 bg-slate-900/80" />
 
           <div className="absolute left-1/2 top-[124px] flex -translate-x-1/2 items-start gap-5">
-            <div className="rounded-[26px] border border-slate-300 bg-white/90 px-4 py-3 shadow-sm">
-              <div className="text-[11px] uppercase tracking-[0.2em] text-[#465dd7]">USER</div>
+            <div
+              className="rounded-[26px] border px-4 py-3 shadow-sm"
+              style={{
+                borderColor: artwork.pcbBorder,
+                background: board.family === 'stm32h7' ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.2)',
+              }}
+            >
+              <div className="text-[11px] uppercase tracking-[0.2em]" style={{ color: artwork.text }}>
+                USER
+              </div>
               <div className={`mt-2 h-12 w-12 rounded-full border ${Object.values(buttonStates).some(Boolean) ? 'border-fuchsia-300 bg-fuchsia-400 shadow-[0_0_16px_rgba(217,70,239,0.45)]' : 'border-slate-300 bg-slate-100'}`} />
             </div>
-            <div className="rounded-[26px] border border-slate-300 bg-white/90 px-4 py-3 shadow-sm">
-              <div className="text-[11px] uppercase tracking-[0.2em] text-[#465dd7]">RESET</div>
+            <div
+              className="rounded-[26px] border px-4 py-3 shadow-sm"
+              style={{
+                borderColor: artwork.pcbBorder,
+                background: board.family === 'stm32h7' ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.2)',
+              }}
+            >
+              <div className="text-[11px] uppercase tracking-[0.2em]" style={{ color: artwork.text }}>
+                RESET
+              </div>
               <div className="mt-2 h-12 w-12 rounded-full border border-slate-400 bg-slate-900/85" />
             </div>
-            <div className="rounded-[26px] border border-slate-300 bg-white/90 px-4 py-3 shadow-sm">
-              <div className="text-[11px] uppercase tracking-[0.2em] text-[#465dd7]">LD1 / LD2 / LD3</div>
+            <div
+              className="rounded-[26px] border px-4 py-3 shadow-sm"
+              style={{
+                borderColor: artwork.pcbBorder,
+                background: board.family === 'stm32h7' ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.2)',
+              }}
+            >
+              <div className="text-[11px] uppercase tracking-[0.2em]" style={{ color: artwork.text }}>
+                {board.family === 'stm32f4' ? 'LD3 / LD4 / LD5 / LD6' : board.family === 'stm32f1' ? 'PC13 LED' : 'LD1 / LD2 / LD3'}
+              </div>
               <div className="mt-2 flex gap-2">
                 <div className="h-4 w-4 rounded-full border border-emerald-300 bg-emerald-300/70" />
                 <div className="h-4 w-4 rounded-full border border-amber-300 bg-amber-300/70" />
                 <div className="h-4 w-4 rounded-full border border-rose-300 bg-rose-300/70" />
+                {board.family === 'stm32f4' ? <div className="h-4 w-4 rounded-full border border-blue-300 bg-blue-300/70" /> : null}
               </div>
             </div>
           </div>
@@ -1580,28 +1696,54 @@ function BoardTopView({
             <div className="mx-auto flex h-28 w-28 items-center justify-center rounded-[30px] border border-slate-700 bg-slate-900 shadow-[0_18px_36px_rgba(15,23,42,0.25)]">
               <Cpu size={46} className="text-cyan-300" />
             </div>
-            <div className="rounded-[28px] border border-slate-300 bg-white/92 px-5 py-4 text-center shadow-sm">
-              <div className="text-xs uppercase tracking-[0.24em] text-slate-500">MCU</div>
-              <div className="mt-1 text-xl font-semibold tracking-tight text-slate-900">STM32H753ZIT6</div>
-              <div className="mt-1 text-sm text-slate-600">Renode-backed board, live GPIO wiring</div>
+            <div
+              className="rounded-[28px] border px-5 py-4 text-center shadow-sm"
+              style={{
+                borderColor: artwork.pcbBorder,
+                background: board.family === 'stm32h7' ? 'rgba(255,255,255,0.92)' : 'rgba(15,23,42,0.18)',
+              }}
+            >
+              <div className="text-xs uppercase tracking-[0.24em]" style={{ color: artwork.mutedText }}>
+                MCU
+              </div>
+              <div className="mt-1 text-xl font-semibold tracking-tight" style={{ color: board.family === 'stm32h7' ? '#0f172a' : artwork.text }}>
+                {artwork.chipLabel}
+              </div>
+              <div className="mt-1 text-sm" style={{ color: board.family === 'stm32h7' ? '#475569' : artwork.mutedText }}>
+                {board.runtime.renodePlatformPath}
+              </div>
             </div>
           </div>
 
-          <div className="pointer-events-none absolute left-[228px] top-[52px] text-[11px] font-semibold uppercase tracking-[0.28em] text-[#465dd7]">
-            Arduino / Zio
+          <div className="pointer-events-none absolute left-[228px] top-[52px] text-[11px] font-semibold uppercase tracking-[0.28em]" style={{ color: artwork.text }}>
+            {artwork.railLeft}
           </div>
-          <div className="pointer-events-none absolute right-[228px] top-[52px] text-[11px] font-semibold uppercase tracking-[0.28em] text-[#465dd7]">
-            Arduino / Zio
+          <div className="pointer-events-none absolute right-[228px] top-[52px] text-[11px] font-semibold uppercase tracking-[0.28em]" style={{ color: artwork.text }}>
+            {artwork.railRight}
           </div>
-          <div className="pointer-events-none absolute left-[18px] top-[156px] -rotate-90 text-[11px] font-semibold uppercase tracking-[0.28em] text-[#465dd7]">
-            Morpho
+          <div className="pointer-events-none absolute left-[18px] top-[156px] -rotate-90 text-[11px] font-semibold uppercase tracking-[0.28em]" style={{ color: artwork.text }}>
+            {artwork.sideLeft}
           </div>
-          <div className="pointer-events-none absolute right-[12px] top-[156px] rotate-90 text-[11px] font-semibold uppercase tracking-[0.28em] text-[#465dd7]">
-            Morpho
+          <div className="pointer-events-none absolute right-[12px] top-[156px] rotate-90 text-[11px] font-semibold uppercase tracking-[0.28em]" style={{ color: artwork.text }}>
+            {artwork.sideRight}
           </div>
           <div className="pointer-events-none absolute left-1/2 top-[258px] -translate-x-1/2 text-center">
-            <div className="text-sm font-semibold uppercase tracking-[0.32em] text-[#465dd7]">BOARD</div>
-            <div className="mt-1 max-w-[260px] text-[28px] leading-none tracking-tight text-[#2e3ab0]">{board.name}</div>
+            <div className="text-sm font-semibold uppercase tracking-[0.32em]" style={{ color: artwork.mutedText }}>
+              {artwork.centerKicker}
+            </div>
+            <div className="mt-1 max-w-[260px] text-[28px] leading-none tracking-tight" style={{ color: artwork.text }}>
+              {artwork.centerTitle}
+            </div>
+            <div
+              className="mx-auto mt-2 w-max rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]"
+              style={{
+                borderColor: artwork.pcbBorder,
+                color: artwork.text,
+                background: board.family === 'stm32h7' ? 'rgba(255,255,255,0.72)' : 'rgba(15,23,42,0.18)',
+              }}
+            >
+              {artwork.badge}
+            </div>
           </div>
 
           {visiblePads.map((pad) => {

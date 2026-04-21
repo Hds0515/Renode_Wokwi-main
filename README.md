@@ -18,11 +18,11 @@ It keeps the visual workflow from the original prototype, but moves execution in
 
 ## Current scope
 
-The current MVP has one validated Renode-backed board plus experimental STM32F1/F4 board profiles:
+The current MVP has one validated Renode-backed board plus two Renode-verified experimental STM32F1/F4 GPIO profiles:
 
 - `NUCLEO-H753ZI` is the default validated board.
-- `STM32F4 Discovery` is available as an experimental STM32F4 GPIO profile.
-- `STM32F103 GPIO Lab` is available as an experimental STM32F1 GPIO profile.
+- `STM32F4 Discovery` uses Renode's board-level `platforms/boards/stm32f4_discovery.repl`.
+- `STM32F103 GPIO Lab` uses Renode's `platforms/cpus/stm32f103.repl` CPU/platform profile with Blue Pill-style teaching pins because the bundled Renode tree does not provide a full Blue Pill board file.
 - selectable external `Button`, `LED`, `Buzzer`, and grouped `RGB LED` endpoints on the selected board's teaching-friendly pads
 - a default pin chooser that surfaces the most common teaching-friendly pads first
 - any already-connected pad remains visible even when the full pinout is collapsed
@@ -131,6 +131,14 @@ This verifies the local execution chain without requiring the Electron window:
 - toggle the button and observe the LED
 - attach GDB through MI mode
 
+To validate every board profile and prove that user-edited peripheral interfaces still simulate, run:
+
+```bash
+npm run validate:boards
+```
+
+This checks each board's referenced Renode platform file, remaps the bundled button-to-LED example onto alternate selectable pins, regenerates `main.c` and `board.repl`, compiles with that board's GCC/linker settings, launches Renode, presses the remapped button through ExternalControl, and waits for the remapped LED on/off events.
+
 ## Build
 
 ```bash
@@ -191,11 +199,12 @@ npm run start
 - button presses go through Renode external control
 - LED state is polled back from Renode and updates the board view
 - `npm run smoke` validates compile -> simulate -> interact -> debug end to end
+- `npm run validate:boards` validates NUCLEO-H753ZI, STM32F4 Discovery, and STM32F103 GPIO Lab platform paths plus remapped-button-to-LED simulation
 
 ## What is still next
 
 - more exact board artwork polish and richer silkscreen detail
-- validate the experimental STM32F1/F4 board profiles against more real Renode board files and hardware examples
+- expand the STM32F1/F4 board profiles from GPIO teaching coverage toward richer board-specific peripherals and hardware examples
 - explicit project schema migrations when v2 fields are introduced
 - UART terminal and waveform panels
 - richer device libraries

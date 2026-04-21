@@ -309,7 +309,7 @@ const STM32F103_CONNECTORS = [STM32F103_GPIOA_CONNECTOR, STM32F103_GPIOB_CONNECT
 export const STM32F4_DISCOVERY_BOARD_SCHEMA: BoardSchema = {
   id: 'stm32f4-discovery',
   name: 'STM32F4 Discovery',
-  tagline: 'Experimental STM32F4 GPIO workbench backed by Renode STM32F4 Discovery support.',
+  tagline: 'Experimental STM32F4 GPIO workbench using Renode platforms/boards/stm32f4_discovery.repl.',
   machineName: 'STM32F4 Discovery GPIO Workbench',
   renodePlatformPath: 'platforms/boards/stm32f4_discovery.repl',
   status: 'experimental',
@@ -351,6 +351,7 @@ export const STM32F4_DISCOVERY_BOARD_SCHEMA: BoardSchema = {
       F4D: { x: 542, y: 50, width: 90, layout: 'single' },
     },
     onboardFeatures: [
+      { label: 'Renode', detail: 'platforms/boards/stm32f4_discovery.repl' },
       { label: 'B1', detail: 'PA0 User Button' },
       { label: 'LD3', detail: 'PD13 Orange LED' },
       { label: 'LD4', detail: 'PD12 Green LED' },
@@ -367,7 +368,7 @@ export const STM32F4_DISCOVERY_BOARD_SCHEMA: BoardSchema = {
 export const STM32F103_GPIO_LAB_BOARD_SCHEMA: BoardSchema = {
   id: 'stm32f103-gpio-lab',
   name: 'STM32F103 GPIO Lab',
-  tagline: 'Experimental STM32F1 teaching board using Renode STM32F103 CPU platform and common Blue Pill-style pins.',
+  tagline: 'Experimental STM32F1 Blue Pill-style teaching board using Renode platforms/cpus/stm32f103.repl.',
   machineName: 'STM32F103 GPIO Workbench',
   renodePlatformPath: 'platforms/cpus/stm32f103.repl',
   status: 'experimental',
@@ -409,6 +410,7 @@ export const STM32F103_GPIO_LAB_BOARD_SCHEMA: BoardSchema = {
       F1B: { x: 542, y: 50, width: 90, layout: 'single' },
     },
     onboardFeatures: [
+      { label: 'Renode', detail: 'platforms/cpus/stm32f103.repl CPU profile' },
       { label: 'LED', detail: 'PC13 common Blue Pill LED' },
       { label: 'USART1', detail: 'PA9 TX / PA10 RX' },
       { label: 'I2C1', detail: 'PB6 SCL / PB7 SDA' },

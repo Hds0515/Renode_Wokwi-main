@@ -2,6 +2,9 @@ node_modules/
 build/
 dist/
 coverage/
+renode/
+renode-master/
+Key_RGB_LED.json
 .DS_Store
 *.log
 .env*

@@ -1044,6 +1044,8 @@ function createGpioRuntimeSource(runtime: DemoBoardRuntime): string {
   if (runtime.gpio.registerModel === 'stm32f1') {
     return `#define GPIO_CRL(base)      (*(volatile uint32_t *)((base) + 0x00u))
 #define GPIO_CRH(base)      (*(volatile uint32_t *)((base) + 0x04u))
+#define GPIO_IDR(base)      (*(volatile uint32_t *)((base) + 0x08u))
+#define GPIO_BSRR(base)     (*(volatile uint32_t *)((base) + 0x10u))
 #define GPIO_BRR(base)      (*(volatile uint32_t *)((base) + 0x14u))
 
 static volatile uint32_t *gpio_config_register(uint32_t base, uint32_t pin) {
@@ -1063,11 +1065,21 @@ static void configure_input(uint32_t base, uint32_t pin) {
     *config &= ~(0xFu << shift);
     *config |=  (0x8u << shift);
     GPIO_BRR(base) = (1u << pin);
+}
+
+static void write_output(uint32_t base, uint32_t pin, int on) {
+    if(on) {
+        GPIO_BSRR(base) = (1u << pin);
+    } else {
+        GPIO_BRR(base) = (1u << pin);
+    }
 }`;
   }
 
   return `#define GPIO_MODER(base)    (*(volatile uint32_t *)((base) + 0x00u))
 #define GPIO_PUPDR(base)    (*(volatile uint32_t *)((base) + 0x0Cu))
+#define GPIO_IDR(base)      (*(volatile uint32_t *)((base) + 0x10u))
+#define GPIO_BSRR(base)     (*(volatile uint32_t *)((base) + 0x18u))
 
 static void configure_output(uint32_t base, uint32_t pin) {
     GPIO_MODER(base) &= ~(3u << (pin * 2u));
@@ -1078,6 +1090,14 @@ static void configure_input(uint32_t base, uint32_t pin) {
     GPIO_MODER(base) &= ~(3u << (pin * 2u));
     GPIO_PUPDR(base) &= ~(3u << (pin * 2u));
     GPIO_PUPDR(base) |=  (2u << (pin * 2u));
+}
+
+static void write_output(uint32_t base, uint32_t pin, int on) {
+    if(on) {
+        GPIO_BSRR(base) = (1u << pin);
+    } else {
+        GPIO_BSRR(base) = (1u << (pin + 16u));
+    }
 }`;
 }
 
@@ -1313,9 +1333,6 @@ ${buttonConstants || '// No external button constants generated.'}
 
 ${ledConstants || '// No external LED constants generated.'}
 
-#define GPIO_IDR(base)      (*(volatile uint32_t *)((base) + 0x10u))
-#define GPIO_BSRR(base)     (*(volatile uint32_t *)((base) + 0x18u))
-
 static void enable_gpio_clocks(void) {
     ${runtime.gpio.rccEnableRegisterName} |= PERIPHERAL_PORT_ENABLE_MASK;
 }
@@ -1324,14 +1341,6 @@ ${gpioRuntime}
 
 static int read_input(uint32_t base, uint32_t pin) {
     return (GPIO_IDR(base) & (1u << pin)) != 0;
-}
-
-static void write_output(uint32_t base, uint32_t pin, int on) {
-    if(on) {
-        GPIO_BSRR(base) = (1u << pin);
-    } else {
-        GPIO_BSRR(base) = (1u << (pin + 16u));
-    }
 }
 
 int main(void) {
