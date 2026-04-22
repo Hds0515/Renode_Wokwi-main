@@ -31,6 +31,10 @@ const {
   createNetlistFromWiring,
   validateNetlist,
 } = require('../src/lib/netlist.ts');
+const {
+  createRuntimeSignalManifest,
+  createSignalDefinitionsFromNetlist,
+} = require('../src/lib/signal-broker.ts');
 const { getExamplesForBoard } = require('../src/lib/examples.ts');
 
 function resolveSystemRenodePath() {
@@ -152,6 +156,7 @@ async function validateBoard(board, index) {
   const netlist = createNetlistFromWiring(wiring, board);
   const netlistErrors = validateNetlist(netlist, board).filter((issue) => issue.severity === 'error');
   const artifacts = compileNetlistToRenodeArtifacts({ netlist, board });
+  const signalManifest = createRuntimeSignalManifest(createSignalDefinitionsFromNetlist(netlist));
   const ruleErrors = validateWiringRules(wiring, pads).filter((issue) => issue.severity === 'error');
   if (ruleErrors.length > 0) {
     throw new Error(`${board.name} remapped wiring failed rule validation: ${ruleErrors[0].message}`);
@@ -224,6 +229,7 @@ async function validateBoard(board, index) {
       elfPath: compileResult.elfPath,
       boardRepl: artifacts.boardRepl,
       peripheralManifest: artifacts.peripheralManifest,
+      signalManifest,
       bridgePort,
       gdbPort,
       machineName: board.machineName,

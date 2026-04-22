@@ -44,6 +44,20 @@ type StartSimulationRequest = {
     gpioNumber: number;
     mcuPinId: string;
   }>;
+  signalManifest?: Array<{
+    schemaVersion: number;
+    id: string;
+    peripheralId: string;
+    label: string;
+    direction: 'input' | 'output';
+    netId: string;
+    componentId: string;
+    pinId: string;
+    endpointId: string | null;
+    padId: string | null;
+    mcuPinId: string | null;
+    color: string;
+  }>;
   bridgePort?: number;
   gdbPort?: number;
   machineName?: string;
@@ -183,6 +197,7 @@ type RuntimeEvent =
     }
   | {
       type: 'signal';
+      schemaVersion?: number;
       id: string;
       peripheralId: string;
       peripheralKind: 'button' | 'led';
@@ -191,9 +206,15 @@ type RuntimeEvent =
       value: 0 | 1;
       source: 'bridge' | 'renode';
       changed?: boolean;
+      netId?: string | null;
+      componentId?: string | null;
+      pinId?: string | null;
+      endpointId?: string | null;
+      padId?: string | null;
       gpioPortName?: string;
       gpioNumber?: number;
       mcuPinId?: string;
+      color?: string | null;
       timestampMs?: number;
       timestamp?: string;
     }

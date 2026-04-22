@@ -1,6 +1,6 @@
 import { CircuitNetlist } from './netlist';
 
-export const SIGNAL_BROKER_SCHEMA_VERSION = 1;
+export const SIGNAL_BROKER_SCHEMA_VERSION = 2;
 export const DEFAULT_LOGIC_ANALYZER_WINDOW_MS = 6000;
 export const DEFAULT_SIGNAL_SAMPLE_LIMIT = 480;
 
@@ -22,6 +22,21 @@ export type SignalDefinition = {
   color: string;
 };
 
+export type RuntimeSignalManifestEntry = {
+  schemaVersion: typeof SIGNAL_BROKER_SCHEMA_VERSION;
+  id: string;
+  peripheralId: string;
+  label: string;
+  direction: SignalDirection;
+  netId: string;
+  componentId: string;
+  pinId: string;
+  endpointId: string | null;
+  padId: string | null;
+  mcuPinId: string | null;
+  color: string;
+};
+
 export type SignalSample = {
   id: string;
   signalId: string;
@@ -34,6 +49,7 @@ export type SignalValue = {
   value: SignalLevel;
   timestampMs: number;
   source: SignalSampleSource;
+  lastChangedAtMs: number;
 };
 
 export type SignalBrokerState = {
@@ -42,6 +58,7 @@ export type SignalBrokerState = {
   lastUpdatedAtMs: number;
   definitions: SignalDefinition[];
   values: Record<string, SignalValue>;
+  edgeCounts: Record<string, number>;
   samples: SignalSample[];
 };
 
@@ -50,6 +67,7 @@ export type SignalBrokerSummary = {
   inputCount: number;
   outputCount: number;
   sampleCount: number;
+  edgeCount: number;
 };
 
 function normalizeSignalLevel(value: number | boolean): SignalLevel {
@@ -99,6 +117,25 @@ export function createSignalDefinitionsFromNetlist(netlist: CircuitNetlist): Sig
     });
 }
 
+export function createRuntimeSignalManifest(
+  definitions: readonly SignalDefinition[]
+): RuntimeSignalManifestEntry[] {
+  return definitions.map((definition) => ({
+    schemaVersion: SIGNAL_BROKER_SCHEMA_VERSION,
+    id: definition.id,
+    peripheralId: definition.peripheralId,
+    label: definition.label,
+    direction: definition.direction,
+    netId: definition.netId,
+    componentId: definition.componentId,
+    pinId: definition.pinId,
+    endpointId: definition.endpointId,
+    padId: definition.padId,
+    mcuPinId: definition.mcuPinId,
+    color: definition.color,
+  }));
+}
+
 export function createSignalBrokerState(
   definitions: readonly SignalDefinition[],
   nowMs = Date.now()
@@ -110,9 +147,11 @@ export function createSignalBrokerState(
         value: 0 as SignalLevel,
         timestampMs: nowMs,
         source: 'system' as SignalSampleSource,
+        lastChangedAtMs: nowMs,
       },
     ])
   );
+  const edgeCounts = Object.fromEntries(definitions.map((definition) => [definition.id, 0]));
 
   return {
     schemaVersion: SIGNAL_BROKER_SCHEMA_VERSION,
@@ -120,6 +159,7 @@ export function createSignalBrokerState(
     lastUpdatedAtMs: nowMs,
     definitions: [...definitions],
     values,
+    edgeCounts,
     samples: definitions.map((definition) => ({
       id: sampleId(definition.id, nowMs, 'system'),
       signalId: definition.id,
@@ -136,6 +176,7 @@ export function summarizeSignalBroker(state: SignalBrokerState): SignalBrokerSum
     inputCount: state.definitions.filter((definition) => definition.direction === 'input').length,
     outputCount: state.definitions.filter((definition) => definition.direction === 'output').length,
     sampleCount: state.samples.length,
+    edgeCount: Object.values(state.edgeCounts).reduce((total, count) => total + count, 0),
   };
 }
 
@@ -157,16 +198,23 @@ export function recordSignalSample(
   const timestampMs = request.timestampMs ?? Date.now();
   const value = normalizeSignalLevel(request.value);
   const previousValue = state.values[definition.id];
+  const shouldAppend = !previousValue || previousValue.value !== value;
   const values = {
     ...state.values,
     [definition.id]: {
       value,
       timestampMs,
       source: request.source,
+      lastChangedAtMs: shouldAppend ? timestampMs : (previousValue?.lastChangedAtMs ?? timestampMs),
     },
   };
 
-  const shouldAppend = !previousValue || previousValue.value !== value;
+  const edgeCounts = shouldAppend
+    ? {
+        ...state.edgeCounts,
+        [definition.id]: (state.edgeCounts[definition.id] ?? 0) + 1,
+      }
+    : state.edgeCounts;
   const nextSamples = shouldAppend
     ? [
         ...state.samples,
@@ -184,10 +232,15 @@ export function recordSignalSample(
     ...state,
     lastUpdatedAtMs: Math.max(state.lastUpdatedAtMs, timestampMs),
     values,
+    edgeCounts,
     samples: nextSamples,
   };
 }
 
 export function getSignalSamples(state: SignalBrokerState, signalId: string): SignalSample[] {
   return state.samples.filter((sample) => sample.signalId === signalId);
+}
+
+export function getSignalEdgeCount(state: SignalBrokerState, signalId: string): number {
+  return state.edgeCounts[signalId] ?? 0;
 }

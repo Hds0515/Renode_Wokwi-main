@@ -78,6 +78,8 @@ import {
   SignalSample,
   createSignalBrokerState,
   createSignalDefinitionsFromNetlist,
+  createRuntimeSignalManifest,
+  getSignalEdgeCount,
   getSignalSamples,
   recordSignalSample,
   summarizeSignalBroker,
@@ -435,6 +437,89 @@ function buildLogicAnalyzerPoints(options: {
 
   points.push(`${options.width},${yForValue(options.currentValue)}`);
   return points.join(' ');
+}
+
+function formatSignalAge(timestampMs: number | null | undefined, nowMs: number): string {
+  if (!timestampMs) {
+    return 'never';
+  }
+
+  const ageMs = Math.max(0, nowMs - timestampMs);
+  if (ageMs < 1000) {
+    return `${Math.round(ageMs)} ms ago`;
+  }
+  if (ageMs < 60000) {
+    return `${(ageMs / 1000).toFixed(1)} s ago`;
+  }
+  return `${Math.round(ageMs / 60000)} min ago`;
+}
+
+function GpioMonitorPanel({ state, nowMs }: { state: SignalBrokerState; nowMs: number }) {
+  const summary = summarizeSignalBroker(state);
+
+  return (
+    <div className="mt-4 rounded-3xl border border-slate-800 bg-slate-900/70 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-[0.24em] text-slate-500">GPIO Monitor</div>
+          <div className="mt-1 text-sm text-slate-300">
+            Signal Broker v{state.schemaVersion} tracks each connected GPIO endpoint with runtime manifest metadata.
+          </div>
+        </div>
+        <div className="flex shrink-0 gap-2 text-[10px] font-semibold uppercase tracking-[0.18em]">
+          <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-cyan-200">
+            {summary.signalCount} pins
+          </span>
+          <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-emerald-200">
+            {summary.edgeCount} edges
+          </span>
+        </div>
+      </div>
+
+      <div className="mt-3 max-h-[240px] overflow-auto rounded-2xl border border-slate-800 bg-slate-950/60">
+        {state.definitions.length === 0 ? (
+          <div className="px-3 py-3 text-xs text-slate-400">No GPIO signals are connected yet.</div>
+        ) : (
+          <div className="divide-y divide-slate-900">
+            {state.definitions.map((definition) => {
+              const currentValue = state.values[definition.id];
+              const value = currentValue?.value ?? 0;
+              const edgeCount = getSignalEdgeCount(state, definition.id);
+              return (
+                <div key={definition.id} className="grid grid-cols-[minmax(0,1.3fr)_74px_78px_76px_90px] items-center gap-2 px-3 py-2 text-xs">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: definition.color }} />
+                      <span className="truncate font-semibold text-slate-100">{definition.label}</span>
+                    </div>
+                    <div className="mt-1 truncate text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                      {definition.netId} / {definition.componentId}.{definition.pinId}
+                    </div>
+                  </div>
+                  <span
+                    className={`rounded-full px-2 py-1 text-center text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                      definition.direction === 'input' ? 'bg-fuchsia-500/15 text-fuchsia-200' : 'bg-amber-500/15 text-amber-200'
+                    }`}
+                  >
+                    {definition.direction}
+                  </span>
+                  <span className={value === 1 ? 'rounded-full bg-emerald-500/15 px-2 py-1 text-center font-semibold text-emerald-200' : 'rounded-full bg-slate-800 px-2 py-1 text-center font-semibold text-slate-400'}>
+                    {value === 1 ? 'HIGH' : 'LOW'}
+                  </span>
+                  <span className="rounded-full bg-slate-800 px-2 py-1 text-center text-slate-300">{definition.mcuPinId ?? definition.padId ?? 'unmapped'}</span>
+                  <div className="text-right text-[10px] text-slate-500">
+                    <div>{edgeCount} edge{edgeCount === 1 ? '' : 's'}</div>
+                    <div>{formatSignalAge(currentValue?.lastChangedAtMs, nowMs)}</div>
+                    <div className="uppercase tracking-[0.16em] text-slate-600">{currentValue?.source ?? 'system'}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function LogicAnalyzerPanel({
@@ -2658,6 +2743,7 @@ export default function App() {
   const circuitNetlist = useMemo(() => createNetlistFromWiring(wiring, selectedBoard), [selectedBoard, wiring]);
   const netlistSummary = useMemo(() => summarizeNetlist(circuitNetlist), [circuitNetlist]);
   const signalDefinitions = useMemo(() => createSignalDefinitionsFromNetlist(circuitNetlist), [circuitNetlist]);
+  const runtimeSignalManifest = useMemo(() => createRuntimeSignalManifest(signalDefinitions), [signalDefinitions]);
   const renodeArtifacts = useMemo(
     () =>
       compileNetlistToRenodeArtifacts({
@@ -3554,6 +3640,7 @@ export default function App() {
       elfPath: compileResult.elfPath,
       boardRepl,
       peripheralManifest,
+      signalManifest: runtimeSignalManifest,
       bridgePort: simulation.bridgePort,
       gdbPort: simulation.gdbPort,
       machineName: selectedBoard.machineName,
@@ -3588,6 +3675,7 @@ export default function App() {
     codeDirty,
     compileFirmware,
     peripheralManifest,
+    runtimeSignalManifest,
     selectedBoard.machineName,
     selectedBoard.runtime.uart?.displayName,
     signalDefinitions,
@@ -3969,6 +4057,8 @@ export default function App() {
                 )}
               </div>
             </div>
+
+            <GpioMonitorPanel state={signalBrokerState} nowMs={logicAnalyzerNow} />
 
             <LogicAnalyzerPanel state={signalBrokerState} nowMs={logicAnalyzerNow} onClear={clearLogicAnalyzer} />
 

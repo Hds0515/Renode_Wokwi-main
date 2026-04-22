@@ -26,8 +26,11 @@ const {
   validateNetlist,
 } = require('../src/lib/netlist.ts');
 const {
+  SIGNAL_BROKER_SCHEMA_VERSION,
   createSignalBrokerState,
   createSignalDefinitionsFromNetlist,
+  createRuntimeSignalManifest,
+  getSignalEdgeCount,
   recordSignalSample,
   summarizeSignalBroker,
 } = require('../src/lib/signal-broker.ts');
@@ -99,8 +102,16 @@ function validateProjectExample(example) {
   assert(summary.netCount > 0, `${example.id} should contain at least one GPIO net.`);
 
   const signalDefinitions = createSignalDefinitionsFromNetlist(project.netlist);
+  const signalManifest = createRuntimeSignalManifest(signalDefinitions);
   const signalState = createSignalBrokerState(signalDefinitions, 1000);
   const signalSummary = summarizeSignalBroker(signalState);
+  assert(signalState.schemaVersion === 2, `${example.id} signal broker state should use schema v2.`);
+  assert(SIGNAL_BROKER_SCHEMA_VERSION === 2, `${example.id} should compile against Signal Broker schema v2.`);
+  assert(signalManifest.length === signalDefinitions.length, `${example.id} runtime signal manifest size mismatch.`);
+  signalManifest.forEach((entry) => {
+    assert(entry.schemaVersion === 2, `${example.id} runtime signal manifest entry ${entry.id} should use schema v2.`);
+    assert(entry.netId && entry.componentId && entry.pinId, `${example.id} runtime signal manifest entry ${entry.id} is incomplete.`);
+  });
   assert(signalSummary.signalCount === summary.netCount, `${example.id} signal count should match GPIO net count.`);
   assert(signalSummary.inputCount > 0, `${example.id} should expose at least one input signal.`);
   assert(signalSummary.outputCount > 0, `${example.id} should expose at least one output signal.`);
@@ -113,6 +124,8 @@ function validateProjectExample(example) {
     timestampMs: 1010,
   });
   assert(sampledState.values[firstSignal.id].value === 1, `${example.id} signal broker did not update sampled value.`);
+  assert(sampledState.values[firstSignal.id].lastChangedAtMs === 1010, `${example.id} signal broker did not track change timestamp.`);
+  assert(getSignalEdgeCount(sampledState, firstSignal.id) === 1, `${example.id} signal broker did not count the edge.`);
   assert(sampledState.samples.length === signalState.samples.length + 1, `${example.id} signal broker did not append edge sample.`);
 
   console.log(

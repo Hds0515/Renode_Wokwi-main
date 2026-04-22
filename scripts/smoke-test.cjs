@@ -27,6 +27,10 @@ const {
   createNetlistFromWiring,
   validateNetlist,
 } = require('../src/lib/netlist.ts');
+const {
+  createRuntimeSignalManifest,
+  createSignalDefinitionsFromNetlist,
+} = require('../src/lib/signal-broker.ts');
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -53,6 +57,7 @@ async function main() {
     signalButtonLowAfterHigh: false,
     signalLedOn: false,
     signalLedOffAfterOn: false,
+    signalManifestMetadata: false,
     bridgeReady: false,
     uartAttached: false,
     uartTranscript: '',
@@ -77,6 +82,9 @@ async function main() {
 
     if (payload.type === 'signal') {
       console.log(`[signal] ${payload.peripheralId}=${payload.value} (${payload.source})`);
+      if (payload.schemaVersion === 2 && payload.netId && payload.componentId && payload.pinId && payload.padId) {
+        observed.signalManifestMetadata = true;
+      }
       if (payload.peripheralId === 'button-1' && payload.value === 1) {
         observed.signalButtonHigh = true;
       }
@@ -114,6 +122,7 @@ async function main() {
     return;
   }
   const artifacts = compileNetlistToRenodeArtifacts({ netlist, board });
+  const signalManifest = createRuntimeSignalManifest(createSignalDefinitionsFromNetlist(netlist));
 
   const compileResult = await runtime.compileFirmware({
     mainSource: artifacts.mainSource,
@@ -134,6 +143,7 @@ async function main() {
     elfPath: compileResult.elfPath,
     boardRepl: artifacts.boardRepl,
     peripheralManifest: artifacts.peripheralManifest,
+    signalManifest,
     uartPeripheralName: board.runtime.uart?.peripheralName ?? null,
     machineName: board.machineName,
   });
@@ -178,7 +188,8 @@ async function main() {
     !observed.signalButtonHigh ||
     !observed.signalButtonLowAfterHigh ||
     !observed.signalLedOn ||
-    !observed.signalLedOffAfterOn
+    !observed.signalLedOffAfterOn ||
+    !observed.signalManifestMetadata
   ) {
     console.error({
       ledOn: observed.ledOn,
@@ -187,6 +198,7 @@ async function main() {
       signalButtonLowAfterHigh: observed.signalButtonLowAfterHigh,
       signalLedOn: observed.signalLedOn,
       signalLedOffAfterOn: observed.signalLedOffAfterOn,
+      signalManifestMetadata: observed.signalManifestMetadata,
     });
     process.exitCode = 1;
     return;

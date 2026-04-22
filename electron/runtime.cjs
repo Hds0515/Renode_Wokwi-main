@@ -130,6 +130,7 @@ function createRuntimeService(options = {}) {
     bridgeManifest: [],
     ledStateCache: new Map(),
     signalStateCache: new Map(),
+    signalManifest: new Map(),
     debugProcess: null,
     debugBuffer: '',
     debugSequence: 1,
@@ -193,27 +194,48 @@ function createRuntimeService(options = {}) {
   }
 
   function emitSignal(entry, value, source) {
+    const signalBinding = state.signalManifest.get(entry.id) ?? null;
     const numericValue = value ? 1 : 0;
-    const cacheKey = `${entry.id}:${source}`;
+    const signalId = signalBinding?.id ?? `signal:${entry.id}`;
+    const cacheKey = `${signalId}:${source}`;
     const previousValue = state.signalStateCache.get(cacheKey);
     state.signalStateCache.set(cacheKey, numericValue);
 
     emit({
       type: 'signal',
-      id: `signal:${entry.id}`,
+      schemaVersion: signalBinding?.schemaVersion ?? 2,
+      id: signalId,
       peripheralId: entry.id,
       peripheralKind: entry.kind,
-      label: entry.label,
-      direction: entry.kind === 'button' ? 'input' : 'output',
+      label: signalBinding?.label ?? entry.label,
+      direction: signalBinding?.direction ?? (entry.kind === 'button' ? 'input' : 'output'),
       value: numericValue,
       source,
       changed: previousValue !== numericValue,
+      netId: signalBinding?.netId ?? null,
+      componentId: signalBinding?.componentId ?? null,
+      pinId: signalBinding?.pinId ?? null,
+      endpointId: signalBinding?.endpointId ?? null,
+      padId: signalBinding?.padId ?? null,
       gpioPortName: entry.gpioPortName,
       gpioNumber: entry.gpioNumber,
-      mcuPinId: entry.mcuPinId,
+      mcuPinId: signalBinding?.mcuPinId ?? entry.mcuPinId,
+      color: signalBinding?.color ?? null,
       timestampMs: Date.now(),
       timestamp: new Date().toISOString(),
     });
+  }
+
+  function createSignalManifestMap(signalManifest) {
+    if (!Array.isArray(signalManifest)) {
+      return new Map();
+    }
+
+    return new Map(
+      signalManifest
+        .filter((entry) => entry && typeof entry.peripheralId === 'string' && typeof entry.id === 'string')
+        .map((entry) => [entry.peripheralId, entry])
+    );
   }
 
   async function runProcess(command, args, runOptions = {}) {
@@ -315,6 +337,7 @@ function createRuntimeService(options = {}) {
     state.bridgeManifest = [];
     state.ledStateCache = new Map();
     state.signalStateCache = new Map();
+    state.signalManifest = new Map();
   }
 
   function startBridgePolling() {
@@ -367,7 +390,7 @@ function createRuntimeService(options = {}) {
     }, 120);
   }
 
-  async function connectBridge(port, machineName, peripheralManifest) {
+  async function connectBridge(port, machineName, peripheralManifest, signalManifest) {
     const manifest = Array.isArray(peripheralManifest) ? peripheralManifest : [];
     const startedAt = Date.now();
     log(`Waiting for Renode external control on port ${port}...`);
@@ -385,6 +408,7 @@ function createRuntimeService(options = {}) {
       state.bridgeManifest = manifest;
       state.ledStateCache = new Map();
       state.signalStateCache = new Map();
+      state.signalManifest = createSignalManifestMap(signalManifest);
 
       emit({ type: 'bridge', status: 'connected' });
       emit({
@@ -776,7 +800,7 @@ function createRuntimeService(options = {}) {
       attachRenodeProcessHandlers(child);
 
       const uartReady = uartPeripheralName && uartPort ? await connectUartTerminal(uartPort, uartPeripheralName) : false;
-      const bridgeReady = await connectBridge(bridgePort, machineName, request.peripheralManifest);
+      const bridgeReady = await connectBridge(bridgePort, machineName, request.peripheralManifest, request.signalManifest);
       if (!bridgeReady) {
         log(`Renode started, but the external control bridge on port ${bridgePort} did not answer in time.`, 'warn');
       }
