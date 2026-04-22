@@ -11,6 +11,11 @@ It keeps the visual workflow from the original prototype, but moves execution in
 - local project save/load as `.renode-wokwi.json`
 - project schema v2 with a unified Netlist/IR plus component package catalog metadata
 - Signal Broker schema v2 with runtime signal manifest metadata
+- SimulationClock schema v1 for clocked runtime events with sequence and virtual-time fields
+- Bus Transaction Broker schema v1 so GPIO, UART, I2C, and SPI events share one timeline
+- TCP JSONL Transaction Broker Bridge so native Renode plugins or external tools can inject bus transactions into Electron
+- SSD1306 OLED component template, I2C transaction decoding, and live framebuffer preview demo
+- Renode C# Broker plugin skeleton for the next native in-process I2C/SPI integration stage
 - GPIO Monitor for live per-pin level, direction, source, and edge counts
 - Logic Analyzer MVP for live digital waveforms from connected GPIO endpoints
 - bundled example projects that can be opened from the control panel
@@ -27,16 +32,21 @@ The current MVP has one validated Renode-backed board plus two Renode-verified e
 - `NUCLEO-H753ZI` is the default validated board.
 - `STM32F4 Discovery` uses Renode's board-level `platforms/boards/stm32f4_discovery.repl`.
 - `STM32F103 GPIO Lab` uses Renode's `platforms/cpus/stm32f103.repl` CPU/platform profile with Blue Pill-style teaching pins because the bundled Renode tree does not provide a full Blue Pill board file.
-- selectable external `Button`, `LED`, `Buzzer`, and grouped `RGB LED` endpoints on the selected board's teaching-friendly pads
+- selectable external `Button`, `LED`, `Buzzer`, grouped `RGB LED`, and `SSD1306 OLED` endpoints on the selected board's teaching-friendly pads
 - a default pin chooser that surfaces the most common teaching-friendly pads first
 - any already-connected pad remains visible even when the full pinout is collapsed
 - board top view with a more Wokwi-like workbench area, live hotspots, grouped multi-endpoint devices, and pad highlights
 - board schema abstraction for board metadata, visual frames, curated pins, compiler settings, linker scripts, GPIO register model, and Renode platform path
 - board-aware generated `main.c`, `board.repl`, `.resc`, compiler args, and bundled example projects
 - project document schema v2 for wiring, Netlist/IR, workbench layout, code mode, and component package metadata
-- component package catalog for `Button`, `LED`, `Buzzer`, and grouped `RGB LED` pin/capability definitions
+- component package catalog for `Button`, `LED`, `Buzzer`, grouped `RGB LED`, and `SSD1306 OLED` pin/capability definitions
 - Signal Broker schema v2 derived from Netlist/IR GPIO nets and Electron runtime `signal` events
 - runtime signal manifest passed from the renderer to Electron so signal events carry net, component, pin, pad, and MCU metadata
+- SimulationClock snapshots attached to runtime `signal`, `uart`, `bus`, and `timeline` events
+- runtime bus manifest generation for board UART plus discovered I2C/SPI teaching pins and package-backed bus devices
+- Bus Transaction Broker panel for UART, I2C, and future SPI protocol events
+- `local-wokwi-broker.json` runtime manifest written beside generated `.repl` / `.resc` files so native plugins can discover the broker endpoint
+- SSD1306 OLED preview fed by I2C transaction payloads
 - live GPIO Monitor panel for pin state, last source, recent change time, and edge counts
 - live Logic Analyzer panel for input/output edge samples
 - local `arm-none-eabi-gcc` compilation with generated startup and linker files
@@ -89,17 +99,19 @@ The helper launcher `scripts/run-local.ps1` will install dependencies automatica
 ## Demo flow
 
 1. Choose a board in `Board Selector`. Switching boards updates the visible pins, compiler target, Renode platform, generated code, and bundled examples.
-2. Drag a `Button`, `LED`, `Buzzer`, or `RGB LED` template from the peripheral library into the workbench area below the board, or click the matching add button.
+2. Drag a `Button`, `LED`, `Buzzer`, `RGB LED`, or `SSD1306 OLED` template from the peripheral library into the workbench area below the board, or click the matching add button.
 3. Pull the device's cyan wire stub directly onto a hotspot on the board canvas, or use the pin chooser on the lower half of the UI.
 4. Click any existing wire to open the inline wire action popover. From there you can `Rewire`, `Delete`, or press `Delete` / `Backspace`.
 5. Drag the device card around the workbench until the layout feels right.
 6. For `Buzzer` and `RGB LED`, choose which button drives each output endpoint from the rack below the board.
-7. If you need a less common GPIO, click `Show Full Pinout`.
-8. The app regenerates `main.c`, `board.repl`, and the Renode launch preview from that board and wiring.
-9. Use `Save`, `Save As`, or `Load` in the control panel to persist the board choice, wiring, and workbench layout.
-10. Or choose a bundled board-specific example in `Control -> Project -> Examples` and click `Open Example`.
-11. Click `Compile`, then `Start`.
-12. Press and hold the external button card in the board canvas and watch the output cards update in real time.
+7. For `SSD1306 OLED`, connect `SCL` and `SDA` to the board's I2C-capable teaching pins. The generated runtime manifest will attach the OLED device to that bus and the I2C demo feed will update the framebuffer preview.
+8. If you need a less common GPIO, click `Show Full Pinout`.
+9. The app regenerates `main.c`, `board.repl`, and the Renode launch preview from that board and wiring.
+10. Use `Save`, `Save As`, or `Load` in the control panel to persist the board choice, wiring, and workbench layout.
+11. Or choose a bundled board-specific example in `Control -> Project -> Examples` and click `Open Example`.
+12. Click `Compile`, then `Start`.
+13. Press and hold the external button card in the board canvas and watch the output cards update in real time.
+14. Open a board-specific `SSD1306 OLED over I2C` example to verify the complex-bus path. On start, the runtime emits an I2C write transaction that the UI decodes into the OLED framebuffer preview.
 
 ## Project files
 
@@ -156,7 +168,23 @@ To validate the schema compiler without launching Renode, run:
 npm run validate:netlist
 ```
 
-This checks the component package catalog, normalizes all bundled examples to project schema v2, round-trips `netlist -> wiring`, and verifies that Netlist/IR can emit `main.c`, `board.repl`, `.resc` preview, and the Renode peripheral manifest.
+This checks the component package catalog, normalizes all bundled examples to project schema v2, round-trips `netlist -> wiring`, and verifies that Netlist/IR can emit `main.c`, `board.repl`, `.resc` preview, the Renode peripheral manifest, Signal Broker state, runtime bus manifests, and timeline counters.
+
+To validate the SSD1306 I2C transaction path without opening Electron, run:
+
+```bash
+npm run smoke:i2c
+```
+
+This loads the NUCLEO SSD1306 example, compiles firmware, starts Renode, emits the runtime I2C demo transaction, decodes the SSD1306 payload, and asserts that the virtual OLED framebuffer changes.
+
+To validate the native-plugin-facing TCP JSONL bridge, run:
+
+```bash
+npm run smoke:broker
+```
+
+This starts the same Renode workspace with the built-in demo feed disabled, connects to the Transaction Broker Bridge as an external client, sends an SSD1306 I2C write transaction, and verifies that the OLED framebuffer updates from broker input.
 
 ## Build
 
@@ -176,6 +204,10 @@ npm run start
   - Renode process management
   - Renode external-control connection management
   - runtime `signal` events for button injection and Renode LED polling, enriched by `signalManifest`
+  - SimulationClock snapshots and unified `timeline` events for GPIO/UART runtime activity
+  - UART socket traffic normalized as Bus Transaction Broker events
+  - SSD1306 I2C demo transaction feed until the native Renode C# broker is wired in
+  - TCP JSONL Transaction Broker Bridge for native C# plugins and external protocol tools
 - `electron/preload.cjs`
   - safe renderer API exposed as `window.localWokwi`
   - local project save/load bridge
@@ -200,6 +232,12 @@ npm run start
   - compiler from wiring to Netlist/IR, Netlist validation, Netlist round-trip, and Renode artifact generation
 - `src/lib/signal-broker.ts`
   - Signal Broker schema v2, runtime signal manifest generation, edge counting, signal definitions from Netlist/IR, runtime signal reducer, and summary helpers
+- `src/lib/runtime-timeline.ts`
+  - SimulationClock schema v1, runtime bus manifest generation, unified GPIO/UART/I2C/SPI timeline event types, bus transaction state, and summary helpers
+- `src/lib/ssd1306.ts`
+  - minimal SSD1306 command/data decoder and framebuffer state used by the OLED preview and smoke test
+- `renode-plugins/LocalWokwi.Broker`
+  - standalone C# Broker plugin skeleton with an I2C transaction broker, JSON-line/TCP transaction sinks, and integration notes for adapting it to Renode's native `II2CPeripheral` APIs
 - `src/lib/examples.ts`
   - board-specific bundled project catalog used by the control-panel example opener
 - `src/lib/firmware.ts`
@@ -225,6 +263,11 @@ npm run start
 - bundled examples can be opened from the control panel and mirrored as project files under `examples/`
 - `wiring` now compiles into a unified Netlist/IR before emitting Renode files and generated firmware
 - Signal Broker records UI-predicted button edges plus Electron runtime button/LED `signal` events into one timeline
+- SimulationClock gives runtime events a monotonic sequence plus host-estimated virtual time so UI panels do not rely on unsynchronized wall-clock-only samples
+- Bus Transaction Broker records UART RX/TX/status traffic and SSD1306 I2C demo transactions into the same unified event stream as GPIO samples
+- external clients can stream protocol transactions through the TCP JSONL broker bridge and update the same UI panels as built-in runtime events
+- I2C/SPI are manifest/schema-ready; SSD1306 has a verified runtime demo path, while the native Renode C# plugin is currently a skeleton awaiting direct Renode API binding
+- SSD1306 OLED examples are generated for each board and render decoded I2C payloads into a live frontend framebuffer preview
 - GPIO Monitor uses Signal Broker schema v2 to show each connected pin's level, direction, source, last change, and edge count
 - Logic Analyzer renders the most recent GPIO signal window from the Signal Broker sample stream
 - `npm run validate:netlist` validates component packages, Netlist round-trips, examples, and Renode artifacts
@@ -240,3 +283,4 @@ npm run start
 - explicit project schema migrations when v3 fields are introduced
 - waveform panels and richer virtual instruments
 - richer device libraries
+- compile and register `renode-plugins/LocalWokwi.Broker` against a full Renode source checkout so I2C/SPI transactions come from native Renode peripherals instead of the Electron demo feed

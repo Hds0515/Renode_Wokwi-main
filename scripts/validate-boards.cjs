@@ -35,6 +35,9 @@ const {
   createRuntimeSignalManifest,
   createSignalDefinitionsFromNetlist,
 } = require('../src/lib/signal-broker.ts');
+const {
+  createRuntimeBusManifest,
+} = require('../src/lib/runtime-timeline.ts');
 const { getExamplesForBoard } = require('../src/lib/examples.ts');
 
 function resolveSystemRenodePath() {
@@ -157,6 +160,7 @@ async function validateBoard(board, index) {
   const netlistErrors = validateNetlist(netlist, board).filter((issue) => issue.severity === 'error');
   const artifacts = compileNetlistToRenodeArtifacts({ netlist, board });
   const signalManifest = createRuntimeSignalManifest(createSignalDefinitionsFromNetlist(netlist));
+  const busManifest = createRuntimeBusManifest(board);
   const ruleErrors = validateWiringRules(wiring, pads).filter((issue) => issue.severity === 'error');
   if (ruleErrors.length > 0) {
     throw new Error(`${board.name} remapped wiring failed rule validation: ${ruleErrors[0].message}`);
@@ -182,6 +186,7 @@ async function validateBoard(board, index) {
     ledOffAfterOn: false,
     signalLedOn: false,
     signalLedOffAfterOn: false,
+    clockedTimeline: false,
   };
 
   runtime.on('event', (payload) => {
@@ -204,6 +209,9 @@ async function validateBoard(board, index) {
     if (payload.type === 'signal' && payload.peripheralId === remap.outputId && payload.value === 0 && observed.signalLedOn) {
       observed.signalLedOffAfterOn = true;
       observed.ledOffAfterOn = true;
+    }
+    if (payload.type === 'timeline' && payload.event.protocol === 'gpio' && payload.event.clock.sequence > 0) {
+      observed.clockedTimeline = true;
     }
   });
 
@@ -230,6 +238,7 @@ async function validateBoard(board, index) {
       boardRepl: artifacts.boardRepl,
       peripheralManifest: artifacts.peripheralManifest,
       signalManifest,
+      busManifest,
       bridgePort,
       gdbPort,
       machineName: board.machineName,
@@ -248,9 +257,10 @@ async function validateBoard(board, index) {
     await waitUntil(`${board.name} remapped LED on`, () => observed.ledOn, 8000);
     await runtime.sendPeripheralEvent({ type: 'button', id: remap.buttonId, state: 0 });
     await waitUntil(`${board.name} remapped LED off`, () => observed.ledOffAfterOn, 8000);
+    await waitUntil(`${board.name} clocked GPIO timeline`, () => observed.clockedTimeline, 8000);
 
     console.log(
-      `[${board.id}] ok: ${remap.buttonId} -> ${remap.buttonPad}, ${remap.outputId} -> ${remap.outputPad}, platform ${board.runtime.renodePlatformPath}`
+      `[${board.id}] ok: ${remap.buttonId} -> ${remap.buttonPad}, ${remap.outputId} -> ${remap.outputPad}, ${busManifest.length} bus manifest entrie(s), platform ${board.runtime.renodePlatformPath}`
     );
   } finally {
     if (started) {

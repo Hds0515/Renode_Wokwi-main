@@ -9,7 +9,13 @@ const { connectExternalControlClient } = require('./external-control.cjs');
 const APP_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_BRIDGE_PORT = 9001;
 const DEFAULT_GDB_PORT = 3333;
+const DEFAULT_TRANSACTION_BROKER_PORT = 9201;
 const LOCAL_RENODE_PATH = path.join(APP_ROOT, 'renode', 'renode', 'renode.exe');
+const SIMULATION_CLOCK_SCHEMA_VERSION = 1;
+const RUNTIME_TIMELINE_SCHEMA_VERSION = 1;
+const MAX_BUS_PAYLOAD_BYTES = 2048;
+const MAX_BROKER_LINE_BYTES = 1024 * 1024;
+const SSD1306_DEFAULT_ADDRESS = 0x3c;
 
 function normalizeForRenode(filePath) {
   return filePath.replace(/\\/g, '/');
@@ -29,6 +35,18 @@ function fileExists(filePath) {
 
 function createWorkspaceDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'local-wokwi-workspace-'));
+}
+
+function createSimulationClockState(options = {}) {
+  const nowMs = Date.now();
+  return {
+    startedAtWallTimeMs: options.startedAtWallTimeMs ?? nowMs,
+    baseVirtualTimeNs: options.baseVirtualTimeNs ?? 0,
+    sequence: 0,
+    syncMode: options.syncMode ?? 'host-estimated',
+    timeScale: options.timeScale ?? 1,
+    paused: false,
+  };
 }
 
 async function getFreePort() {
@@ -131,6 +149,15 @@ function createRuntimeService(options = {}) {
     ledStateCache: new Map(),
     signalStateCache: new Map(),
     signalManifest: new Map(),
+    busManifest: new Map(),
+    busManifestEntries: [],
+    i2cDemoTimer: null,
+    transactionBrokerServer: null,
+    transactionBrokerSockets: new Set(),
+    transactionBrokerBuffers: new Map(),
+    transactionBrokerPort: null,
+    simulationClock: createSimulationClockState(),
+    clockSyncTimer: null,
     debugProcess: null,
     debugBuffer: '',
     debugSequence: 1,
@@ -161,11 +188,410 @@ function createRuntimeService(options = {}) {
     });
   }
 
+  function snapshotSimulationClock() {
+    const wallTimeMs = Date.now();
+    const elapsedWallMs = Math.max(0, wallTimeMs - state.simulationClock.startedAtWallTimeMs);
+    const virtualTimeNs =
+      state.simulationClock.baseVirtualTimeNs +
+      Math.round(elapsedWallMs * 1000000 * state.simulationClock.timeScale);
+
+    state.simulationClock.sequence += 1;
+
+    return {
+      schemaVersion: SIMULATION_CLOCK_SCHEMA_VERSION,
+      sequence: state.simulationClock.sequence,
+      wallTimeMs,
+      virtualTimeNs,
+      virtualTimeMs: virtualTimeNs / 1000000,
+      elapsedWallMs,
+      syncMode: state.simulationClock.syncMode,
+      timeScale: state.simulationClock.timeScale,
+      paused: state.simulationClock.paused,
+    };
+  }
+
+  function resetSimulationClock(syncMode = 'host-estimated') {
+    state.simulationClock = createSimulationClockState({ syncMode });
+    return snapshotSimulationClock();
+  }
+
+  function emitClock(status = 'sync') {
+    const clock = snapshotSimulationClock();
+    emit({
+      type: 'clock',
+      status,
+      clock,
+    });
+    return clock;
+  }
+
+  function clearClockSync() {
+    if (state.clockSyncTimer) {
+      clearInterval(state.clockSyncTimer);
+      state.clockSyncTimer = null;
+    }
+  }
+
+  function startClockSync() {
+    clearClockSync();
+    state.clockSyncTimer = setInterval(() => {
+      emitClock('sync');
+    }, 500);
+  }
+
+  function clearI2cDemoFeed() {
+    if (state.i2cDemoTimer) {
+      clearTimeout(state.i2cDemoTimer);
+      state.i2cDemoTimer = null;
+    }
+  }
+
+  function createSsd1306SplashPayload() {
+    const bytes = [0x00, 0xae, 0x21, 0x00, 0x7f, 0x22, 0x00, 0x07, 0xaf, 0x40];
+    for (let page = 0; page < 8; page += 1) {
+      for (let column = 0; column < 128; column += 1) {
+        const inFrame = column < 3 || column > 124 || page === 0 || page === 7;
+        const stripe = (column + page * 9) % 18 < 9;
+        const center = column > 22 && column < 106 && page > 1 && page < 6;
+        bytes.push(inFrame ? 0xff : center ? (stripe ? 0x7e : 0x18) : 0x00);
+      }
+    }
+    return bytes;
+  }
+
+  function startI2cDemoFeed() {
+    clearI2cDemoFeed();
+    const devices = getSsd1306Devices();
+    if (devices.length === 0) {
+      return;
+    }
+
+    state.i2cDemoTimer = setTimeout(() => {
+      const payload = createSsd1306SplashPayload();
+      devices.forEach((device) => {
+        emitBusTransaction({
+          protocol: 'i2c',
+          busId: device.busId,
+          busLabel: device.busLabel,
+          peripheralName: device.componentId,
+          direction: 'write',
+          status: 'planned',
+          address: device.address ?? SSD1306_DEFAULT_ADDRESS,
+          data: payload,
+          source: 'system',
+        });
+      });
+      log(`I2C Transaction Broker demo emitted SSD1306 splash transaction for ${devices.length} OLED device(s).`);
+      state.i2cDemoTimer = null;
+    }, 750);
+  }
+
+  function normalizeProtocol(value) {
+    const protocol = String(value ?? '').toLowerCase();
+    return ['uart', 'i2c', 'spi'].includes(protocol) ? protocol : null;
+  }
+
+  function normalizeDirection(protocol, value) {
+    const direction = String(value ?? '').toLowerCase();
+    const allowed = protocol === 'uart' ? ['rx', 'tx', 'system'] : ['read', 'write', 'transfer', 'system'];
+    return allowed.includes(direction) ? direction : null;
+  }
+
+  function parseMaybeHexNumber(value) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      return null;
+    }
+    const normalized = value.trim();
+    const parsed = normalized.toLowerCase().startsWith('0x')
+      ? Number.parseInt(normalized.slice(2), 16)
+      : Number.parseInt(normalized, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function normalizeBrokerBytes(message) {
+    const candidate = message?.payload?.bytes ?? message?.bytes ?? message?.data;
+    if (Array.isArray(candidate)) {
+      return candidate.map((value) => Number(value) & 0xff);
+    }
+
+    if (Buffer.isBuffer(candidate)) {
+      return [...candidate];
+    }
+
+    if (typeof candidate === 'string') {
+      const encoding = String(message?.payload?.encoding ?? message?.encoding ?? '').toLowerCase();
+      if (encoding === 'base64') {
+        return [...Buffer.from(candidate, 'base64')];
+      }
+      if (/^[0-9a-f\s,]+$/i.test(candidate) && /[0-9a-f]{2}/i.test(candidate)) {
+        return candidate
+          .split(/[\s,]+/)
+          .filter(Boolean)
+          .map((value) => Number.parseInt(value, 16) & 0xff);
+      }
+      return candidate;
+    }
+
+    return [];
+  }
+
+  function normalizeExternalClock(clockInput) {
+    const clock = snapshotSimulationClock();
+    if (!clockInput || typeof clockInput !== 'object') {
+      return clock;
+    }
+
+    const virtualTimeNs = parseMaybeHexNumber(clockInput.virtualTimeNs);
+    if (virtualTimeNs === null) {
+      return clock;
+    }
+
+    return {
+      ...clock,
+      virtualTimeNs,
+      virtualTimeMs: virtualTimeNs / 1000000,
+      syncMode: 'renode-virtual',
+      timeScale: typeof clockInput.timeScale === 'number' ? clockInput.timeScale : clock.timeScale,
+    };
+  }
+
+  function ingestTransactionBrokerMessage(message, peer = 'unknown') {
+    if (!message || typeof message !== 'object') {
+      throw new Error('Broker message must be a JSON object.');
+    }
+
+    const protocol = normalizeProtocol(message.protocol);
+    if (!protocol) {
+      throw new Error(`Unsupported broker protocol: ${String(message.protocol ?? 'missing')}`);
+    }
+
+    const direction = normalizeDirection(protocol, message.direction);
+    if (!direction) {
+      throw new Error(`Unsupported ${protocol.toUpperCase()} broker direction: ${String(message.direction ?? 'missing')}`);
+    }
+
+    const clock = normalizeExternalClock(message.clock);
+    const address = parseMaybeHexNumber(message.address);
+    const data = normalizeBrokerBytes(message);
+
+    emitBusTransaction(
+      {
+        protocol,
+        busId: typeof message.busId === 'string' ? message.busId : null,
+        busLabel: typeof message.busLabel === 'string' ? message.busLabel : null,
+        peripheralName: typeof message.peripheralName === 'string' ? message.peripheralName : null,
+        direction,
+        status: typeof message.status === 'string' ? message.status : 'data',
+        address,
+        data,
+        source: typeof message.source === 'string' ? message.source : 'renode',
+      },
+      clock
+    );
+
+    emit({
+      type: 'broker',
+      status: 'transaction',
+      protocol,
+      peer,
+      busId: typeof message.busId === 'string' ? message.busId : null,
+      address,
+    });
+  }
+
+  function writeBrokerManifest(workspaceDir, port, busManifestEntries) {
+    const manifestPath = path.join(workspaceDir, 'local-wokwi-broker.json');
+    const manifest = {
+      schemaVersion: RUNTIME_TIMELINE_SCHEMA_VERSION,
+      host: '127.0.0.1',
+      port,
+      transport: 'tcp-jsonl',
+      protocols: ['gpio', 'uart', 'i2c', 'spi'],
+      buses: busManifestEntries,
+    };
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+    return manifestPath;
+  }
+
+  function stopTransactionBrokerServer() {
+    if (state.transactionBrokerServer) {
+      try {
+        state.transactionBrokerServer.close();
+      } catch {
+        // ignore shutdown failures
+      }
+      state.transactionBrokerServer = null;
+    }
+
+    state.transactionBrokerSockets.forEach((socket) => {
+      try {
+        socket.destroy();
+      } catch {
+        // ignore socket cleanup failures
+      }
+    });
+    state.transactionBrokerSockets.clear();
+    state.transactionBrokerBuffers.clear();
+    state.transactionBrokerPort = null;
+  }
+
+  async function startTransactionBrokerServer(port) {
+    stopTransactionBrokerServer();
+
+    const server = net.createServer((socket) => {
+      const peer = `${socket.remoteAddress ?? 'unknown'}:${socket.remotePort ?? 0}`;
+      state.transactionBrokerSockets.add(socket);
+      state.transactionBrokerBuffers.set(socket, '');
+      emit({ type: 'broker', status: 'connected', peer, port: state.transactionBrokerPort });
+
+      socket.on('data', (chunk) => {
+        let buffer = `${state.transactionBrokerBuffers.get(socket) ?? ''}${chunk.toString('utf8')}`;
+        if (buffer.length > MAX_BROKER_LINE_BYTES) {
+          log(`Transaction broker message from ${peer} exceeded ${MAX_BROKER_LINE_BYTES} bytes; closing client.`, 'warn');
+          socket.destroy();
+          return;
+        }
+
+        let newlineIndex = buffer.indexOf('\n');
+        while (newlineIndex >= 0) {
+          const line = buffer.slice(0, newlineIndex).trim();
+          buffer = buffer.slice(newlineIndex + 1);
+          if (line) {
+            try {
+              ingestTransactionBrokerMessage(JSON.parse(line), peer);
+            } catch (error) {
+              log(`Transaction broker rejected message from ${peer}: ${String(error)}`, 'warn');
+              emit({ type: 'broker', status: 'error', peer, message: String(error) });
+            }
+          }
+          newlineIndex = buffer.indexOf('\n');
+        }
+        state.transactionBrokerBuffers.set(socket, buffer);
+      });
+
+      socket.on('error', (error) => {
+        log(`Transaction broker socket error from ${peer}: ${String(error)}`, 'warn');
+      });
+
+      socket.on('close', () => {
+        state.transactionBrokerSockets.delete(socket);
+        state.transactionBrokerBuffers.delete(socket);
+        emit({ type: 'broker', status: 'disconnected', peer, port: state.transactionBrokerPort });
+      });
+    });
+
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(port, '127.0.0.1', () => {
+        server.off('error', reject);
+        resolve();
+      });
+    });
+
+    state.transactionBrokerServer = server;
+    state.transactionBrokerPort = port;
+    log(`Transaction Broker Bridge listening on 127.0.0.1:${port}.`);
+    emit({ type: 'broker', status: 'listening', port });
+    return port;
+  }
+
+  function createTimelineId(protocol, kind, clock, identity) {
+    return `timeline:${clock.sequence}:${protocol}:${kind}:${identity}`;
+  }
+
+  function createBusManifestMap(busManifest) {
+    if (!Array.isArray(busManifest)) {
+      return new Map();
+    }
+
+    const entries = [];
+    busManifest
+      .filter((entry) => entry && typeof entry.id === 'string' && typeof entry.protocol === 'string')
+      .forEach((entry) => {
+        entries.push([entry.id, entry]);
+        if (entry.renodePeripheralName) {
+          entries.push([`${entry.protocol}:${String(entry.renodePeripheralName).toLowerCase()}`, entry]);
+        }
+      });
+
+    return new Map(entries);
+  }
+
+  function getSsd1306Devices() {
+    return state.busManifestEntries.flatMap((entry) =>
+      Array.isArray(entry.devices)
+        ? entry.devices
+            .filter((device) => device.model === 'ssd1306')
+            .map((device) => ({
+              ...device,
+              busId: entry.id,
+              busLabel: entry.label,
+            }))
+        : []
+    );
+  }
+
+  function resolveBusManifestEntry(protocol, peripheralName) {
+    const fallbackId = `${protocol}:${String(peripheralName || 'default').toLowerCase()}`;
+    return state.busManifest.get(fallbackId) ?? state.busManifest.get(`${protocol}:${String(peripheralName || '').toLowerCase()}`) ?? null;
+  }
+
+  function encodePayload(data) {
+    const bytes = Array.isArray(data) ? data.map((value) => Number(value) & 0xff) : Array.from(Buffer.from(String(data ?? ''), 'utf8'));
+    const truncated = bytes.length > MAX_BUS_PAYLOAD_BYTES;
+    return {
+      bytes: bytes.slice(0, MAX_BUS_PAYLOAD_BYTES),
+      text: typeof data === 'string' ? data.slice(0, MAX_BUS_PAYLOAD_BYTES) : null,
+      bitLength: bytes.length * 8,
+      truncated,
+    };
+  }
+
+  function emitTimelineEvent(event) {
+    emit({
+      type: 'timeline',
+      event,
+    });
+  }
+
+  function emitBusTransaction(transaction, clock = snapshotSimulationClock()) {
+    const manifestEntry = transaction.busId ? state.busManifest.get(transaction.busId) : resolveBusManifestEntry(transaction.protocol, transaction.peripheralName);
+    const busId = transaction.busId ?? manifestEntry?.id ?? `${transaction.protocol}:${String(transaction.peripheralName || 'default').toLowerCase()}`;
+    const busLabel = transaction.busLabel ?? manifestEntry?.label ?? String(transaction.peripheralName || transaction.protocol).toUpperCase();
+    const payload = encodePayload(transaction.data ?? '');
+    const event = {
+      schemaVersion: RUNTIME_TIMELINE_SCHEMA_VERSION,
+      id: createTimelineId(transaction.protocol, 'bus', clock, `${busId}:${transaction.direction}`),
+      protocol: transaction.protocol,
+      kind: 'bus-transaction',
+      source: transaction.source ?? transaction.protocol,
+      clock,
+      summary: `${busLabel} ${transaction.direction} ${payload.bytes.length} byte(s)`,
+      busId,
+      busLabel,
+      renodePeripheralName: transaction.peripheralName ?? manifestEntry?.renodePeripheralName ?? null,
+      direction: transaction.direction,
+      status: transaction.status ?? 'data',
+      address: transaction.address ?? null,
+      payload,
+    };
+
+    emit({
+      type: 'bus',
+      event,
+    });
+    emitTimelineEvent(event);
+  }
+
   function emitUart(data, stream = 'rx', status = 'data') {
     if (!state.uartCapture.enabled || !data) {
       return;
     }
 
+    const clock = snapshotSimulationClock();
     emit({
       type: 'uart',
       stream,
@@ -173,8 +599,21 @@ function createRuntimeService(options = {}) {
       peripheralName: state.uartCapture.peripheralName,
       port: state.uartCapture.port,
       data,
+      clock,
       timestamp: new Date().toISOString(),
     });
+
+    emitBusTransaction(
+      {
+        protocol: 'uart',
+        peripheralName: state.uartCapture.peripheralName,
+        direction: stream === 'tx' || stream === 'rx' ? stream : 'system',
+        status,
+        data,
+        source: stream === 'tx' ? 'ui' : stream === 'rx' ? 'renode' : 'system',
+      },
+      clock
+    );
   }
 
   function emitUartStatus(status, data = '') {
@@ -182,6 +621,7 @@ function createRuntimeService(options = {}) {
       return;
     }
 
+    const clock = snapshotSimulationClock();
     emit({
       type: 'uart',
       stream: 'system',
@@ -189,8 +629,23 @@ function createRuntimeService(options = {}) {
       peripheralName: state.uartCapture.peripheralName,
       port: state.uartCapture.port,
       data,
+      clock,
       timestamp: new Date().toISOString(),
     });
+
+    if (data) {
+      emitBusTransaction(
+        {
+          protocol: 'uart',
+          peripheralName: state.uartCapture.peripheralName,
+          direction: 'system',
+          status,
+          data,
+          source: 'system',
+        },
+        clock
+      );
+    }
   }
 
   function emitSignal(entry, value, source) {
@@ -200,8 +655,9 @@ function createRuntimeService(options = {}) {
     const cacheKey = `${signalId}:${source}`;
     const previousValue = state.signalStateCache.get(cacheKey);
     state.signalStateCache.set(cacheKey, numericValue);
+    const clock = snapshotSimulationClock();
 
-    emit({
+    const signalPayload = {
       type: 'signal',
       schemaVersion: signalBinding?.schemaVersion ?? 2,
       id: signalId,
@@ -221,8 +677,33 @@ function createRuntimeService(options = {}) {
       gpioNumber: entry.gpioNumber,
       mcuPinId: signalBinding?.mcuPinId ?? entry.mcuPinId,
       color: signalBinding?.color ?? null,
-      timestampMs: Date.now(),
+      timestampMs: clock.wallTimeMs,
+      virtualTimeNs: clock.virtualTimeNs,
+      sequence: clock.sequence,
+      clock,
       timestamp: new Date().toISOString(),
+    };
+
+    emit(signalPayload);
+    emitTimelineEvent({
+      schemaVersion: RUNTIME_TIMELINE_SCHEMA_VERSION,
+      id: createTimelineId('gpio', 'sample', clock, signalId),
+      protocol: 'gpio',
+      kind: 'gpio-sample',
+      source,
+      clock,
+      summary: `${signalPayload.label} ${numericValue ? 'HIGH' : 'LOW'} (${source})`,
+      signalId,
+      peripheralId: entry.id,
+      label: signalPayload.label,
+      direction: signalPayload.direction,
+      value: numericValue,
+      changed: signalPayload.changed,
+      netId: signalPayload.netId,
+      componentId: signalPayload.componentId,
+      pinId: signalPayload.pinId,
+      padId: signalPayload.padId,
+      mcuPinId: signalPayload.mcuPinId,
     });
   }
 
@@ -576,10 +1057,17 @@ function createRuntimeService(options = {}) {
     });
 
     child.on('close', (code) => {
+      clearClockSync();
+      clearI2cDemoFeed();
+      stopTransactionBrokerServer();
       closeBridgeSession();
       stopDebuggingInternal();
       closeUartTerminal();
+      state.busManifest = new Map();
+      state.busManifestEntries = [];
       state.renodeProcess = null;
+      state.simulationClock.paused = true;
+      emitClock('stopped');
       emit({
         type: 'simulation',
         status: 'stopped',
@@ -590,9 +1078,14 @@ function createRuntimeService(options = {}) {
   }
 
   function stopSimulationInternal() {
+    clearClockSync();
+    clearI2cDemoFeed();
+    stopTransactionBrokerServer();
     closeBridgeSession();
     stopDebuggingInternal();
     closeUartTerminal();
+    state.busManifest = new Map();
+    state.busManifestEntries = [];
 
     if (state.renodeProcess) {
       try {
@@ -740,6 +1233,7 @@ function createRuntimeService(options = {}) {
     const rescPath = path.join(workspaceDir, 'run.resc');
     const bridgePort = request.bridgePort || DEFAULT_BRIDGE_PORT;
     const gdbPort = request.gdbPort || DEFAULT_GDB_PORT;
+    const requestedTransactionBrokerPort = request.transactionBrokerPort || DEFAULT_TRANSACTION_BROKER_PORT;
     const monitorPort = await getFreePort();
     const machineName = request.machineName || 'NUCLEO-H753ZI GPIO Workbench';
     const uartPeripheralName =
@@ -752,6 +1246,23 @@ function createRuntimeService(options = {}) {
       .replace(/\\/g, '/');
 
     fs.writeFileSync(replPath, request.boardRepl, 'utf8');
+    resetSimulationClock('host-estimated');
+    state.busManifestEntries = Array.isArray(request.busManifest) ? request.busManifest : [];
+    state.busManifest = createBusManifestMap(state.busManifestEntries);
+    let transactionBrokerPort = requestedTransactionBrokerPort;
+    try {
+      transactionBrokerPort = await startTransactionBrokerServer(requestedTransactionBrokerPort);
+    } catch (error) {
+      if (request.transactionBrokerPort) {
+        return {
+          success: false,
+          message: `Transaction Broker Bridge could not listen on port ${requestedTransactionBrokerPort}: ${String(error)}`,
+        };
+      }
+      transactionBrokerPort = await startTransactionBrokerServer(await getFreePort());
+      log(`Transaction Broker Bridge port ${requestedTransactionBrokerPort} was unavailable, using ${transactionBrokerPort}.`, 'warn');
+    }
+    const transactionBrokerManifestPath = writeBrokerManifest(workspaceDir, transactionBrokerPort, state.busManifestEntries);
 
     const rescContent = [
       `$name?="${machineName}"`,
@@ -776,6 +1287,7 @@ function createRuntimeService(options = {}) {
     fs.writeFileSync(rescPath, rescContent, 'utf8');
 
     log('Launching Renode locally...');
+    emitClock('started');
 
     try {
       const child = spawn(
@@ -798,9 +1310,13 @@ function createRuntimeService(options = {}) {
       state.renodeProcess = child;
       state.activeWorkspaceDir = workspaceDir;
       attachRenodeProcessHandlers(child);
+      startClockSync();
 
       const uartReady = uartPeripheralName && uartPort ? await connectUartTerminal(uartPort, uartPeripheralName) : false;
       const bridgeReady = await connectBridge(bridgePort, machineName, request.peripheralManifest, request.signalManifest);
+      if (request.enableI2cDemoFeed !== false) {
+        startI2cDemoFeed();
+      }
       if (!bridgeReady) {
         log(`Renode started, but the external control bridge on port ${bridgePort} did not answer in time.`, 'warn');
       }
@@ -814,6 +1330,8 @@ function createRuntimeService(options = {}) {
         monitorPort,
         uartPeripheralName,
         uartPort,
+        transactionBrokerPort,
+        transactionBrokerManifestPath,
       });
 
       return {
@@ -827,11 +1345,16 @@ function createRuntimeService(options = {}) {
         monitorPort,
         uartPeripheralName,
         uartPort,
+        transactionBrokerPort,
+        transactionBrokerManifestPath,
         uartReady,
         bridgeReady,
       };
     } catch (error) {
       state.renodeProcess = null;
+      clearClockSync();
+      clearI2cDemoFeed();
+      stopTransactionBrokerServer();
       closeBridgeSession();
       closeUartTerminal();
       return {
@@ -1071,6 +1594,7 @@ function createRuntimeService(options = {}) {
     APP_ROOT,
     DEFAULT_BRIDGE_PORT,
     DEFAULT_GDB_PORT,
+    DEFAULT_TRANSACTION_BROKER_PORT,
     createWorkspaceDir,
     on: (...args) => emitter.on(...args),
     off: (...args) => emitter.off(...args),
@@ -1090,5 +1614,6 @@ module.exports = {
   createRuntimeService,
   DEFAULT_BRIDGE_PORT,
   DEFAULT_GDB_PORT,
+  DEFAULT_TRANSACTION_BROKER_PORT,
   createWorkspaceDir,
 };

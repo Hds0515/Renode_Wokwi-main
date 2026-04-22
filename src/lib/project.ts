@@ -150,7 +150,7 @@ function normalizeProjectWiring(value: unknown, board: BoardSchema, warnings: st
       }
 
       const rawKind = rawPeripheral.kind;
-      if (rawKind !== 'button' && rawKind !== 'led') {
+      if (rawKind !== 'button' && rawKind !== 'led' && rawKind !== 'i2c') {
         warnings.push(`Ignored peripheral with unsupported kind at index ${index}.`);
         return null;
       }
@@ -177,12 +177,14 @@ function normalizeProjectWiring(value: unknown, board: BoardSchema, warnings: st
         ? rawPeripheral.templateKind
         : rawKind === 'button'
           ? 'button'
-          : 'led';
+          : rawKind === 'i2c'
+            ? 'ssd1306-oled'
+            : 'led';
 
       return {
         id: uniqueId,
         kind: rawKind,
-        label: normalizeNullableString(rawPeripheral.label) ?? `${rawKind === 'button' ? 'Button' : 'LED'} ${index + 1}`,
+        label: normalizeNullableString(rawPeripheral.label) ?? `${rawKind === 'button' ? 'Button' : rawKind === 'i2c' ? 'I2C' : 'LED'} ${index + 1}`,
         padId: padId && selectablePadIds.has(padId) ? padId : null,
         sourcePeripheralId: normalizeNullableString(rawPeripheral.sourcePeripheralId),
         templateKind,

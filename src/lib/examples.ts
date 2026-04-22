@@ -24,6 +24,10 @@ type BoardExamplePins = {
     buttons: [string, string, string];
     colors: [string, string, string];
   };
+  oled: {
+    scl: string;
+    sda: string;
+  };
 };
 
 const BOARD_EXAMPLE_PINS: Record<string, BoardExamplePins> = {
@@ -40,6 +44,10 @@ const BOARD_EXAMPLE_PINS: Record<string, BoardExamplePins> = {
       buttons: ['CN10-3', 'CN7-14', 'CN7-9'],
       colors: ['CN9-1', 'CN9-3', 'CN9-5'],
     },
+    oled: {
+      scl: 'CN9-6',
+      sda: 'CN9-5',
+    },
   },
   'stm32f4-discovery': {
     buttonLed: {
@@ -54,6 +62,10 @@ const BOARD_EXAMPLE_PINS: Record<string, BoardExamplePins> = {
       buttons: ['F4A-2', 'F4A-3', 'F4A-4'],
       colors: ['F4A-5', 'F4A-6', 'F4A-7'],
     },
+    oled: {
+      scl: 'F4D-3',
+      sda: 'F4D-4',
+    },
   },
   'stm32f103-gpio-lab': {
     buttonLed: {
@@ -67,6 +79,10 @@ const BOARD_EXAMPLE_PINS: Record<string, BoardExamplePins> = {
     rgb: {
       buttons: ['F1A-1', 'F1A-2', 'F1A-3'],
       colors: ['F1B-1', 'F1B-2', 'F1B-4'],
+    },
+    oled: {
+      scl: 'F1B-4',
+      sda: 'F1B-5',
     },
   },
 };
@@ -108,6 +124,31 @@ function createOutput(options: {
     templateKind: options.templateKind,
     groupId: options.groupId ?? null,
     groupLabel: options.groupLabel ?? null,
+    endpointId: options.endpointId,
+    endpointLabel: options.endpointLabel,
+    accentColor: options.accentColor,
+  };
+}
+
+function createI2cEndpoint(options: {
+  id: string;
+  label: string;
+  padId: string;
+  endpointId: 'scl' | 'sda';
+  endpointLabel: 'SCL' | 'SDA';
+  accentColor: string;
+  groupId: string;
+  groupLabel: string;
+}): DemoPeripheral {
+  return {
+    id: options.id,
+    kind: 'i2c',
+    label: options.label,
+    padId: options.padId,
+    sourcePeripheralId: null,
+    templateKind: 'ssd1306-oled',
+    groupId: options.groupId,
+    groupLabel: options.groupLabel,
     endpointId: options.endpointId,
     endpointLabel: options.endpointLabel,
     accentColor: options.accentColor,
@@ -216,6 +257,31 @@ function buildBoardExamples(board: BoardSchema): ExampleProject[] {
     ],
   };
 
+  const oledWiring: DemoWiring = {
+    peripherals: [
+      createI2cEndpoint({
+        id: 'ssd1306-oled-1-scl',
+        label: 'OLED 1',
+        padId: pins.oled.scl,
+        endpointId: 'scl',
+        endpointLabel: 'SCL',
+        accentColor: '#38bdf8',
+        groupId: 'ssd1306-oled-1',
+        groupLabel: 'OLED 1',
+      }),
+      createI2cEndpoint({
+        id: 'ssd1306-oled-1-sda',
+        label: 'OLED 1',
+        padId: pins.oled.sda,
+        endpointId: 'sda',
+        endpointLabel: 'SDA',
+        accentColor: '#0ea5e9',
+        groupId: 'ssd1306-oled-1',
+        groupLabel: 'OLED 1',
+      }),
+    ],
+  };
+
   return [
     {
       id: `${board.id}-button-led`,
@@ -261,6 +327,20 @@ function buildBoardExamples(board: BoardSchema): ExampleProject[] {
           'button-2': { x: 252, y: 364 },
           'button-3': { x: 408, y: 364 },
           'rgb-led-1': { x: 564, y: 364 },
+        },
+      }),
+    },
+    {
+      id: `${board.id}-ssd1306-oled`,
+      boardId: board.id,
+      title: `${board.name}: SSD1306 OLED over I2C`,
+      summary: 'A complex-bus demo that wires SCL/SDA and decodes brokered I2C transactions into an OLED framebuffer.',
+      difficulty: 'intermediate',
+      project: buildExampleProject({
+        board,
+        wiring: oledWiring,
+        peripheralPositions: {
+          'ssd1306-oled-1': { x: 96, y: 364 },
         },
       }),
     },

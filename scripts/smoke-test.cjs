@@ -31,6 +31,9 @@ const {
   createRuntimeSignalManifest,
   createSignalDefinitionsFromNetlist,
 } = require('../src/lib/signal-broker.ts');
+const {
+  createRuntimeBusManifest,
+} = require('../src/lib/runtime-timeline.ts');
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -58,6 +61,10 @@ async function main() {
     signalLedOn: false,
     signalLedOffAfterOn: false,
     signalManifestMetadata: false,
+    timelineClocked: false,
+    timelineGpio: false,
+    timelineUart: false,
+    busUart: false,
     bridgeReady: false,
     uartAttached: false,
     uartTranscript: '',
@@ -82,6 +89,9 @@ async function main() {
 
     if (payload.type === 'signal') {
       console.log(`[signal] ${payload.peripheralId}=${payload.value} (${payload.source})`);
+      if (payload.clock?.sequence > 0 && payload.clock?.virtualTimeNs >= 0) {
+        observed.timelineClocked = true;
+      }
       if (payload.schemaVersion === 2 && payload.netId && payload.componentId && payload.pinId && payload.padId) {
         observed.signalManifestMetadata = true;
       }
@@ -97,6 +107,23 @@ async function main() {
       if (payload.peripheralId === 'led-1' && payload.value === 0 && observed.signalLedOn) {
         observed.signalLedOffAfterOn = true;
       }
+    }
+
+    if (payload.type === 'timeline') {
+      console.log(`[timeline] #${payload.event.clock.sequence} ${payload.event.protocol}: ${payload.event.summary}`);
+      if (payload.event.protocol === 'gpio') {
+        observed.timelineGpio = true;
+      }
+      if (payload.event.protocol === 'uart') {
+        observed.timelineUart = true;
+      }
+      if (payload.event.clock.sequence > 0 && payload.event.clock.virtualTimeNs >= 0) {
+        observed.timelineClocked = true;
+      }
+    }
+
+    if (payload.type === 'bus' && payload.event.protocol === 'uart') {
+      observed.busUart = true;
     }
 
     if (payload.type === 'debug') {
@@ -123,6 +150,7 @@ async function main() {
   }
   const artifacts = compileNetlistToRenodeArtifacts({ netlist, board });
   const signalManifest = createRuntimeSignalManifest(createSignalDefinitionsFromNetlist(netlist));
+  const busManifest = createRuntimeBusManifest(board);
 
   const compileResult = await runtime.compileFirmware({
     mainSource: artifacts.mainSource,
@@ -144,6 +172,7 @@ async function main() {
     boardRepl: artifacts.boardRepl,
     peripheralManifest: artifacts.peripheralManifest,
     signalManifest,
+    busManifest,
     uartPeripheralName: board.runtime.uart?.peripheralName ?? null,
     machineName: board.machineName,
   });
@@ -189,7 +218,11 @@ async function main() {
     !observed.signalButtonLowAfterHigh ||
     !observed.signalLedOn ||
     !observed.signalLedOffAfterOn ||
-    !observed.signalManifestMetadata
+    !observed.signalManifestMetadata ||
+    !observed.timelineClocked ||
+    !observed.timelineGpio ||
+    !observed.timelineUart ||
+    !observed.busUart
   ) {
     console.error({
       ledOn: observed.ledOn,
@@ -199,6 +232,10 @@ async function main() {
       signalLedOn: observed.signalLedOn,
       signalLedOffAfterOn: observed.signalLedOffAfterOn,
       signalManifestMetadata: observed.signalManifestMetadata,
+      timelineClocked: observed.timelineClocked,
+      timelineGpio: observed.timelineGpio,
+      timelineUart: observed.timelineUart,
+      busUart: observed.busUart,
     });
     process.exitCode = 1;
     return;

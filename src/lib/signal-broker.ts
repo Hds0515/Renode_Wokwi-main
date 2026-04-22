@@ -1,4 +1,5 @@
 import { CircuitNetlist } from './netlist';
+import type { SimulationClockSnapshot } from './runtime-timeline';
 
 export const SIGNAL_BROKER_SCHEMA_VERSION = 2;
 export const DEFAULT_LOGIC_ANALYZER_WINDOW_MS = 6000;
@@ -42,14 +43,19 @@ export type SignalSample = {
   signalId: string;
   value: SignalLevel;
   timestampMs: number;
+  virtualTimeNs: number | null;
+  sequence: number | null;
   source: SignalSampleSource;
 };
 
 export type SignalValue = {
   value: SignalLevel;
   timestampMs: number;
+  virtualTimeNs: number | null;
+  sequence: number | null;
   source: SignalSampleSource;
   lastChangedAtMs: number;
+  lastChangedVirtualTimeNs: number | null;
 };
 
 export type SignalBrokerState = {
@@ -146,8 +152,11 @@ export function createSignalBrokerState(
       {
         value: 0 as SignalLevel,
         timestampMs: nowMs,
+        virtualTimeNs: null,
+        sequence: null,
         source: 'system' as SignalSampleSource,
         lastChangedAtMs: nowMs,
+        lastChangedVirtualTimeNs: null,
       },
     ])
   );
@@ -165,6 +174,8 @@ export function createSignalBrokerState(
       signalId: definition.id,
       value: 0,
       timestampMs: nowMs,
+      virtualTimeNs: null,
+      sequence: null,
       source: 'system',
     })),
   };
@@ -187,6 +198,7 @@ export function recordSignalSample(
     value: number | boolean;
     source: SignalSampleSource;
     timestampMs?: number;
+    clock?: SimulationClockSnapshot;
     sampleLimit?: number;
   }
 ): SignalBrokerState {
@@ -195,7 +207,9 @@ export function recordSignalSample(
     return state;
   }
 
-  const timestampMs = request.timestampMs ?? Date.now();
+  const timestampMs = request.clock?.wallTimeMs ?? request.timestampMs ?? Date.now();
+  const virtualTimeNs = request.clock?.virtualTimeNs ?? null;
+  const sequence = request.clock?.sequence ?? null;
   const value = normalizeSignalLevel(request.value);
   const previousValue = state.values[definition.id];
   const shouldAppend = !previousValue || previousValue.value !== value;
@@ -204,8 +218,11 @@ export function recordSignalSample(
     [definition.id]: {
       value,
       timestampMs,
+      virtualTimeNs,
+      sequence,
       source: request.source,
       lastChangedAtMs: shouldAppend ? timestampMs : (previousValue?.lastChangedAtMs ?? timestampMs),
+      lastChangedVirtualTimeNs: shouldAppend ? virtualTimeNs : (previousValue?.lastChangedVirtualTimeNs ?? virtualTimeNs),
     },
   };
 
@@ -223,6 +240,8 @@ export function recordSignalSample(
           signalId: definition.id,
           value,
           timestampMs,
+          virtualTimeNs,
+          sequence,
           source: request.source,
         },
       ].slice(-(request.sampleLimit ?? DEFAULT_SIGNAL_SAMPLE_LIMIT))

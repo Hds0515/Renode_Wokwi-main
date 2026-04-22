@@ -13,6 +13,8 @@
     "start": "electron .",
     "lint": "tsc --noEmit",
     "smoke": "node scripts/smoke-test.cjs",
+    "smoke:i2c": "node scripts/smoke-i2c-demo.cjs",
+    "smoke:broker": "node scripts/smoke-broker-bridge.cjs",
     "validate:netlist": "node scripts/validate-netlist.cjs",
     "validate:boards": "node scripts/validate-boards.cjs",
     "check:env": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\check-env.ps1",

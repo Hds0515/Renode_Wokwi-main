@@ -10,7 +10,7 @@ import {
 export const COMPONENT_PACKAGE_SCHEMA_VERSION = 1;
 export const COMPONENT_PACKAGE_CATALOG_VERSION = 1;
 
-export type ComponentPackagePinRole = 'gpio-signal';
+export type ComponentPackagePinRole = 'gpio-signal' | 'i2c-scl' | 'i2c-sda';
 
 export type ComponentPackagePin = {
   id: string;
@@ -26,6 +26,10 @@ export type ComponentPackagePin = {
 export type ComponentPackageRuntimeBinding = {
   type: 'renode-gpio';
   replPeripheral: 'Miscellaneous.Button' | 'Miscellaneous.LED';
+} | {
+  type: 'renode-i2c-broker';
+  address: number;
+  model: 'ssd1306';
 };
 
 export type ComponentPackage = {
@@ -51,6 +55,14 @@ export type ComponentPackageCatalog = {
 };
 
 function createRuntimeBinding(template: DemoPeripheralTemplateDefinition): ComponentPackageRuntimeBinding {
+  if (template.kind === 'ssd1306-oled') {
+    return {
+      type: 'renode-i2c-broker',
+      address: 0x3c,
+      model: 'ssd1306',
+    };
+  }
+
   return {
     type: 'renode-gpio',
     replPeripheral: template.category === 'input' ? 'Miscellaneous.Button' : 'Miscellaneous.LED',
@@ -68,7 +80,7 @@ function createComponentPackage(template: DemoPeripheralTemplateDefinition): Com
     pins: template.endpoints.map((endpoint) => ({
       id: endpoint.id,
       label: endpoint.label,
-      role: 'gpio-signal',
+      role: endpoint.kind === 'i2c' ? (endpoint.id === 'scl' ? 'i2c-scl' : 'i2c-sda') : 'gpio-signal',
       direction: endpoint.direction,
       requiredPadCapabilities: endpoint.requiredCapabilities,
       defaultSignalLabel: endpoint.defaultSignalLabel,
@@ -77,8 +89,8 @@ function createComponentPackage(template: DemoPeripheralTemplateDefinition): Com
     })),
     visual: {
       accentColor: template.accentColor,
-      defaultWidth: template.kind === 'rgb-led' ? 168 : 138,
-      defaultHeight: template.kind === 'rgb-led' ? 104 : 86,
+      defaultWidth: template.kind === 'rgb-led' || template.kind === 'ssd1306-oled' ? 168 : 138,
+      defaultHeight: template.kind === 'rgb-led' || template.kind === 'ssd1306-oled' ? 104 : 86,
     },
     runtime: createRuntimeBinding(template),
   };

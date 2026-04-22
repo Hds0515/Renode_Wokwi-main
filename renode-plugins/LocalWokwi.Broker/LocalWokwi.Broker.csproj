@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>LocalWokwi.Broker</AssemblyName>
+    <RootNamespace>LocalWokwi.Broker</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    Point these references at a local Renode source/build tree when turning the
+    skeleton into a compiled plugin. The application can already consume the
+    same transaction schema through Electron runtime events.
+  -->
+  <ItemGroup Condition="Exists('..\..\renode-master\src\Infrastructure')">
+    <ProjectReference Include="..\..\renode-master\src\Infrastructure\src\Emulator\Main\Emulator.csproj" Condition="Exists('..\..\renode-master\src\Infrastructure\src\Emulator\Main\Emulator.csproj')" />
+  </ItemGroup>
+</Project>

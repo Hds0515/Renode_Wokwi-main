@@ -23,6 +23,7 @@ import {
   DEFAULT_BRIDGE_PORT,
   DEFAULT_DEMO_WIRING,
   DEFAULT_GDB_PORT,
+  DEFAULT_TRANSACTION_BROKER_PORT,
   DEFAULT_LINKER_FILENAME,
   DEFAULT_LINKER_SCRIPT,
   DEFAULT_MAIN_SOURCE,
@@ -84,6 +85,21 @@ import {
   recordSignalSample,
   summarizeSignalBroker,
 } from './lib/signal-broker';
+import {
+  createRuntimeBusManifest,
+  createRuntimeTimelineState,
+  formatVirtualTime,
+  recordRuntimeTimelineEvent,
+  summarizeRuntimeTimeline,
+  syncRuntimeTimelineClock,
+} from './lib/runtime-timeline';
+import type { RuntimeBusManifestEntry, RuntimeBusTimelineEvent, RuntimeTimelineEvent, RuntimeTimelineState } from './lib/runtime-timeline';
+import {
+  applySsd1306Transaction,
+  createSsd1306State,
+  getSsd1306Pixel,
+} from './lib/ssd1306';
+import type { Ssd1306State } from './lib/ssd1306';
 
 type ToolingStatus = {
   found: boolean;
@@ -120,6 +136,7 @@ type SimulationState = {
   workspaceDir: string | null;
   gdbPort: number;
   bridgePort: number;
+  transactionBrokerPort: number | null;
   uartPort: number | null;
 };
 
@@ -313,6 +330,16 @@ function getTemplatePalette(templateKind: DemoPeripheralTemplateKind) {
       accent: 'border-cyan-500/40 bg-cyan-500/10 text-cyan-100 hover:bg-cyan-500/20',
       ghost: 'border-cyan-200 bg-cyan-50 text-cyan-700',
       icon: Cpu,
+    };
+  }
+
+  if (templateKind === 'ssd1306-oled') {
+    return {
+      title: definition.title,
+      subtitle: definition.subtitle,
+      accent: 'border-sky-500/40 bg-sky-500/10 text-sky-100 hover:bg-sky-500/20',
+      ghost: 'border-sky-200 bg-sky-50 text-sky-700',
+      icon: Terminal,
     };
   }
 
@@ -616,6 +643,217 @@ function LogicAnalyzerPanel({
             );
           })
         )}
+      </div>
+    </div>
+  );
+}
+
+function formatPayloadPreview(bytes: number[], text: string | null): string {
+  if (text && text.trim().length > 0) {
+    return text.replace(/\r/g, '\\r').replace(/\n/g, '\\n');
+  }
+  if (bytes.length === 0) {
+    return 'no payload';
+  }
+  const preview = bytes.slice(0, 24).map((byte) => byte.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+  return bytes.length > 24 ? `${preview} ... (${bytes.length} bytes)` : preview;
+}
+
+function RuntimeTimelinePanel({
+  state,
+  busManifest,
+  transactionBrokerPort,
+}: {
+  state: RuntimeTimelineState;
+  busManifest: RuntimeBusManifestEntry[];
+  transactionBrokerPort: number | null;
+}) {
+  const summary = summarizeRuntimeTimeline(state);
+  const busEvents = state.events
+    .filter((event): event is RuntimeBusTimelineEvent => event.protocol !== 'gpio')
+    .slice(-8)
+    .reverse();
+  const recentEvents = state.events.slice(-8).reverse();
+
+  return (
+    <div className="mt-4 rounded-3xl border border-slate-800 bg-slate-900/70 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-[0.24em] text-slate-500">SimulationClock / Bus Broker</div>
+          <div className="mt-1 text-sm text-slate-300">
+            GPIO, UART, I2C, and SPI share one timestamped runtime timeline. Native brokers can stream JSONL transactions into port {transactionBrokerPort ?? 'auto'}.
+          </div>
+        </div>
+        <div className="rounded-full border border-sky-500/30 bg-sky-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-200">
+          {state.lastClock.syncMode}
+        </div>
+      </div>
+
+      <div className="mt-3 grid grid-cols-4 gap-2 text-xs text-slate-300">
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Virtual Time</div>
+          <div className="mt-1 font-semibold text-white">{formatVirtualTime(state.lastClock)}</div>
+        </div>
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Sequence</div>
+          <div className="mt-1 font-semibold text-white">#{summary.lastSequence}</div>
+        </div>
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">GPIO Events</div>
+          <div className="mt-1 font-semibold text-white">{summary.gpioEventCount}</div>
+        </div>
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Bus Txn</div>
+          <div className="mt-1 font-semibold text-white">{summary.busTransactionCount}</div>
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-2xl border border-slate-800 bg-slate-950/60 p-2">
+        <div className="mb-2 text-[10px] uppercase tracking-[0.2em] text-slate-500">Runtime Bus Manifest</div>
+        {busManifest.length === 0 ? (
+          <div className="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-400">
+            No UART/I2C/SPI capability has been discovered for this board profile.
+          </div>
+        ) : (
+          <div className="grid gap-2">
+            {busManifest.map((entry) => (
+              <div key={entry.id} className="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-slate-100">{entry.label}</span>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] ${
+                      entry.status === 'active' ? 'bg-emerald-500/15 text-emerald-200' : 'bg-amber-500/15 text-amber-200'
+                    }`}
+                  >
+                    {entry.protocol} / {entry.status}
+                  </span>
+                </div>
+                <div className="mt-1 truncate text-[10px] uppercase tracking-[0.14em] text-slate-500">
+                  {entry.endpoints.map((endpoint) => endpoint.label).join('  ')}
+                </div>
+                {entry.devices && entry.devices.length > 0 ? (
+                  <div className="mt-2 rounded-xl border border-sky-500/20 bg-sky-500/10 px-2 py-1 text-[11px] text-sky-100">
+                    {entry.devices.map((device) => `${device.label} @ 0x${(device.address ?? 0).toString(16).toUpperCase()}`).join(', ')}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-3 grid gap-2 lg:grid-cols-2">
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-2">
+          <div className="mb-2 text-[10px] uppercase tracking-[0.2em] text-slate-500">Bus Transactions</div>
+          {busEvents.length === 0 ? (
+            <div className="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-400">
+              UART traffic and JSONL broker transactions will appear here.
+            </div>
+          ) : (
+            <div className="grid gap-1">
+              {busEvents.map((event) => (
+                <div key={event.id} className="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-slate-100">{event.busLabel}</span>
+                    <span className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                      {event.direction} @ {formatVirtualTime(event.clock)}
+                    </span>
+                  </div>
+                  <div className="mt-1 truncate font-mono text-[11px] text-cyan-100">
+                    {formatPayloadPreview(event.payload.bytes, event.payload.text)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-2">
+          <div className="mb-2 text-[10px] uppercase tracking-[0.2em] text-slate-500">Unified Event Stream</div>
+          {recentEvents.length === 0 ? (
+            <div className="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-400">
+              Start simulation to populate the unified runtime stream.
+            </div>
+          ) : (
+            <div className="grid gap-1">
+              {recentEvents.map((event) => (
+                <div key={event.id} className="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-slate-100">{event.summary}</span>
+                    <span className="shrink-0 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                      {event.protocol} #{event.clock.sequence}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Ssd1306PreviewPanel({ state }: { state: Ssd1306State }) {
+  const pixelSize = 2;
+  const width = state.width * pixelSize;
+  const height = state.height * pixelSize;
+
+  return (
+    <div className="mt-4 rounded-3xl border border-slate-800 bg-slate-900/70 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-[0.24em] text-slate-500">SSD1306 OLED Demo</div>
+          <div className="mt-1 text-sm text-slate-300">
+            I2C write transactions at 0x{state.address.toString(16).toUpperCase()} are decoded into a 128x64 framebuffer preview.
+          </div>
+        </div>
+        <div className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
+          state.displayOn ? 'border-sky-500/30 bg-sky-500/10 text-sky-200' : 'border-slate-700 bg-slate-950 text-slate-500'
+        }`}>
+          {state.displayOn ? 'display on' : 'waiting'}
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-[24px] border border-slate-800 bg-black p-3 shadow-inner">
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          className="w-full rounded-2xl bg-[#020617]"
+          style={{ imageRendering: 'pixelated' }}
+        >
+          <rect x="0" y="0" width={width} height={height} fill="#020617" />
+          {Array.from({ length: state.height }).flatMap((_, y) =>
+            Array.from({ length: state.width }).map((__, x) =>
+              getSsd1306Pixel(state, x, y) ? (
+                <rect
+                  key={`${x}:${y}`}
+                  x={x * pixelSize}
+                  y={y * pixelSize}
+                  width={pixelSize}
+                  height={pixelSize}
+                  fill="#7dd3fc"
+                />
+              ) : null
+            )
+          )}
+        </svg>
+      </div>
+
+      <div className="mt-3 grid grid-cols-3 gap-2 text-xs text-slate-300">
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Transactions</div>
+          <div className="mt-1 font-semibold text-white">{state.transactionCount}</div>
+        </div>
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Cursor</div>
+          <div className="mt-1 font-semibold text-white">P{state.page} C{state.column}</div>
+        </div>
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Virtual Time</div>
+          <div className="mt-1 font-semibold text-white">
+            {state.updatedAtVirtualTimeNs === null ? 'none' : `${(state.updatedAtVirtualTimeNs / 1000000).toFixed(2)} ms`}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -975,6 +1213,9 @@ function getWireColor(wire: DemoWire, peripheral: DemoPeripheral): string {
   if (peripheral.kind === 'button') {
     return '#d946ef';
   }
+  if (peripheral.kind === 'i2c') {
+    return peripheral.endpointId === 'sda' ? '#0ea5e9' : '#38bdf8';
+  }
   return getPeripheralTemplateKind(peripheral) === 'buzzer' ? '#14b8a6' : '#f59e0b';
 }
 
@@ -1047,6 +1288,9 @@ function MiniConnectorStrip({
       return ledStates[occupant.id]
         ? 'border-amber-200 bg-amber-300 shadow-[0_0_12px_rgba(251,191,36,0.75)]'
         : 'border-amber-300 bg-amber-200/80';
+    }
+    if (occupant?.kind === 'i2c') {
+      return 'border-sky-200 bg-sky-300/80 shadow-[0_0_12px_rgba(56,189,248,0.55)]';
     }
     if (!pad.selectable) {
       if (pad.role === 'power') {
@@ -2064,6 +2308,83 @@ function BoardTopView({
             const palette = getTemplatePalette(device.templateKind);
             const isMultiEndpoint = device.members.length > 1;
 
+            if (device.templateKind === 'ssd1306-oled') {
+              return (
+                <div
+                  key={device.id}
+                  className="absolute rounded-[24px] border border-sky-200 bg-sky-50/95 px-4 py-3 text-slate-900 shadow-lg transition"
+                  style={{ left: frame.x, top: frame.y, width: PERIPHERAL_CARD_WIDTH + 42, minHeight: PERIPHERAL_CARD_HEIGHT + 64 }}
+                >
+                  {device.members.map((member, endpointIndex) => {
+                    const anchor = getDeviceEndpointAnchor(frame, endpointIndex, device.members.length);
+                    return (
+                      <button
+                        key={member.id}
+                        onPointerDown={(event) => beginWireDrag(member.id, event)}
+                        onPointerMove={updateWireDrag}
+                        onPointerUp={endWireDrag}
+                        onPointerCancel={endWireDrag}
+                        className={`absolute top-[-10px] flex h-5 w-5 -translate-x-1/2 items-center justify-center rounded-full border-2 border-white bg-slate-900 transition ${
+                          armedPeripheralId === member.id ? 'shadow-[0_0_0_6px_rgba(56,189,248,0.2)]' : ''
+                        }`}
+                        style={{ left: anchor.x - frame.x, touchAction: 'none' }}
+                        title={`Drag ${member.endpointLabel ?? member.label} wire`}
+                      >
+                        <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: member.accentColor ?? '#38bdf8' }} />
+                      </button>
+                    );
+                  })}
+
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="rounded-full border border-sky-300 bg-sky-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+                      I2C display
+                    </div>
+                    <div
+                      onPointerDown={(event) => beginPeripheralDrag(device.id, frame, event)}
+                      onPointerMove={updatePeripheralDrag}
+                      onPointerUp={endPeripheralDrag}
+                      onPointerCancel={endPeripheralDrag}
+                      className={`rounded-full border border-current/25 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
+                        simulationRunning ? 'cursor-not-allowed opacity-50' : 'cursor-grab active:cursor-grabbing'
+                      }`}
+                    >
+                      Drag
+                    </div>
+                  </div>
+
+                  <div className="mt-3 rounded-[18px] border border-slate-900 bg-slate-950 p-2 shadow-inner">
+                    <div className="grid gap-[1px]" style={{ gridTemplateColumns: 'repeat(16, minmax(0, 1fr))' }}>
+                      {Array.from({ length: 64 }).map((_, pixel) => (
+                        <div
+                          key={pixel}
+                          className={`h-1.5 rounded-[1px] ${(pixel + Math.floor(pixel / 16)) % 5 === 0 ? 'bg-sky-300' : 'bg-slate-800'}`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mt-3">
+                    <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">{palette.title}</div>
+                    <div className="mt-1 text-sm font-semibold">{device.label}</div>
+                    <div className="mt-1 text-xs text-slate-600">Address 0x3C, decoded by the I2C Transaction Broker.</div>
+                  </div>
+
+                  <div className="mt-3 grid gap-2">
+                    {device.members.map((member) => (
+                      <div key={member.id} className="rounded-2xl border border-sky-100 bg-white/80 px-3 py-2">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: member.accentColor ?? '#0284c7' }}>
+                          {member.endpointLabel}
+                        </div>
+                        <div className="mt-1 text-[11px] text-slate-600">
+                          {getPadDescription(member.padId, board, 'Wire this endpoint to a matching I2C pad')}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            }
+
             if (isMultiEndpoint) {
               const rgbGlow = getRgbDeviceGlow(device, ledStates);
 
@@ -2333,6 +2654,7 @@ function WiringWorkbench({
       led: workbenchDevices.filter((device) => device.templateKind === 'led').length,
       buzzer: workbenchDevices.filter((device) => device.templateKind === 'buzzer').length,
       rgb: workbenchDevices.filter((device) => device.templateKind === 'rgb-led').length,
+      oled: workbenchDevices.filter((device) => device.templateKind === 'ssd1306-oled').length,
     }),
     [workbenchDevices]
   );
@@ -2396,7 +2718,11 @@ function WiringWorkbench({
                 <div className="text-xs text-slate-500">RGB LEDs</div>
                 <div className="mt-1 text-lg font-semibold text-white">{deviceCounts.rgb}</div>
               </div>
-              <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2 col-span-2">
+              <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                <div className="text-xs text-slate-500">OLEDs</div>
+                <div className="mt-1 text-lg font-semibold text-white">{deviceCounts.oled}</div>
+              </div>
+              <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
                 <div className="text-xs text-slate-500">Free Pads</div>
                 <div className="mt-1 text-lg font-semibold text-white">
                   {board.connectors.selectablePads.length - getConnectedPeripherals(wiring).length}
@@ -2507,6 +2833,53 @@ function WiringWorkbench({
                     onPress={(pressed) => onPressPeripheral(peripheral.id, pressed)}
                     onSourceChange={(sourceId) => onSourceChange(peripheral.id, sourceId)}
                   />
+                </div>
+              );
+            }
+
+            if (device.templateKind === 'ssd1306-oled') {
+              return (
+                <div key={device.id} className="rounded-[26px] border border-sky-500/40 bg-sky-500/10 p-4 text-sky-50">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-xs uppercase tracking-[0.22em] text-sky-100/80">SSD1306 OLED</div>
+                      <div className="mt-1 text-lg font-semibold">{device.label}</div>
+                    </div>
+                    <button
+                      onClick={() => onRemoveDevice(device.id)}
+                      className="rounded-full border border-current/25 p-2 text-current/80 transition hover:bg-white/10"
+                      title="Remove device"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+
+                  <div className="mt-3 rounded-2xl border border-sky-200/20 bg-black/30 px-3 py-3 text-sm text-sky-50/90">
+                    Wire SCL and SDA to matching I2C-capable pads. Runtime transactions at address 0x3C update the OLED preview panel.
+                  </div>
+
+                  <div className="mt-3 space-y-3">
+                    {device.members.map((member) => (
+                      <div key={member.id} className="rounded-2xl border border-current/20 bg-black/10 px-3 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-xs font-semibold uppercase tracking-[0.22em]" style={{ color: member.accentColor ?? '#fff' }}>
+                            {member.endpointLabel}
+                          </div>
+                          <button
+                            onClick={() => onArmPeripheral(member.id)}
+                            className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
+                              armedPeripheralId === member.id ? 'border-sky-300 bg-sky-500/20 text-sky-50' : 'border-current/25 bg-white/10 text-current/80'
+                            }`}
+                          >
+                            {armedPeripheralId === member.id ? 'Wiring' : 'Connect wire'}
+                          </button>
+                        </div>
+                        <div className="mt-2 text-sm text-sky-50/90">
+                          {getPadDescription(member.padId, board, 'Not connected to an I2C-capable board pad')}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               );
             }
@@ -2663,7 +3036,7 @@ function WiringWorkbench({
           <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Wokwi-like flow</div>
           <div className="mt-4 grid gap-3 text-sm text-slate-300">
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-              1. Drag a <span className="font-semibold text-white">Button</span>, <span className="font-semibold text-white">LED</span>, <span className="font-semibold text-white">Buzzer</span>, or <span className="font-semibold text-white">RGB LED</span> template into the workbench.
+              1. Drag a <span className="font-semibold text-white">Button</span>, <span className="font-semibold text-white">LED</span>, <span className="font-semibold text-white">Buzzer</span>, <span className="font-semibold text-white">RGB LED</span>, or <span className="font-semibold text-white">SSD1306 OLED</span> template into the workbench.
             </div>
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
               2. Pull the device&apos;s <span className="font-semibold text-white">wire stub</span> onto a cyan hotspot on the board.
@@ -2702,11 +3075,14 @@ export default function App() {
     workspaceDir: null,
     gdbPort: DEFAULT_GDB_PORT,
     bridgePort: DEFAULT_BRIDGE_PORT,
+    transactionBrokerPort: DEFAULT_TRANSACTION_BROKER_PORT,
     uartPort: null,
   });
   const [buttonStates, setButtonStates] = useState<Record<string, boolean>>({});
   const [ledStates, setLedStates] = useState<Record<string, boolean>>({});
   const [signalBrokerState, setSignalBrokerState] = useState<SignalBrokerState>(() => createSignalBrokerState([]));
+  const [runtimeTimelineState, setRuntimeTimelineState] = useState<RuntimeTimelineState>(() => createRuntimeTimelineState());
+  const [ssd1306State, setSsd1306State] = useState<Ssd1306State>(() => createSsd1306State());
   const [logicAnalyzerClock, setLogicAnalyzerClock] = useState(Date.now());
   const [codeMode, setCodeMode] = useState<CodeMode>('generated');
   const [code, setCode] = useState(DEFAULT_MAIN_SOURCE);
@@ -2744,6 +3120,11 @@ export default function App() {
   const netlistSummary = useMemo(() => summarizeNetlist(circuitNetlist), [circuitNetlist]);
   const signalDefinitions = useMemo(() => createSignalDefinitionsFromNetlist(circuitNetlist), [circuitNetlist]);
   const runtimeSignalManifest = useMemo(() => createRuntimeSignalManifest(signalDefinitions), [signalDefinitions]);
+  const runtimeBusManifest = useMemo(() => createRuntimeBusManifest(selectedBoard, circuitNetlist), [circuitNetlist, selectedBoard]);
+  const hasSsd1306Device = useMemo(
+    () => runtimeBusManifest.some((entry) => entry.devices?.some((device) => device.model === 'ssd1306')),
+    [runtimeBusManifest]
+  );
   const renodeArtifacts = useMemo(
     () =>
       compileNetlistToRenodeArtifacts({
@@ -2850,8 +3231,10 @@ export default function App() {
   useEffect(() => {
     const nowMs = Date.now();
     setSignalBrokerState(createSignalBrokerState(signalDefinitions, nowMs));
+    setRuntimeTimelineState(createRuntimeTimelineState(nowMs));
+    setSsd1306State(createSsd1306State());
     setLogicAnalyzerClock(nowMs);
-  }, [signalDefinitions]);
+  }, [runtimeBusManifest, signalDefinitions]);
 
   useEffect(() => {
     if (!simulation.running) {
@@ -2944,6 +3327,20 @@ export default function App() {
         return;
       }
 
+      if (event.type === 'clock') {
+        setRuntimeTimelineState((current) => syncRuntimeTimelineClock(current, event.clock as RuntimeTimelineEvent['clock']));
+        return;
+      }
+
+      if (event.type === 'timeline') {
+        const timelineEvent = event.event as RuntimeTimelineEvent;
+        setRuntimeTimelineState((current) => recordRuntimeTimelineEvent(current, timelineEvent));
+        if (timelineEvent.protocol === 'i2c' && timelineEvent.kind === 'bus-transaction') {
+          setSsd1306State((current) => applySsd1306Transaction(current, timelineEvent as RuntimeBusTimelineEvent));
+        }
+        return;
+      }
+
       if (event.type === 'signal') {
         setSignalBrokerState((current) =>
           recordSignalSample(current, {
@@ -2951,6 +3348,7 @@ export default function App() {
             value: event.value,
             source: event.source,
             timestampMs: event.timestampMs ?? Date.now(),
+            clock: event.clock as RuntimeTimelineEvent['clock'] | undefined,
           })
         );
         return;
@@ -2989,6 +3387,19 @@ export default function App() {
         return;
       }
 
+      if (event.type === 'broker') {
+        if (event.status === 'listening') {
+          setSimulation((current) => ({
+            ...current,
+            transactionBrokerPort: event.port ?? current.transactionBrokerPort,
+          }));
+          appendLog(`Transaction Broker Bridge listening on ${event.port}.`);
+        } else if (event.status === 'error') {
+          appendLog(`Transaction Broker Bridge error: ${event.message ?? 'unknown error'}`, 'warn');
+        }
+        return;
+      }
+
       if (event.type === 'simulation') {
         const running = event.status === 'running';
         setRunningVisualState(running);
@@ -2996,6 +3407,7 @@ export default function App() {
           setSimulation((current) => ({
             ...current,
             workspaceDir: event.workspaceDir ?? current.workspaceDir,
+            transactionBrokerPort: event.transactionBrokerPort ?? current.transactionBrokerPort,
           }));
           resetDebugState('Simulation stopped.');
         }
@@ -3526,6 +3938,8 @@ export default function App() {
   const clearLogicAnalyzer = useCallback(() => {
     const nowMs = Date.now();
     setSignalBrokerState(createSignalBrokerState(signalDefinitions, nowMs));
+    setRuntimeTimelineState(createRuntimeTimelineState(nowMs));
+    setSsd1306State(createSsd1306State());
     setLogicAnalyzerClock(nowMs);
   }, [signalDefinitions]);
 
@@ -3613,7 +4027,7 @@ export default function App() {
       return;
     }
 
-    if (peripheralManifest.length === 0) {
+    if (peripheralManifest.length === 0 && !hasSsd1306Device) {
       appendLog('Connect at least one external peripheral before starting Renode.', 'warn');
       return;
     }
@@ -3633,7 +4047,7 @@ export default function App() {
       return;
     }
 
-    appendLog(`Starting Renode with ${peripheralManifest.length} connected external peripheral(s)...`);
+    appendLog(`Starting Renode with ${peripheralManifest.length} GPIO endpoint(s), Transaction Broker Bridge, and ${hasSsd1306Device ? 'SSD1306 I2C broker demo' : 'no I2C display'}...`);
 
     const result = await window.localWokwi.startSimulation({
       workspaceDir: compileResult.workspaceDir,
@@ -3641,10 +4055,13 @@ export default function App() {
       boardRepl,
       peripheralManifest,
       signalManifest: runtimeSignalManifest,
+      busManifest: runtimeBusManifest,
       bridgePort: simulation.bridgePort,
       gdbPort: simulation.gdbPort,
+      transactionBrokerPort: simulation.transactionBrokerPort ?? undefined,
       machineName: selectedBoard.machineName,
       uartPeripheralName,
+      enableI2cDemoFeed: true,
     });
 
     if (!result.success) {
@@ -3658,16 +4075,20 @@ export default function App() {
       workspaceDir: result.workspaceDir ?? current.workspaceDir,
       bridgePort: result.bridgePort ?? current.bridgePort,
       gdbPort: result.gdbPort ?? current.gdbPort,
+      transactionBrokerPort: result.transactionBrokerPort ?? current.transactionBrokerPort,
       uartPort: result.uartPort ?? current.uartPort,
       uartConnected: result.uartReady ?? current.uartConnected,
     }));
     setButtonStates({});
     setLedStates({});
-    setSignalBrokerState(createSignalBrokerState(signalDefinitions, Date.now()));
+    const nowMs = Date.now();
+    setSignalBrokerState(createSignalBrokerState(signalDefinitions, nowMs));
+    setRuntimeTimelineState(createRuntimeTimelineState(nowMs));
+    setSsd1306State(createSsd1306State());
     setUartTranscript(
       `UART terminal starting for ${selectedBoard.runtime.uart?.displayName ?? uartPeripheralName ?? 'board UART'} (${uartPeripheralName ?? 'none'}).\n`
     );
-    appendLog('Renode launched. Use the peripheral rack buttons to drive the wired outputs.');
+    appendLog(`Renode launched. Transaction Broker Bridge is listening on ${result.transactionBrokerPort ?? simulation.transactionBrokerPort}.`);
   }, [
     appendLog,
     boardRepl,
@@ -3675,12 +4096,15 @@ export default function App() {
     codeDirty,
     compileFirmware,
     peripheralManifest,
+    hasSsd1306Device,
+    runtimeBusManifest,
     runtimeSignalManifest,
     selectedBoard.machineName,
     selectedBoard.runtime.uart?.displayName,
     signalDefinitions,
     simulation.bridgePort,
     simulation.gdbPort,
+    simulation.transactionBrokerPort,
     uartPeripheralName,
     blockingValidationErrors,
   ]);
@@ -4061,6 +4485,14 @@ export default function App() {
             <GpioMonitorPanel state={signalBrokerState} nowMs={logicAnalyzerNow} />
 
             <LogicAnalyzerPanel state={signalBrokerState} nowMs={logicAnalyzerNow} onClear={clearLogicAnalyzer} />
+
+            <RuntimeTimelinePanel
+              state={runtimeTimelineState}
+              busManifest={runtimeBusManifest}
+              transactionBrokerPort={simulation.transactionBrokerPort}
+            />
+
+            {hasSsd1306Device ? <Ssd1306PreviewPanel state={ssd1306State} /> : null}
 
             <div className="mt-4 grid gap-2 text-sm text-slate-300">
               <div className="rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2">

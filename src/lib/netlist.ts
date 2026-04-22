@@ -32,7 +32,8 @@ export const NETLIST_SCHEMA_VERSION = 1;
 
 export type CircuitComponentKind = 'board' | DemoPeripheralTemplateKind;
 export type CircuitPinDirection = 'input' | 'output' | 'bidirectional';
-export type CircuitPinRole = 'board-pad' | 'component-gpio';
+export type CircuitPinRole = 'board-pad' | 'component-gpio' | 'component-i2c';
+export type CircuitNetKind = 'gpio' | 'i2c';
 
 export type CircuitBoardTarget = {
   id: string;
@@ -79,7 +80,7 @@ export type CircuitPinReference = {
 
 export type CircuitNet = {
   id: string;
-  kind: 'gpio';
+  kind: CircuitNetKind;
   label: string;
   connections: CircuitPinReference[];
   metadata?: {
@@ -203,7 +204,7 @@ function createComponentInstanceFromDevice(device: ReturnType<typeof buildWorkbe
     return {
       id: pin.id,
       label: pin.label,
-      role: 'component-gpio',
+      role: pin.role === 'gpio-signal' ? 'component-gpio' : 'component-i2c',
       direction: pin.direction,
       requiredPadCapabilities: pin.requiredPadCapabilities,
       capabilities: [],
@@ -255,13 +256,13 @@ export function createNetlistFromWiring(wiring: DemoWiring, board: BoardSchema):
 
       return {
         id: `net:${peripheral.id}:${endpointId}`,
-        kind: 'gpio',
+        kind: peripheral.kind === 'i2c' ? 'i2c' : 'gpio',
         label: `${peripheral.label} ${peripheral.endpointLabel ?? endpointId}`,
         connections: [
           {
             componentId,
             pinId: endpointId,
-            role: 'component-gpio',
+            role: peripheral.kind === 'i2c' ? 'component-i2c' : 'component-gpio',
             peripheralId: peripheral.id,
             endpointId,
           },
@@ -346,10 +347,10 @@ export function createWiringFromNetlist(netlist: CircuitNetlist): DemoWiring {
     });
 
   netlist.nets.forEach((net) => {
-    const peripheralId =
-      net.metadata?.peripheralId ??
-      net.connections.find((connection) => connection.role === 'component-gpio')?.peripheralId ??
-      null;
+    const componentConnection = net.connections.find(
+      (connection) => connection.role === 'component-gpio' || connection.role === 'component-i2c'
+    );
+    const peripheralId = net.metadata?.peripheralId ?? componentConnection?.peripheralId ?? null;
     const padId =
       net.metadata?.padId ??
       net.connections.find((connection) => connection.role === 'board-pad')?.padId ??
@@ -469,7 +470,9 @@ export function validateNetlist(netlist: CircuitNetlist, board: BoardSchema): Ci
     });
 
     const boardConnection = net.connections.find((connection) => connection.role === 'board-pad');
-    const componentConnection = net.connections.find((connection) => connection.role === 'component-gpio');
+    const componentConnection = net.connections.find(
+      (connection) => connection.role === 'component-gpio' || connection.role === 'component-i2c'
+    );
 
     if (!boardConnection || !componentConnection) {
       return;

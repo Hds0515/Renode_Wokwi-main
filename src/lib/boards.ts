@@ -195,12 +195,14 @@ const STM32F4_GPIOD_CONNECTOR = createSimpleConnector({
   pins: [
     { pinNumber: 1, pinLabel: 'PB0', mcuPinId: 'PB0', signalName: 'GPIO / ADC' },
     { pinNumber: 2, pinLabel: 'PB1', mcuPinId: 'PB1', signalName: 'GPIO / ADC' },
-    { pinNumber: 3, pinLabel: 'PC6', mcuPinId: 'PC6', signalName: 'GPIO / TIM8 CH1' },
-    { pinNumber: 4, pinLabel: 'PC7', mcuPinId: 'PC7', signalName: 'GPIO / TIM8 CH2' },
-    { pinNumber: 5, pinLabel: 'PD12', mcuPinId: 'PD12', signalName: 'On-board green LED', blockedReason: 'Reserved by on-board LED.' },
-    { pinNumber: 6, pinLabel: 'PD13', mcuPinId: 'PD13', signalName: 'On-board orange LED', blockedReason: 'Reserved by on-board LED.' },
-    { pinNumber: 7, pinLabel: 'PD14', mcuPinId: 'PD14', signalName: 'On-board red LED', blockedReason: 'Reserved by on-board LED.' },
-    { pinNumber: 8, pinLabel: 'PD15', mcuPinId: 'PD15', signalName: 'On-board blue LED', blockedReason: 'Reserved by on-board LED.' },
+    { pinNumber: 3, pinLabel: 'PB6', mcuPinId: 'PB6', signalName: 'GPIO / I2C1 SCL' },
+    { pinNumber: 4, pinLabel: 'PB7', mcuPinId: 'PB7', signalName: 'GPIO / I2C1 SDA' },
+    { pinNumber: 5, pinLabel: 'PC6', mcuPinId: 'PC6', signalName: 'GPIO / TIM8 CH1' },
+    { pinNumber: 6, pinLabel: 'PC7', mcuPinId: 'PC7', signalName: 'GPIO / TIM8 CH2' },
+    { pinNumber: 7, pinLabel: 'PD12', mcuPinId: 'PD12', signalName: 'On-board green LED', blockedReason: 'Reserved by on-board LED.' },
+    { pinNumber: 8, pinLabel: 'PD13', mcuPinId: 'PD13', signalName: 'On-board orange LED', blockedReason: 'Reserved by on-board LED.' },
+    { pinNumber: 9, pinLabel: 'PD14', mcuPinId: 'PD14', signalName: 'On-board red LED', blockedReason: 'Reserved by on-board LED.' },
+    { pinNumber: 10, pinLabel: 'PD15', mcuPinId: 'PD15', signalName: 'On-board blue LED', blockedReason: 'Reserved by on-board LED.' },
   ],
 });
 
@@ -383,7 +385,7 @@ export const STM32F4_DISCOVERY_BOARD_SCHEMA: BoardSchema = {
     canvas: NUCLEO_H753ZI_BOARD_SCHEMA.visual.canvas,
   },
   teaching: {
-    curatedPadIds: ['F4A-2', 'F4A-3', 'F4A-4', 'F4A-5', 'F4A-6', 'F4A-7', 'F4D-1', 'F4D-2', 'F4D-3', 'F4D-4'],
+    curatedPadIds: ['F4A-2', 'F4A-3', 'F4A-4', 'F4A-5', 'F4A-6', 'F4A-7', 'F4D-1', 'F4D-2', 'F4D-3', 'F4D-4', 'F4D-5', 'F4D-6'],
   },
 };
 

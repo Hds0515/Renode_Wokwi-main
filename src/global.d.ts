@@ -1,5 +1,73 @@
 export {};
 
+type SimulationClockSnapshot = {
+  schemaVersion: number;
+  sequence: number;
+  wallTimeMs: number;
+  virtualTimeNs: number;
+  virtualTimeMs: number;
+  elapsedWallMs: number;
+  syncMode: 'host-estimated' | 'renode-virtual' | 'external';
+  timeScale: number;
+  paused: boolean;
+};
+
+type RuntimeBusManifestEntry = {
+  schemaVersion: number;
+  id: string;
+  protocol: 'uart' | 'i2c' | 'spi';
+  label: string;
+  renodePeripheralName: string | null;
+  status: 'active' | 'planned';
+  adapter: 'socket-terminal' | 'transaction-broker-planned';
+  endpoints: Array<{
+    role: 'tx' | 'rx' | 'scl' | 'sda' | 'sck' | 'miso' | 'mosi' | 'cs';
+    padId: string | null;
+    mcuPinId: string | null;
+    label: string;
+  }>;
+  devices?: Array<{
+    id: string;
+    componentId: string;
+    componentKind: string;
+    label: string;
+    address: number | null;
+    model: 'ssd1306' | 'generic-i2c';
+  }>;
+};
+
+type RuntimeTimelineEvent = {
+  schemaVersion: number;
+  id: string;
+  protocol: 'gpio' | 'uart' | 'i2c' | 'spi';
+  kind: 'gpio-sample' | 'bus-transaction';
+  source: 'ui' | 'bridge' | 'renode' | 'system' | 'debugger' | 'uart' | 'i2c' | 'spi';
+  clock: SimulationClockSnapshot;
+  summary: string;
+  signalId?: string;
+  peripheralId?: string;
+  label?: string;
+  direction?: 'input' | 'output' | 'rx' | 'tx' | 'read' | 'write' | 'transfer' | 'system';
+  value?: 0 | 1;
+  changed?: boolean;
+  netId?: string | null;
+  componentId?: string | null;
+  pinId?: string | null;
+  padId?: string | null;
+  mcuPinId?: string | null;
+  busId?: string;
+  busLabel?: string;
+  renodePeripheralName?: string | null;
+  status?: 'data' | 'connecting' | 'connected' | 'disconnected' | 'error' | 'planned';
+  address?: number | null;
+  payload?: {
+    bytes: number[];
+    text: string | null;
+    bitLength: number;
+    truncated: boolean;
+  };
+};
+
 type ToolingStatus = {
   found: boolean;
   path: string | null;
@@ -58,10 +126,13 @@ type StartSimulationRequest = {
     mcuPinId: string | null;
     color: string;
   }>;
+  busManifest?: RuntimeBusManifestEntry[];
   bridgePort?: number;
   gdbPort?: number;
+  transactionBrokerPort?: number;
   machineName?: string;
   uartPeripheralName?: string | null;
+  enableI2cDemoFeed?: boolean;
 };
 
 type StartSimulationResult = {
@@ -72,6 +143,8 @@ type StartSimulationResult = {
   replPath?: string;
   gdbPort?: number;
   bridgePort?: number;
+  transactionBrokerPort?: number;
+  transactionBrokerManifestPath?: string;
   monitorPort?: number;
   uartPeripheralName?: string | null;
   uartPort?: number | null;
@@ -126,11 +199,11 @@ type LocalProjectDocument = {
   wiring: {
     peripherals: Array<{
       id: string;
-      kind: 'button' | 'led';
+      kind: 'button' | 'led' | 'i2c';
       label: string;
       padId: string | null;
       sourcePeripheralId: string | null;
-      templateKind?: 'button' | 'led' | 'buzzer' | 'rgb-led';
+      templateKind?: 'button' | 'led' | 'buzzer' | 'rgb-led' | 'ssd1306-oled';
       groupId?: string | null;
       groupLabel?: string | null;
       endpointId?: string | null;
@@ -204,7 +277,7 @@ type RuntimeEvent =
       label: string;
       direction: 'input' | 'output';
       value: 0 | 1;
-      source: 'bridge' | 'renode';
+      source: 'ui' | 'bridge' | 'renode' | 'system';
       changed?: boolean;
       netId?: string | null;
       componentId?: string | null;
@@ -216,7 +289,23 @@ type RuntimeEvent =
       mcuPinId?: string;
       color?: string | null;
       timestampMs?: number;
+      virtualTimeNs?: number;
+      sequence?: number;
       timestamp?: string;
+      clock?: SimulationClockSnapshot;
+    }
+  | {
+      type: 'clock';
+      status?: 'started' | 'sync' | 'stopped';
+      clock: SimulationClockSnapshot;
+    }
+  | {
+      type: 'timeline';
+      event: RuntimeTimelineEvent;
+    }
+  | {
+      type: 'bus';
+      event: RuntimeTimelineEvent;
     }
   | {
       type: 'bridge';
@@ -228,11 +317,22 @@ type RuntimeEvent =
       state?: number;
     }
   | {
+      type: 'broker';
+      status: 'listening' | 'connected' | 'disconnected' | 'transaction' | 'error';
+      port?: number | null;
+      peer?: string;
+      protocol?: 'uart' | 'i2c' | 'spi';
+      busId?: string | null;
+      address?: number | null;
+      message?: string;
+    }
+  | {
       type: 'simulation';
       status: 'running' | 'stopped';
       workspaceDir?: string;
       gdbPort?: number;
       bridgePort?: number;
+      transactionBrokerPort?: number;
       monitorPort?: number;
       uartPeripheralName?: string | null;
       uartPort?: number | null;
@@ -245,6 +345,7 @@ type RuntimeEvent =
       peripheralName?: string | null;
       port?: number | null;
       data?: string;
+      clock?: SimulationClockSnapshot;
       timestamp?: string;
     }
   | {

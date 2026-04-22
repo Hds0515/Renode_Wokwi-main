@@ -1,5 +1,6 @@
 export const DEFAULT_BRIDGE_PORT = 9001;
 export const DEFAULT_GDB_PORT = 3333;
+export const DEFAULT_TRANSACTION_BROKER_PORT = 9201;
 
 const PORT_BASE_ADDRESS = 0x58020000;
 const PORT_STRIDE = 0x400;
@@ -8,8 +9,20 @@ const NUCLEO_REPL_PATH = 'platforms/boards/nucleo_h753zi.repl';
 const MACHINE_NAME = 'NUCLEO-H753ZI GPIO Workbench';
 
 export type DemoGpioRegisterModel = 'stm32-modern' | 'stm32f1';
-export type DemoPadCapability = 'gpio' | 'digital-input' | 'digital-output' | 'uart-tx' | 'uart-rx' | 'pwm' | 'adc';
-export type DemoEndpointDirection = 'input' | 'output';
+export type DemoPadCapability =
+  | 'gpio'
+  | 'digital-input'
+  | 'digital-output'
+  | 'uart-tx'
+  | 'uart-rx'
+  | 'i2c-scl'
+  | 'i2c-sda'
+  | 'spi-sck'
+  | 'spi-miso'
+  | 'spi-mosi'
+  | 'pwm'
+  | 'adc';
+export type DemoEndpointDirection = 'input' | 'output' | 'bidirectional';
 
 export type DemoUartRuntime = {
   peripheralName: string;
@@ -93,8 +106,8 @@ export type DemoBoardPin = {
   baseAddress: number;
 };
 
-export type DemoPeripheralKind = 'button' | 'led';
-export type DemoPeripheralTemplateKind = 'button' | 'led' | 'buzzer' | 'rgb-led';
+export type DemoPeripheralKind = 'button' | 'led' | 'i2c';
+export type DemoPeripheralTemplateKind = 'button' | 'led' | 'buzzer' | 'rgb-led' | 'ssd1306-oled';
 
 export type DemoPeripheralTemplateEndpointDefinition = {
   id: string;
@@ -113,7 +126,7 @@ export type DemoPeripheralTemplateDefinition = {
   description: string;
   labelPrefix: string;
   accentColor: string;
-  category: 'input' | 'output' | 'grouped-output';
+  category: 'input' | 'output' | 'grouped-output' | 'display';
   endpoints: DemoPeripheralTemplateEndpointDefinition[];
 };
 
@@ -133,7 +146,7 @@ export type DemoPeripheral = {
 
 export type DemoWire = {
   id: string;
-  kind: 'gpio';
+  kind: 'gpio' | 'i2c';
   peripheralId: string;
   padId: string;
   endpointId: string | null;
@@ -297,6 +310,35 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
       },
     ],
   },
+  {
+    kind: 'ssd1306-oled',
+    title: 'SSD1306 OLED',
+    subtitle: '128x64 I2C display',
+    description: 'A two-wire I2C display endpoint prepared for the Renode Transaction Broker and front-end framebuffer preview.',
+    labelPrefix: 'OLED',
+    accentColor: '#38bdf8',
+    category: 'display',
+    endpoints: [
+      {
+        id: 'scl',
+        label: 'SCL',
+        kind: 'i2c',
+        accentColor: '#38bdf8',
+        defaultSignalLabel: 'SCL',
+        direction: 'bidirectional',
+        requiredCapabilities: ['gpio', 'i2c-scl'],
+      },
+      {
+        id: 'sda',
+        label: 'SDA',
+        kind: 'i2c',
+        accentColor: '#0ea5e9',
+        defaultSignalLabel: 'SDA',
+        direction: 'bidirectional',
+        requiredCapabilities: ['gpio', 'i2c-sda'],
+      },
+    ],
+  },
 ];
 
 export const DEMO_PERIPHERAL_CAPABILITY_SCHEMA: DemoPeripheralCapabilitySchema = {
@@ -426,6 +468,21 @@ export function inferPadCapabilities(options: {
   }
   if (/\b(?:U?S?ART|LPUART)\d*\s*RX\b|\bRX\b/.test(descriptor)) {
     capabilities.add('uart-rx');
+  }
+  if (/\bI2C\d*\s*SCL\b|\bSCL\b/.test(descriptor)) {
+    capabilities.add('i2c-scl');
+  }
+  if (/\bI2C\d*\s*SDA\b|\bSDA\b/.test(descriptor)) {
+    capabilities.add('i2c-sda');
+  }
+  if (/\bSPI\d*\s*SCK\b|\bSCK\b/.test(descriptor)) {
+    capabilities.add('spi-sck');
+  }
+  if (/\bSPI\d*\s*MISO\b|\bMISO\b/.test(descriptor)) {
+    capabilities.add('spi-miso');
+  }
+  if (/\bSPI\d*\s*MOSI\b|\bMOSI\b/.test(descriptor)) {
+    capabilities.add('spi-mosi');
   }
   if (/\bPWM\b|\bTIM\d*\b|\bCH\d+\b/.test(descriptor)) {
     capabilities.add('pwm');
@@ -957,7 +1014,7 @@ export function createWireFromPeripheral(peripheral: DemoPeripheral): DemoWire |
 
   return {
     id: buildPeripheralWireId(peripheral.id),
-    kind: 'gpio',
+    kind: peripheral.kind === 'i2c' ? 'i2c' : 'gpio',
     peripheralId: peripheral.id,
     padId: peripheral.padId,
     endpointId: peripheral.endpointId ?? null,
@@ -1021,6 +1078,9 @@ export function createPeripheralTemplate(templateKind: DemoPeripheralTemplateKin
 }
 
 export function createPeripheral(kind: DemoPeripheralKind, ordinal: number): DemoPeripheral {
+  if (kind === 'i2c') {
+    return createPeripheralTemplate('ssd1306-oled', ordinal)[0];
+  }
   return createPeripheralTemplate(kind, ordinal)[0];
 }
 
@@ -1066,7 +1126,9 @@ export function buildPeripheralManifest(
   runtime: DemoBoardRuntime = DEFAULT_BOARD_RUNTIME,
   boardPads: readonly DemoBoardPad[] = DEMO_BOARD_PADS
 ): DemoPeripheralManifestEntry[] {
-  return getConnectedPeripherals(wiring).map((peripheral) => {
+  return getConnectedPeripherals(wiring)
+    .filter((peripheral) => peripheral.kind === 'button' || peripheral.kind === 'led')
+    .map((peripheral) => {
     const pin = resolvePeripheralPin(peripheral, runtime, boardPads);
     const templateKind = getPeripheralTemplateKind(peripheral);
     const manifestLabel =

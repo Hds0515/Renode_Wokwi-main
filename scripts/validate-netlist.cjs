@@ -34,6 +34,13 @@ const {
   recordSignalSample,
   summarizeSignalBroker,
 } = require('../src/lib/signal-broker.ts');
+const {
+  RUNTIME_TIMELINE_SCHEMA_VERSION,
+  createRuntimeBusManifest,
+  createRuntimeTimelineState,
+  recordRuntimeTimelineEvent,
+  summarizeRuntimeTimeline,
+} = require('../src/lib/runtime-timeline.ts');
 const { validateWiringRules } = require('../src/lib/firmware.ts');
 
 function connectedPairs(wiring) {
@@ -94,7 +101,7 @@ function validateProjectExample(example) {
     `${example.id} board.repl does not use ${board.runtime.renodePlatformPath}.`
   );
   assert(
-    artifacts.peripheralManifest.length === project.wiring.peripherals.filter((peripheral) => peripheral.padId).length,
+    artifacts.peripheralManifest.length === project.wiring.peripherals.filter((peripheral) => peripheral.padId && peripheral.kind !== 'i2c').length,
     `${example.id} manifest size does not match connected peripheral endpoints.`
   );
 
@@ -105,31 +112,106 @@ function validateProjectExample(example) {
   const signalManifest = createRuntimeSignalManifest(signalDefinitions);
   const signalState = createSignalBrokerState(signalDefinitions, 1000);
   const signalSummary = summarizeSignalBroker(signalState);
+  const busManifest = createRuntimeBusManifest(board, project.netlist);
+  const timelineState = createRuntimeTimelineState(1000);
   assert(signalState.schemaVersion === 2, `${example.id} signal broker state should use schema v2.`);
   assert(SIGNAL_BROKER_SCHEMA_VERSION === 2, `${example.id} should compile against Signal Broker schema v2.`);
+  assert(RUNTIME_TIMELINE_SCHEMA_VERSION === 1, `${example.id} should compile against runtime timeline schema v1.`);
   assert(signalManifest.length === signalDefinitions.length, `${example.id} runtime signal manifest size mismatch.`);
+  assert(busManifest.some((entry) => entry.protocol === 'uart'), `${example.id} should expose a UART bus manifest entry.`);
+  assert(busManifest.some((entry) => entry.protocol === 'i2c' || entry.protocol === 'spi'), `${example.id} should expose planned I2C/SPI bus capability entries.`);
   signalManifest.forEach((entry) => {
     assert(entry.schemaVersion === 2, `${example.id} runtime signal manifest entry ${entry.id} should use schema v2.`);
     assert(entry.netId && entry.componentId && entry.pinId, `${example.id} runtime signal manifest entry ${entry.id} is incomplete.`);
   });
-  assert(signalSummary.signalCount === summary.netCount, `${example.id} signal count should match GPIO net count.`);
-  assert(signalSummary.inputCount > 0, `${example.id} should expose at least one input signal.`);
-  assert(signalSummary.outputCount > 0, `${example.id} should expose at least one output signal.`);
+  const gpioNetCount = project.netlist.nets.filter((net) => net.kind === 'gpio').length;
+  assert(signalSummary.signalCount === gpioNetCount, `${example.id} signal count should match GPIO net count.`);
+  if (gpioNetCount > 0) {
+    assert(signalSummary.inputCount > 0, `${example.id} should expose at least one input signal.`);
+    assert(signalSummary.outputCount > 0, `${example.id} should expose at least one output signal.`);
+  }
+  if (project.netlist.components.some((component) => component.kind === 'ssd1306-oled')) {
+    assert(
+      busManifest.some((entry) => entry.protocol === 'i2c' && Array.isArray(entry.devices) && entry.devices.some((device) => device.model === 'ssd1306')),
+      `${example.id} should expose an SSD1306 device in the I2C bus manifest.`
+    );
+  }
 
   const firstSignal = signalDefinitions[0];
-  const sampledState = recordSignalSample(signalState, {
-    peripheralId: firstSignal.peripheralId,
-    value: 1,
-    source: 'ui',
-    timestampMs: 1010,
+  const timelineClock = {
+    schemaVersion: 1,
+    sequence: 1,
+    wallTimeMs: 1010,
+    virtualTimeNs: 10000000,
+    virtualTimeMs: 10,
+    elapsedWallMs: 10,
+    syncMode: 'host-estimated',
+    timeScale: 1,
+    paused: false,
+  };
+  const timelineWithGpio = firstSignal
+    ? (() => {
+        const sampledState = recordSignalSample(signalState, {
+          peripheralId: firstSignal.peripheralId,
+          value: 1,
+          source: 'ui',
+          timestampMs: 1010,
+        });
+        assert(sampledState.values[firstSignal.id].value === 1, `${example.id} signal broker did not update sampled value.`);
+        assert(sampledState.values[firstSignal.id].lastChangedAtMs === 1010, `${example.id} signal broker did not track change timestamp.`);
+        assert(getSignalEdgeCount(sampledState, firstSignal.id) === 1, `${example.id} signal broker did not count the edge.`);
+        assert(sampledState.samples.length === signalState.samples.length + 1, `${example.id} signal broker did not append edge sample.`);
+
+        return recordRuntimeTimelineEvent(timelineState, {
+          schemaVersion: 1,
+          id: `${example.id}:gpio-event`,
+          protocol: 'gpio',
+          kind: 'gpio-sample',
+          source: 'bridge',
+          clock: timelineClock,
+          summary: 'validation gpio sample',
+          signalId: firstSignal.id,
+          peripheralId: firstSignal.peripheralId,
+          label: firstSignal.label,
+          direction: firstSignal.direction,
+          value: 1,
+          changed: true,
+          netId: firstSignal.netId,
+          componentId: firstSignal.componentId,
+          pinId: firstSignal.pinId,
+          padId: firstSignal.padId,
+          mcuPinId: firstSignal.mcuPinId,
+        });
+      })()
+    : timelineState;
+  const timelineWithBus = recordRuntimeTimelineEvent(timelineWithGpio, {
+    schemaVersion: 1,
+    id: `${example.id}:uart-event`,
+    protocol: 'uart',
+    kind: 'bus-transaction',
+    source: 'renode',
+    clock: { ...timelineClock, sequence: 2, virtualTimeNs: 20000000, virtualTimeMs: 20 },
+    summary: 'validation uart tx',
+    busId: busManifest.find((entry) => entry.protocol === 'uart').id,
+    busLabel: busManifest.find((entry) => entry.protocol === 'uart').label,
+    renodePeripheralName: busManifest.find((entry) => entry.protocol === 'uart').renodePeripheralName,
+    direction: 'tx',
+    status: 'data',
+    address: null,
+    payload: {
+      bytes: [0x4f, 0x4b],
+      text: 'OK',
+      bitLength: 16,
+      truncated: false,
+    },
   });
-  assert(sampledState.values[firstSignal.id].value === 1, `${example.id} signal broker did not update sampled value.`);
-  assert(sampledState.values[firstSignal.id].lastChangedAtMs === 1010, `${example.id} signal broker did not track change timestamp.`);
-  assert(getSignalEdgeCount(sampledState, firstSignal.id) === 1, `${example.id} signal broker did not count the edge.`);
-  assert(sampledState.samples.length === signalState.samples.length + 1, `${example.id} signal broker did not append edge sample.`);
+  const timelineSummary = summarizeRuntimeTimeline(timelineWithBus);
+  assert(timelineSummary.gpioEventCount === (firstSignal ? 1 : 0), `${example.id} runtime timeline did not count GPIO events.`);
+  assert(timelineSummary.busTransactionCount === 1, `${example.id} runtime timeline did not count bus transactions.`);
+  assert(timelineSummary.lastSequence === 2, `${example.id} runtime timeline did not keep the newest clock.`);
 
   console.log(
-    `[netlist] ${example.id}: ${summary.packageComponentCount} component(s), ${summary.netCount} net(s), ${signalSummary.signalCount} signal(s), ${artifacts.peripheralManifest.length} Renode endpoint(s)`
+    `[netlist] ${example.id}: ${summary.packageComponentCount} component(s), ${summary.netCount} net(s), ${signalSummary.signalCount} signal(s), ${busManifest.length} bus manifest entrie(s), ${artifacts.peripheralManifest.length} Renode endpoint(s)`
   );
 }
 
