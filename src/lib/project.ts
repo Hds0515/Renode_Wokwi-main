@@ -9,6 +9,18 @@ import {
   synchronizeWiringWires,
 } from './firmware';
 import { ACTIVE_BOARD_SCHEMA, BoardSchema, getBoardSchema } from './boards';
+import {
+  COMPONENT_PACKAGE_CATALOG_VERSION,
+  COMPONENT_PACKAGE_SCHEMA_VERSION,
+  COMPONENT_PACKAGES,
+} from './component-packs';
+import {
+  CircuitNetlist,
+  NETLIST_SCHEMA_VERSION,
+  createNetlistFromWiring,
+  createWiringFromNetlist,
+  validateNetlist,
+} from './netlist';
 
 export type ProjectCodeMode = 'generated' | 'manual';
 
@@ -19,7 +31,7 @@ export type ProjectPeripheralPosition = {
 
 export type ProjectDocument = {
   app: 'renode-local-visualizer';
-  schemaVersion: 1;
+  schemaVersion: 2;
   savedAt: string;
   board: {
     id: string;
@@ -29,7 +41,13 @@ export type ProjectDocument = {
     catalogVersion: 1;
     kinds: DemoPeripheralTemplateKind[];
   };
+  componentPackages: {
+    schemaVersion: 1;
+    catalogVersion: 1;
+    kinds: DemoPeripheralTemplateKind[];
+  };
   wiring: DemoWiring;
+  netlist: CircuitNetlist;
   layout: {
     showFullPinout: boolean;
     peripheralPositions: Record<string, ProjectPeripheralPosition>;
@@ -46,7 +64,7 @@ export type ProjectLoadResult = {
 };
 
 export const PROJECT_APP_ID = 'renode-local-visualizer';
-export const PROJECT_SCHEMA_VERSION = 1;
+export const PROJECT_SCHEMA_VERSION = 2;
 export const PROJECT_TEMPLATE_CATALOG_VERSION = 1;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -196,6 +214,30 @@ function normalizeProjectWiring(value: unknown, board: BoardSchema, warnings: st
   });
 }
 
+function normalizeProjectNetlist(value: unknown, board: BoardSchema, warnings: string[]): CircuitNetlist | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  if (!Array.isArray(value.components) || !Array.isArray(value.nets) || !isRecord(value.board)) {
+    warnings.push('Ignored invalid netlist field and loaded the legacy wiring graph instead.');
+    return null;
+  }
+
+  const netlist = value as CircuitNetlist;
+  if (netlist.schemaVersion !== NETLIST_SCHEMA_VERSION) {
+    warnings.push(`Loaded netlist schema v${netlist.schemaVersion}; this build compiles v${NETLIST_SCHEMA_VERSION}.`);
+  }
+
+  const blockingIssues = validateNetlist(netlist, board).filter((issue) => issue.severity === 'error');
+  if (blockingIssues.length > 0) {
+    warnings.push(`Ignored invalid netlist: ${blockingIssues[0].message}`);
+    return null;
+  }
+
+  return netlist;
+}
+
 export function createProjectDocument(options: {
   board?: BoardSchema;
   wiring: DemoWiring;
@@ -205,6 +247,7 @@ export function createProjectDocument(options: {
   mainSource: string;
 }): ProjectDocument {
   const board = options.board ?? ACTIVE_BOARD_SCHEMA;
+  const wiring = synchronizeWiringWires(options.wiring);
   return {
     app: PROJECT_APP_ID,
     schemaVersion: PROJECT_SCHEMA_VERSION,
@@ -217,7 +260,13 @@ export function createProjectDocument(options: {
       catalogVersion: PROJECT_TEMPLATE_CATALOG_VERSION,
       kinds: DEMO_PERIPHERAL_TEMPLATES.map((template) => template.kind),
     },
-    wiring: synchronizeWiringWires(options.wiring),
+    componentPackages: {
+      schemaVersion: COMPONENT_PACKAGE_SCHEMA_VERSION,
+      catalogVersion: COMPONENT_PACKAGE_CATALOG_VERSION,
+      kinds: COMPONENT_PACKAGES.map((componentPackage) => componentPackage.kind),
+    },
+    wiring,
+    netlist: createNetlistFromWiring(wiring, board),
     layout: {
       showFullPinout: options.showFullPinout,
       peripheralPositions: options.peripheralPositions,
@@ -249,10 +298,16 @@ export function normalizeLoadedProjectDocument(value: unknown): ProjectLoadResul
     warnings.push(`Unknown board "${boardId}"; loaded with ${board.name} instead.`);
   }
 
-  const wiring = normalizeProjectWiring(value.wiring, board, warnings);
+  const legacyWiring = normalizeProjectWiring(value.wiring, board, warnings);
+  const loadedNetlist = normalizeProjectNetlist(value.netlist, board, warnings);
+  const netlistWiring = loadedNetlist
+    ? normalizeProjectWiring(createWiringFromNetlist(loadedNetlist), board, warnings)
+    : null;
+  const wiring = netlistWiring ?? legacyWiring;
   if (!wiring) {
     return null;
   }
+  const netlist = createNetlistFromWiring(wiring, board);
 
   const layout = isRecord(value.layout) ? value.layout : {};
   const code = isRecord(value.code) ? value.code : {};
@@ -273,7 +328,13 @@ export function normalizeLoadedProjectDocument(value: unknown): ProjectLoadResul
         catalogVersion: PROJECT_TEMPLATE_CATALOG_VERSION,
         kinds: DEMO_PERIPHERAL_TEMPLATES.map((template) => template.kind),
       },
+      componentPackages: {
+        schemaVersion: COMPONENT_PACKAGE_SCHEMA_VERSION,
+        catalogVersion: COMPONENT_PACKAGE_CATALOG_VERSION,
+        kinds: COMPONENT_PACKAGES.map((componentPackage) => componentPackage.kind),
+      },
       wiring,
+      netlist,
       layout: {
         showFullPinout: layout.showFullPinout === true,
         peripheralPositions: normalizeProjectPositions(layout.peripheralPositions, wiring, warnings),

@@ -23,16 +23,15 @@ require.extensions['.ts'] = (module, filename) => {
 const { BOARD_SCHEMAS } = require('../src/lib/boards.ts');
 const {
   DEFAULT_STARTUP_SOURCE,
-  buildPeripheralManifest,
-  generateBoardRepl,
-  generateDemoMainSource,
   synchronizeWiringWires,
+  validateWiringRules,
 } = require('../src/lib/firmware.ts');
+const {
+  compileNetlistToRenodeArtifacts,
+  createNetlistFromWiring,
+  validateNetlist,
+} = require('../src/lib/netlist.ts');
 const { getExamplesForBoard } = require('../src/lib/examples.ts');
-
-function firstExistingDirectory(candidates) {
-  return candidates.find((candidate) => candidate && fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) ?? null;
-}
 
 function resolveSystemRenodePath() {
   const command = process.platform === 'win32' ? 'where' : 'which';
@@ -50,15 +49,21 @@ function resolveSystemRenodePath() {
     .find(Boolean) ?? null;
 }
 
-function resolveRenodeRoot() {
+function getRenodeRootCandidates() {
   const systemRenodePath = resolveSystemRenodePath();
   const systemRenodeDir = systemRenodePath ? path.dirname(systemRenodePath) : null;
-  return firstExistingDirectory([
+  return [
     process.env.RENODE_ROOT,
     LOCAL_RENODE_ROOT,
     systemRenodeDir,
     systemRenodeDir ? path.join(systemRenodeDir, 'renode') : null,
-  ]);
+  ].filter(Boolean);
+}
+
+function resolveRenodeRootForPlatform(platformPath) {
+  return getRenodeRootCandidates().find((candidate) => {
+    return fs.existsSync(candidate) && fs.statSync(candidate).isDirectory() && fs.existsSync(path.join(candidate, platformPath));
+  }) ?? null;
 }
 
 function wait(ms) {
@@ -81,9 +86,11 @@ function boardPads(board) {
 }
 
 function assertPlatformPath(board) {
-  const renodeRoot = resolveRenodeRoot();
+  const renodeRoot = resolveRenodeRootForPlatform(board.runtime.renodePlatformPath);
   if (!renodeRoot) {
-    throw new Error('Could not locate Renode platforms. Install Renode on PATH or set RENODE_ROOT to the Renode installation directory.');
+    throw new Error(
+      `Could not locate ${board.runtime.renodePlatformPath}. Install Renode on PATH or set RENODE_ROOT to the Renode installation directory.`
+    );
   }
 
   const platformPath = path.join(renodeRoot, board.runtime.renodePlatformPath);
@@ -142,14 +149,24 @@ async function validateBoard(board, index) {
 
   const { wiring, remap } = buildChangedInterfaceWiring(board, baseExample.project.wiring);
   const pads = boardPads(board);
-  const mainSource = generateDemoMainSource(wiring, board.runtime, pads);
-  const boardRepl = generateBoardRepl(wiring, board.runtime, pads);
-  const manifest = buildPeripheralManifest(wiring, board.runtime, pads);
+  const netlist = createNetlistFromWiring(wiring, board);
+  const netlistErrors = validateNetlist(netlist, board).filter((issue) => issue.severity === 'error');
+  const artifacts = compileNetlistToRenodeArtifacts({ netlist, board });
+  const ruleErrors = validateWiringRules(wiring, pads).filter((issue) => issue.severity === 'error');
+  if (ruleErrors.length > 0) {
+    throw new Error(`${board.name} remapped wiring failed rule validation: ${ruleErrors[0].message}`);
+  }
+  if (netlistErrors.length > 0) {
+    throw new Error(`${board.name} remapped netlist failed validation: ${netlistErrors[0].message}`);
+  }
 
-  if (!boardRepl.includes(`using "${board.runtime.renodePlatformPath}"`)) {
+  if (!artifacts.boardRepl.includes(`using "${board.runtime.renodePlatformPath}"`)) {
     throw new Error(`${board.name} generated board.repl does not reference ${board.runtime.renodePlatformPath}.`);
   }
-  if (!manifest.some((entry) => entry.id === remap.buttonId) || !manifest.some((entry) => entry.id === remap.outputId)) {
+  if (
+    !artifacts.peripheralManifest.some((entry) => entry.id === remap.buttonId) ||
+    !artifacts.peripheralManifest.some((entry) => entry.id === remap.outputId)
+  ) {
     throw new Error(`${board.name} manifest does not include remapped peripherals.`);
   }
 
@@ -176,7 +193,7 @@ async function validateBoard(board, index) {
   });
 
   const compileResult = await runtime.compileFirmware({
-    mainSource,
+    mainSource: artifacts.mainSource,
     startupSource: DEFAULT_STARTUP_SOURCE,
     linkerScript: board.runtime.compiler.linkerScript,
     linkerFileName: board.runtime.compiler.linkerFileName,
@@ -195,11 +212,12 @@ async function validateBoard(board, index) {
     const startResult = await runtime.startSimulation({
       workspaceDir: compileResult.workspaceDir,
       elfPath: compileResult.elfPath,
-      boardRepl,
-      peripheralManifest: manifest,
+      boardRepl: artifacts.boardRepl,
+      peripheralManifest: artifacts.peripheralManifest,
       bridgePort,
       gdbPort,
       machineName: board.machineName,
+      uartPeripheralName: board.runtime.uart?.peripheralName ?? null,
     });
 
     if (!startResult.success) {

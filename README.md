@@ -9,6 +9,7 @@ It keeps the visual workflow from the original prototype, but moves execution in
 - pin-level placement on the selected board's connector layout
 - drag-in peripheral templates, wire-stub-to-pad gestures, and selectable wires on the main canvas
 - local project save/load as `.renode-wokwi.json`
+- project schema v2 with a unified Netlist/IR plus component package catalog metadata
 - bundled example projects that can be opened from the control panel
 - auto-generated Renode `.repl` and `.resc`
 - local ARM GCC compilation
@@ -29,7 +30,8 @@ The current MVP has one validated Renode-backed board plus two Renode-verified e
 - board top view with a more Wokwi-like workbench area, live hotspots, grouped multi-endpoint devices, and pad highlights
 - board schema abstraction for board metadata, visual frames, curated pins, compiler settings, linker scripts, GPIO register model, and Renode platform path
 - board-aware generated `main.c`, `board.repl`, `.resc`, compiler args, and bundled example projects
-- first project document schema for wiring, workbench layout, code mode, and template catalog metadata
+- project document schema v2 for wiring, Netlist/IR, workbench layout, code mode, and component package metadata
+- component package catalog for `Button`, `LED`, `Buzzer`, and grouped `RGB LED` pin/capability definitions
 - local `arm-none-eabi-gcc` compilation with generated startup and linker files
 - local Renode launch through the bundled `renode/renode/renode.exe` when present
 - GDB server enabled on port `3333`
@@ -99,12 +101,14 @@ The desktop shell can save and load local `.renode-wokwi.json` files. A saved pr
 - board identity for the selected board profile
 - the external peripheral wiring graph
 - explicit `wiring.wires[]` entries for each GPIO connection, derived from the endpoint-to-pad assignment
+- a unified `netlist` IR with board component, package-backed component instances, GPIO nets, and endpoint-to-pad references
+- `componentPackages` catalog metadata so future packages can be versioned independently from project files
 - Wokwi-like workbench card positions
 - collapsed/full pinout view state
 - generated/manual source mode and manual `main.c` content
 - a template catalog version and the template kinds used by this build
 
-The schema is intentionally small for now so future board templates and richer external devices can evolve without changing the Renode runtime pipeline.
+The schema keeps the legacy `wiring` field for compatibility, but the Renode generation path now compiles through `src/lib/netlist.ts`. That gives future board templates and richer external devices one stable IR instead of letting UI state leak directly into `.repl` generation.
 
 ## Bundled Examples
 
@@ -139,6 +143,14 @@ npm run validate:boards
 
 This checks each board's referenced Renode platform file, remaps the bundled button-to-LED example onto alternate selectable pins, regenerates `main.c` and `board.repl`, compiles with that board's GCC/linker settings, launches Renode, presses the remapped button through ExternalControl, and waits for the remapped LED on/off events.
 
+To validate the schema compiler without launching Renode, run:
+
+```bash
+npm run validate:netlist
+```
+
+This checks the component package catalog, normalizes all bundled examples to project schema v2, round-trips `netlist -> wiring`, and verifies that Netlist/IR can emit `main.c`, `board.repl`, `.resc` preview, and the Renode peripheral manifest.
+
 ## Build
 
 ```bash
@@ -171,8 +183,13 @@ npm run start
   - compile/run controls
   - live status/log rendering
 - `src/lib/project.ts`
-  - `.renode-wokwi.json` project document schema
+  - `.renode-wokwi.json` project document schema v2
   - project load normalization and forward-compatible warning collection
+- `src/lib/component-packs.ts`
+  - versioned component package catalog with pins, capabilities, visual metadata, and Renode GPIO runtime binding
+- `src/lib/netlist.ts`
+  - unified Netlist/IR schema
+  - compiler from wiring to Netlist/IR, Netlist validation, Netlist round-trip, and Renode artifact generation
 - `src/lib/examples.ts`
   - board-specific bundled project catalog used by the control-panel example opener
 - `src/lib/firmware.ts`
@@ -194,8 +211,10 @@ npm run start
 - placed wires are selectable, can be deleted, and can be put back into rewire mode from the board canvas
 - grouped devices such as `RGB LED` share one workbench card while still exposing multiple GPIO endpoints
 - projects can be saved and loaded locally as `.renode-wokwi.json`
-- project loading now normalizes compatible files and reports schema/pad/reference warnings in the log
+- project loading now normalizes compatible files, upgrades them into project schema v2, and reports schema/pad/reference warnings in the log
 - bundled examples can be opened from the control panel and mirrored as project files under `examples/`
+- `wiring` now compiles into a unified Netlist/IR before emitting Renode files and generated firmware
+- `npm run validate:netlist` validates component packages, Netlist round-trips, examples, and Renode artifacts
 - button presses go through Renode external control
 - LED state is polled back from Renode and updates the board view
 - `npm run smoke` validates compile -> simulate -> interact -> debug end to end
@@ -205,6 +224,6 @@ npm run start
 
 - more exact board artwork polish and richer silkscreen detail
 - expand the STM32F1/F4 board profiles from GPIO teaching coverage toward richer board-specific peripherals and hardware examples
-- explicit project schema migrations when v2 fields are introduced
-- UART terminal and waveform panels
+- explicit project schema migrations when v3 fields are introduced
+- waveform panels and richer virtual instruments
 - richer device libraries

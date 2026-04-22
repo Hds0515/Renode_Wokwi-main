@@ -34,19 +34,19 @@ import {
   DemoPeripheral,
   DemoPeripheralKind,
   DemoPeripheralTemplateKind,
+  DemoWiringRuleIssue,
   DemoWire,
   DemoWorkbenchDevice,
   DemoWiring,
-  buildPeripheralManifest,
   buildWorkbenchDevices,
   countPeripheralTemplateInstances,
   createPeripheralTemplate,
   describePad,
-  generateBoardRepl,
-  generateDemoMainSource,
-  generateRescPreview,
+  formatPadCapabilities,
   getConnectedPeripherals,
+  getPadCapabilities,
   getPeripheralsByKind,
+  getPeripheralEndpointDefinition,
   getPeripheralTemplateDefinition,
   getPeripheralTemplateKind,
   getWiringWires,
@@ -54,8 +54,17 @@ import {
   isDemoPeripheralTemplateKind,
   resolveSelectablePad,
   synchronizeWiringWires,
+  validateWiringRules,
 } from './lib/firmware';
 import { ACTIVE_BOARD_SCHEMA, BOARD_SCHEMAS, BoardSchema, getBoardSchema } from './lib/boards';
+import { COMPONENT_PACKAGE_CATALOG_VERSION, getComponentPackage } from './lib/component-packs';
+import {
+  CircuitNetlistIssue,
+  compileNetlistToRenodeArtifacts,
+  createNetlistFromWiring,
+  summarizeNetlist,
+  validateNetlist,
+} from './lib/netlist';
 import {
   ProjectDocument,
   createProjectDocument,
@@ -94,9 +103,11 @@ type RuntimeLog = {
 type SimulationState = {
   running: boolean;
   bridgeConnected: boolean;
+  uartConnected: boolean;
   workspaceDir: string | null;
   gdbPort: number;
   bridgePort: number;
+  uartPort: number | null;
 };
 
 type DebugFrame = {
@@ -115,6 +126,7 @@ type DebugState = {
 };
 
 type CodeMode = 'generated' | 'manual';
+type EditorTab = 'code' | 'repl' | 'resc' | 'uart';
 type PeripheralPosition = {
   x: number;
   y: number;
@@ -366,6 +378,19 @@ function findPeripheralForPad(wiring: DemoWiring, padId: string): DemoPeripheral
   return wiring.peripherals.find((peripheral) => peripheral.padId === padId) ?? null;
 }
 
+function getRuleIssueTone(issue: Pick<DemoWiringRuleIssue | CircuitNetlistIssue, 'severity'>): string {
+  return issue.severity === 'error'
+    ? 'border-rose-500/35 bg-rose-500/10 text-rose-200'
+    : 'border-amber-500/35 bg-amber-500/10 text-amber-200';
+}
+
+function getTemplateRequirementSummary(templateKind: DemoPeripheralTemplateKind): string {
+  const componentPackage = getComponentPackage(templateKind);
+  return componentPackage.pins
+    .map((pin) => `${pin.label}: ${pin.requiredPadCapabilities.join(' + ')}`)
+    .join(' / ');
+}
+
 function getPeripheralDisplayTone(
   peripheral: DemoPeripheral,
   armedPeripheralId: string | null,
@@ -534,6 +559,11 @@ function BoardPadChip({
       <div className={`mt-2 ${compact ? 'text-[11px]' : 'text-xs'} text-current/80`}>
         {pad.mcuPinId || pad.signalName}
       </div>
+      {pad.selectable ? (
+        <div className="mt-1 text-[10px] uppercase tracking-[0.16em] text-current/60">
+          {formatPadCapabilities(getPadCapabilities(pad))}
+        </div>
+      ) : null}
       {pad.note ? <div className="mt-1 text-[11px] text-current/65">{pad.note}</div> : null}
       {!pad.note && pad.blockedReason ? <div className="mt-1 text-[11px] text-current/65">{pad.blockedReason}</div> : null}
     </button>
@@ -1022,6 +1052,10 @@ function PeripheralLibraryCard({
 
       <div className="mt-4 rounded-2xl border border-current/15 bg-black/10 px-3 py-2 text-[11px] text-current/75">
         Drag this part into the workbench, or click below to spawn one instantly.
+      </div>
+
+      <div className="mt-2 rounded-2xl border border-current/15 bg-black/10 px-3 py-2 text-[10px] uppercase tracking-[0.16em] text-current/65">
+        Needs {getTemplateRequirementSummary(kind)}
       </div>
 
       <button
@@ -2421,7 +2455,7 @@ function WiringWorkbench({
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'code' | 'repl' | 'resc'>('code');
+  const [activeTab, setActiveTab] = useState<EditorTab>('code');
   const [selectedBoardId, setSelectedBoardId] = useState(DEFAULT_BOARD.id);
   const [tooling, setTooling] = useState<ToolingReport | null>(null);
   const [logs, setLogs] = useState<RuntimeLog[]>([
@@ -2434,14 +2468,18 @@ export default function App() {
   const [simulation, setSimulation] = useState<SimulationState>({
     running: false,
     bridgeConnected: false,
+    uartConnected: false,
     workspaceDir: null,
     gdbPort: DEFAULT_GDB_PORT,
     bridgePort: DEFAULT_BRIDGE_PORT,
+    uartPort: null,
   });
   const [buttonStates, setButtonStates] = useState<Record<string, boolean>>({});
   const [ledStates, setLedStates] = useState<Record<string, boolean>>({});
   const [codeMode, setCodeMode] = useState<CodeMode>('generated');
   const [code, setCode] = useState(DEFAULT_MAIN_SOURCE);
+  const [uartTranscript, setUartTranscript] = useState('UART terminal idle. Start Renode to attach the board UART socket.\n');
+  const [uartInput, setUartInput] = useState('');
   const [codeDirty, setCodeDirty] = useState(true);
   const [projectFilePath, setProjectFilePath] = useState<string | null>(null);
   const [projectTitle, setProjectTitle] = useState<string | null>(null);
@@ -2470,18 +2508,35 @@ export default function App() {
   const connectedButtons = useMemo(() => getConnectedPeripherals(wiring, 'button'), [wiring]);
   const connectedLeds = useMemo(() => getConnectedPeripherals(wiring, 'led'), [wiring]);
   const workbenchDevices = useMemo(() => buildWorkbenchDevices(wiring), [wiring]);
-  const generatedCode = useMemo(() => generateDemoMainSource(wiring, selectedBoard.runtime, selectedBoardPads), [selectedBoard.runtime, selectedBoardPads, wiring]);
-  const boardRepl = useMemo(() => generateBoardRepl(wiring, selectedBoard.runtime, selectedBoardPads), [selectedBoard.runtime, selectedBoardPads, wiring]);
-  const peripheralManifest = useMemo(
-    () => buildPeripheralManifest(wiring, selectedBoard.runtime, selectedBoardPads),
-    [selectedBoard.runtime, selectedBoardPads, wiring]
+  const circuitNetlist = useMemo(() => createNetlistFromWiring(wiring, selectedBoard), [selectedBoard, wiring]);
+  const netlistSummary = useMemo(() => summarizeNetlist(circuitNetlist), [circuitNetlist]);
+  const renodeArtifacts = useMemo(
+    () =>
+      compileNetlistToRenodeArtifacts({
+        netlist: circuitNetlist,
+        board: selectedBoard,
+        elfPath: buildResult?.elfPath ?? null,
+        gdbPort: simulation.gdbPort,
+        bridgePort: simulation.bridgePort,
+        uartPort: simulation.uartPort,
+      }),
+    [buildResult?.elfPath, circuitNetlist, selectedBoard, simulation.bridgePort, simulation.gdbPort, simulation.uartPort]
   );
-  const rescPreview = generateRescPreview({
-    elfPath: buildResult?.elfPath ?? null,
-    gdbPort: simulation.gdbPort,
-    bridgePort: simulation.bridgePort,
-    machineName: selectedBoard.machineName,
-  });
+  const generatedCode = renodeArtifacts.mainSource;
+  const boardRepl = renodeArtifacts.boardRepl;
+  const peripheralManifest = renodeArtifacts.peripheralManifest;
+  const wiringRuleIssues = useMemo(() => validateWiringRules(wiring, selectedBoardPads), [selectedBoardPads, wiring]);
+  const wiringRuleErrors = useMemo(() => wiringRuleIssues.filter((issue) => issue.severity === 'error'), [wiringRuleIssues]);
+  const wiringRuleWarnings = useMemo(() => wiringRuleIssues.filter((issue) => issue.severity === 'warning'), [wiringRuleIssues]);
+  const netlistIssues = useMemo(() => validateNetlist(circuitNetlist, selectedBoard), [circuitNetlist, selectedBoard]);
+  const netlistErrors = useMemo(() => netlistIssues.filter((issue) => issue.severity === 'error'), [netlistIssues]);
+  const netlistWarnings = useMemo(() => netlistIssues.filter((issue) => issue.severity === 'warning'), [netlistIssues]);
+  const blockingValidationErrors = useMemo(
+    () => [...wiringRuleErrors, ...netlistErrors],
+    [netlistErrors, wiringRuleErrors]
+  );
+  const uartPeripheralName = selectedBoard.runtime.uart?.peripheralName ?? null;
+  const rescPreview = renodeArtifacts.rescPreview;
   const projectDisplayName = projectFilePath?.split(/[\\/]/).pop() ?? projectTitle ?? 'Untitled project';
   const boardExamples = useMemo(() => getExamplesForBoard(selectedBoard.id), [selectedBoard.id]);
   const selectedExample = useMemo(() => getExampleProject(selectedExampleId, selectedBoard.id), [selectedBoard.id, selectedExampleId]);
@@ -2529,6 +2584,7 @@ export default function App() {
       setArmedPeripheralId(null);
       setButtonStates({});
       setLedStates({});
+      setUartTranscript(`UART terminal idle. ${nextBoard.runtime.uart?.displayName ?? 'No board UART'} socket will attach when Renode starts.\n`);
       setProjectTitle(null);
       setProjectDirty(true);
       resetDebugState('Board changed. Debugger idle.');
@@ -2542,11 +2598,13 @@ export default function App() {
       ...current,
       running,
       bridgeConnected: running ? current.bridgeConnected : false,
+      uartConnected: running ? current.uartConnected : false,
     }));
 
     if (!running) {
       setButtonStates({});
       setLedStates({});
+      setUartTranscript((current) => current + '\n[system] Simulation stopped.\n');
     }
   }, []);
 
@@ -2682,6 +2740,24 @@ export default function App() {
         return;
       }
 
+      if (event.type === 'uart') {
+        if (event.status === 'connected' || event.status === 'disconnected' || event.status === 'error') {
+          setSimulation((current) => ({
+            ...current,
+            uartConnected: event.status === 'connected',
+            uartPort: event.port ?? current.uartPort,
+          }));
+        }
+        const data =
+          event.stream === 'system'
+            ? `[system] ${event.data ?? ''}`
+            : event.stream === 'tx'
+              ? `[tx] ${event.data ?? ''}`
+              : event.data ?? '';
+        setUartTranscript((current) => `${current}${data}`.slice(-24000));
+        return;
+      }
+
       if (event.type === 'debug') {
         if (event.stream === 'stderr') {
           appendLog(`[GDB] ${event.message}`, 'error');
@@ -2751,10 +2827,15 @@ export default function App() {
   const applyProjectDocumentToWorkspace = useCallback(
     (project: ProjectDocument, options: { filePath?: string | null; title?: string | null; dirty?: boolean; logMessage: string }) => {
       const projectBoard = getBoardSchema(project.board.id);
-      const projectBoardPads = getBoardPads(projectBoard);
       const nextCode =
         project.code.mode === 'generated'
-          ? generateDemoMainSource(project.wiring, projectBoard.runtime, projectBoardPads)
+          ? compileNetlistToRenodeArtifacts({
+              netlist: project.netlist,
+              board: projectBoard,
+              gdbPort: simulation.gdbPort,
+              bridgePort: simulation.bridgePort,
+              uartPort: simulation.uartPort,
+            }).mainSource
           : project.code.mainSource;
 
       suppressNextProjectDirtyRef.current = true;
@@ -2947,9 +3028,10 @@ export default function App() {
       if (!peripheral) {
         return;
       }
+      const endpoint = getPeripheralEndpointDefinition(peripheral);
 
-      setWiring((current) => ({
-        peripherals: current.peripherals.map((item) =>
+      const proposedWiring = {
+        peripherals: wiring.peripherals.map((item) =>
           item.id === peripheralId
             ? {
                 ...item,
@@ -2957,11 +3039,20 @@ export default function App() {
               }
             : item
         ),
-      }));
+      };
+      const blockingIssue = validateWiringRules(proposedWiring, selectedBoardPads).find(
+        (issue) => issue.severity === 'error' && (issue.peripheralId === peripheralId || issue.padId === pad.id)
+      );
+      if (blockingIssue) {
+        appendLog(blockingIssue.message, 'warn');
+        return;
+      }
+
+      setWiring(proposedWiring);
       setArmedPeripheralId((current) => (current === peripheralId ? null : current));
-      appendLog(`Wired ${peripheral.label} to ${describePad(pad)}.`);
+      appendLog(`Wired ${peripheral.label} ${endpoint.label} to ${describePad(pad)}.`);
     },
-    [appendLog, simulation.running, wiring]
+    [appendLog, selectedBoardPads, simulation.running, wiring]
   );
 
   const assignPeripheralToPad = useCallback(
@@ -3136,6 +3227,32 @@ export default function App() {
     [appendLog, simulation.running]
   );
 
+  const sendUartText = useCallback(
+    async (lineMode = false) => {
+      if (!window.localWokwi) {
+        appendLog('Electron preload API is unavailable.', 'warn');
+        return;
+      }
+      if (!simulation.running || !simulation.uartConnected) {
+        appendLog('Start the simulation and wait for the UART terminal to connect before sending text.', 'warn');
+        return;
+      }
+
+      const payload = lineMode ? `${uartInput}\r\n` : uartInput;
+      if (!payload) {
+        return;
+      }
+
+      const result = await window.localWokwi.sendUartData({ data: payload });
+      if (!result.success) {
+        appendLog(result.message ?? 'Failed to send UART data.', 'error');
+        return;
+      }
+      setUartInput('');
+    },
+    [appendLog, simulation.running, simulation.uartConnected, uartInput]
+  );
+
   const useGeneratedDemoCode = useCallback(() => {
     setCode(generatedCode);
     setCodeMode('generated');
@@ -3146,6 +3263,11 @@ export default function App() {
   const compileFirmware = useCallback(async () => {
     if (!window.localWokwi) {
       appendLog('Electron preload API is unavailable.', 'warn');
+      return null;
+    }
+
+    if (blockingValidationErrors.length > 0) {
+      appendLog(`Fix validation issues before compiling: ${blockingValidationErrors[0].message}`, 'error');
       return null;
     }
 
@@ -3206,6 +3328,7 @@ export default function App() {
     selectedBoard.runtime.compiler.gccArgs,
     selectedBoard.runtime.compiler.linkerFileName,
     selectedBoard.runtime.compiler.linkerScript,
+    blockingValidationErrors,
   ]);
 
   const startSimulation = useCallback(async () => {
@@ -3216,6 +3339,11 @@ export default function App() {
 
     if (peripheralManifest.length === 0) {
       appendLog('Connect at least one external peripheral before starting Renode.', 'warn');
+      return;
+    }
+
+    if (blockingValidationErrors.length > 0) {
+      appendLog(`Fix validation issues before starting Renode: ${blockingValidationErrors[0].message}`, 'error');
       return;
     }
 
@@ -3239,6 +3367,7 @@ export default function App() {
       bridgePort: simulation.bridgePort,
       gdbPort: simulation.gdbPort,
       machineName: selectedBoard.machineName,
+      uartPeripheralName,
     });
 
     if (!result.success) {
@@ -3252,11 +3381,29 @@ export default function App() {
       workspaceDir: result.workspaceDir ?? current.workspaceDir,
       bridgePort: result.bridgePort ?? current.bridgePort,
       gdbPort: result.gdbPort ?? current.gdbPort,
+      uartPort: result.uartPort ?? current.uartPort,
+      uartConnected: result.uartReady ?? current.uartConnected,
     }));
     setButtonStates({});
     setLedStates({});
+    setUartTranscript(
+      `UART terminal starting for ${selectedBoard.runtime.uart?.displayName ?? uartPeripheralName ?? 'board UART'} (${uartPeripheralName ?? 'none'}).\n`
+    );
     appendLog('Renode launched. Use the peripheral rack buttons to drive the wired outputs.');
-  }, [appendLog, boardRepl, buildResult, codeDirty, compileFirmware, peripheralManifest, selectedBoard.machineName, simulation.bridgePort, simulation.gdbPort]);
+  }, [
+    appendLog,
+    boardRepl,
+    buildResult,
+    codeDirty,
+    compileFirmware,
+    peripheralManifest,
+    selectedBoard.machineName,
+    selectedBoard.runtime.uart?.displayName,
+    simulation.bridgePort,
+    simulation.gdbPort,
+    uartPeripheralName,
+    blockingValidationErrors,
+  ]);
 
   const stopSimulation = useCallback(async () => {
     if (!window.localWokwi) {
@@ -3266,7 +3413,7 @@ export default function App() {
     setRunningVisualState(false);
     resetDebugState('Simulation stopped.');
     appendLog('Simulation stop requested.');
-  }, [appendLog, resetDebugState, setRunningVisualState]);
+  }, [appendLog, resetDebugState, setRunningVisualState, simulation.bridgePort, simulation.gdbPort, simulation.uartPort]);
 
   const startDebugger = useCallback(async () => {
     if (!window.localWokwi || !buildResult?.elfPath) {
@@ -3344,7 +3491,10 @@ export default function App() {
               <StatusPill active={Boolean(buildResult?.success)} label="ELF ready" />
               <StatusPill active={simulation.running} label="Renode running" />
               <StatusPill active={simulation.bridgeConnected} label="Bridge online" />
+              <StatusPill active={simulation.uartConnected} label="UART online" />
               <StatusPill active={debugState.connected} label="Debugger attached" />
+              <StatusPill active={wiringRuleErrors.length === 0} label="Pin rules OK" />
+              <StatusPill active={netlistErrors.length === 0} label="Netlist OK" />
             </div>
 
             <div className="mt-4 grid gap-3 rounded-[28px] border border-slate-800 bg-slate-950/70 p-4 lg:grid-cols-[minmax(0,1fr)_260px]">
@@ -3414,9 +3564,9 @@ export default function App() {
               <div className="flex gap-2">
                 <button
                   onClick={() => void compileFirmware()}
-                  disabled={isCompiling || simulation.running}
+                  disabled={isCompiling || simulation.running || blockingValidationErrors.length > 0}
                   className={`inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-sm font-medium transition ${
-                    isCompiling || simulation.running
+                    isCompiling || simulation.running || blockingValidationErrors.length > 0
                       ? 'cursor-not-allowed bg-slate-800 text-slate-500'
                       : 'bg-cyan-500 text-slate-950 shadow-lg shadow-cyan-500/20 hover:bg-cyan-400'
                   }`}
@@ -3436,9 +3586,9 @@ export default function App() {
                 ) : (
                   <button
                     onClick={() => void startSimulation()}
-                    disabled={isCompiling}
+                    disabled={isCompiling || blockingValidationErrors.length > 0}
                     className={`inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-sm font-medium transition ${
-                      isCompiling
+                      isCompiling || blockingValidationErrors.length > 0
                         ? 'cursor-not-allowed bg-slate-800 text-slate-500'
                         : 'bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/20 hover:bg-emerald-400'
                     }`}
@@ -3542,6 +3692,91 @@ export default function App() {
               </div>
             </div>
 
+            <div className="mt-4 rounded-3xl border border-slate-800 bg-slate-900/70 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Pin Rule Check</div>
+                  <div className="mt-1 text-sm text-slate-300">
+                    {wiringRuleErrors.length === 0
+                      ? 'Every wired endpoint matches the selected board pad capabilities.'
+                      : `${wiringRuleErrors.length} blocking issue(s) must be fixed before compile/start.`}
+                  </div>
+                </div>
+                <div className="flex shrink-0 gap-2 text-[10px] font-semibold uppercase tracking-[0.18em]">
+                  <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-rose-200">
+                    {wiringRuleErrors.length} errors
+                  </span>
+                  <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">
+                    {wiringRuleWarnings.length} warnings
+                  </span>
+                </div>
+              </div>
+
+              <div className="mt-3 grid gap-2">
+                {wiringRuleIssues.length === 0 ? (
+                  <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+                    Schema validation passed: GPIO inputs go to digital input-capable pads, outputs go to digital output-capable pads, and no pad is shared.
+                  </div>
+                ) : (
+                  wiringRuleIssues.slice(0, 4).map((issue) => (
+                    <div key={issue.id} className={`rounded-2xl border px-3 py-2 text-xs ${getRuleIssueTone(issue)}`}>
+                      {issue.message}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-3xl border border-slate-800 bg-slate-900/70 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Netlist / IR</div>
+                  <div className="mt-1 text-sm text-slate-300">
+                    {netlistErrors.length === 0
+                      ? 'Unified circuit IR is ready for Renode artifact generation.'
+                      : `${netlistErrors.length} IR issue(s) block Renode generation.`}
+                  </div>
+                </div>
+                <div className="flex shrink-0 gap-2 text-[10px] font-semibold uppercase tracking-[0.18em]">
+                  <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-cyan-200">
+                    pkg v{COMPONENT_PACKAGE_CATALOG_VERSION}
+                  </span>
+                  <span className="rounded-full border border-slate-700 bg-slate-950 px-2 py-1 text-slate-300">
+                    {netlistWarnings.length} warnings
+                  </span>
+                </div>
+              </div>
+
+              <div className="mt-3 grid grid-cols-3 gap-2 text-xs text-slate-300">
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Components</div>
+                  <div className="mt-1 font-semibold text-white">{netlistSummary.packageComponentCount}</div>
+                </div>
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Nets</div>
+                  <div className="mt-1 font-semibold text-white">{netlistSummary.netCount}</div>
+                </div>
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Edges</div>
+                  <div className="mt-1 font-semibold text-white">{netlistSummary.connectionCount}</div>
+                </div>
+              </div>
+
+              <div className="mt-3 grid gap-2">
+                {netlistIssues.length === 0 ? (
+                  <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+                    IR validation passed: component packages, board pads, GPIO nets, and Renode compile artifacts are aligned.
+                  </div>
+                ) : (
+                  netlistIssues.slice(0, 4).map((issue) => (
+                    <div key={issue.id} className={`rounded-2xl border px-3 py-2 text-xs ${getRuleIssueTone(issue)}`}>
+                      {issue.message}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
             <div className="mt-4 grid gap-2 text-sm text-slate-300">
               <div className="rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2">
                 <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Build artifact</div>
@@ -3563,6 +3798,14 @@ export default function App() {
                 <div className="rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2">
                   <div className="text-xs uppercase tracking-[0.24em] text-slate-500">GDB port</div>
                   <div className="mt-1">{simulation.gdbPort}</div>
+                </div>
+              </div>
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2">
+                <div className="text-xs uppercase tracking-[0.24em] text-slate-500">UART terminal</div>
+                <div className="mt-1">
+                  {selectedBoard.runtime.uart
+                    ? `${selectedBoard.runtime.uart.displayName} via Renode ${selectedBoard.runtime.uart.peripheralName}${simulation.uartPort ? ` on socket ${simulation.uartPort}` : ''}`
+                    : 'No UART socket terminal configured for this board'}
                 </div>
               </div>
             </div>
@@ -3704,6 +3947,17 @@ export default function App() {
                   <Code2 size={14} />
                   run.resc
                 </button>
+                <button
+                  onClick={() => setActiveTab('uart')}
+                  className={`inline-flex items-center gap-2 rounded-t-2xl px-4 py-2 text-xs font-mono ${
+                    activeTab === 'uart'
+                      ? 'border-x border-t border-slate-800 bg-[#181d28] text-fuchsia-300'
+                      : 'text-slate-500 hover:text-slate-300'
+                  }`}
+                >
+                  <Terminal size={14} />
+                  UART
+                </button>
               </div>
 
               <div className="mb-1 flex items-center gap-2 pr-2 text-xs text-slate-500">
@@ -3771,7 +4025,7 @@ export default function App() {
                     padding: { top: 16 },
                   }}
                 />
-              ) : (
+              ) : activeTab === 'resc' ? (
                 <Editor
                   height="100%"
                   defaultLanguage="plaintext"
@@ -3785,6 +4039,57 @@ export default function App() {
                     padding: { top: 16 },
                   }}
                 />
+              ) : (
+                <div className="flex h-full flex-col bg-[#070b12] font-mono text-xs leading-5 text-fuchsia-100">
+                  <div className="mb-3 flex items-center justify-between gap-3 border-b border-slate-800 pb-3 text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                    <span className="px-4 pt-4">
+                      {selectedBoard.runtime.uart
+                        ? `${selectedBoard.runtime.uart.displayName} (${selectedBoard.runtime.uart.peripheralName}) socket${simulation.uartPort ? `:${simulation.uartPort}` : ''}`
+                        : 'UART terminal'}
+                    </span>
+                    <button
+                      onClick={() => setUartTranscript('UART terminal cleared.\n')}
+                      className="mr-4 mt-4 rounded-full border border-slate-700 px-3 py-1 text-slate-300 transition hover:border-slate-500 hover:text-white"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words px-4 pb-4">{uartTranscript}</pre>
+                  <div className="border-t border-slate-800 bg-slate-950/80 p-3">
+                    <div className="mb-2 text-[10px] uppercase tracking-[0.2em] text-slate-500">
+                      {simulation.uartConnected ? 'UART connected, input is sent to MCU RX' : 'UART input waits for simulation'}
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+                      <input
+                        value={uartInput}
+                        onChange={(event) => setUartInput(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            void sendUartText(true);
+                          }
+                        }}
+                        disabled={!simulation.running || !simulation.uartConnected}
+                        placeholder="Type text to send over UART..."
+                        className="min-w-0 rounded-2xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-fuchsia-50 outline-none transition placeholder:text-slate-600 focus:border-fuchsia-400 disabled:cursor-not-allowed disabled:text-slate-500"
+                      />
+                      <button
+                        onClick={() => void sendUartText(false)}
+                        disabled={!simulation.running || !simulation.uartConnected || !uartInput}
+                        className="rounded-2xl border border-fuchsia-500/40 bg-fuchsia-500/10 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-fuchsia-100 transition hover:bg-fuchsia-500/20 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900 disabled:text-slate-600"
+                      >
+                        Send
+                      </button>
+                      <button
+                        onClick={() => void sendUartText(true)}
+                        disabled={!simulation.running || !simulation.uartConnected || !uartInput}
+                        className="rounded-2xl border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100 transition hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900 disabled:text-slate-600"
+                      >
+                        Send Line
+                      </button>
+                    </div>
+                  </div>
+                </div>
               )}
             </div>
           </div>

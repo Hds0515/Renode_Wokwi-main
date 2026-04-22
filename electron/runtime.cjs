@@ -133,6 +133,14 @@ function createRuntimeService(options = {}) {
     debugBuffer: '',
     debugSequence: 1,
     activeWorkspaceDir: null,
+    uartSocket: null,
+    uartCapture: {
+      enabled: false,
+      connected: false,
+      peripheralName: null,
+      port: null,
+      buffer: '',
+    },
   };
 
   function emit(payload) {
@@ -147,6 +155,38 @@ function createRuntimeService(options = {}) {
       type: 'log',
       level,
       message,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  function emitUart(data, stream = 'rx', status = 'data') {
+    if (!state.uartCapture.enabled || !data) {
+      return;
+    }
+
+    emit({
+      type: 'uart',
+      stream,
+      status,
+      peripheralName: state.uartCapture.peripheralName,
+      port: state.uartCapture.port,
+      data,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  function emitUartStatus(status, data = '') {
+    if (!state.uartCapture.enabled) {
+      return;
+    }
+
+    emit({
+      type: 'uart',
+      stream: 'system',
+      status,
+      peripheralName: state.uartCapture.peripheralName,
+      port: state.uartCapture.port,
+      data,
       timestamp: new Date().toISOString(),
     });
   }
@@ -377,16 +417,107 @@ function createRuntimeService(options = {}) {
     state.debugBuffer = '';
   }
 
+  function closeUartTerminal() {
+    if (state.uartSocket) {
+      try {
+        state.uartSocket.destroy();
+      } catch {
+        // ignore shutdown failures
+      }
+      state.uartSocket = null;
+    }
+
+    if (state.uartCapture.enabled && state.uartCapture.connected) {
+      emitUartStatus('disconnected', 'UART terminal disconnected.\n');
+    }
+
+    state.uartCapture = {
+      enabled: false,
+      connected: false,
+      peripheralName: null,
+      port: null,
+      buffer: '',
+    };
+  }
+
+  function connectSocketOnce(port) {
+    return new Promise((resolve, reject) => {
+      const socket = net.createConnection({ host: '127.0.0.1', port });
+      const handleError = (error) => {
+        socket.destroy();
+        reject(error);
+      };
+
+      socket.once('error', handleError);
+      socket.once('connect', () => {
+        socket.off('error', handleError);
+        resolve(socket);
+      });
+    });
+  }
+
+  async function connectUartTerminal(port, peripheralName) {
+    if (!port || !peripheralName) {
+      return false;
+    }
+
+    state.uartCapture = {
+      enabled: true,
+      connected: false,
+      peripheralName,
+      port,
+      buffer: '',
+    };
+    emitUartStatus('connecting', `Waiting for UART terminal ${peripheralName} on port ${port}...\n`);
+
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      try {
+        const socket = await connectSocketOnce(port);
+        state.uartSocket = socket;
+        state.uartCapture.connected = true;
+
+        socket.on('data', (chunk) => {
+          emitUart(chunk.toString('utf8'), 'rx', 'data');
+        });
+        socket.on('error', (error) => {
+          log(`UART terminal socket error: ${String(error)}`, 'warn');
+          emitUartStatus('error', `UART socket error: ${String(error)}\n`);
+        });
+        socket.on('close', () => {
+          if (state.uartSocket === socket) {
+            state.uartSocket = null;
+            state.uartCapture.connected = false;
+            emitUartStatus('disconnected', 'UART terminal socket closed.\n');
+          }
+        });
+
+        emitUartStatus('connected', `UART terminal connected to ${peripheralName} on port ${port}.\n`);
+        log(`UART terminal connected to ${peripheralName} on port ${port}.`);
+        return true;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+
+    emitUartStatus('error', `UART terminal ${peripheralName} did not open on port ${port}.\n`);
+    log(`UART terminal ${peripheralName} did not open on port ${port}.`, 'warn');
+    return false;
+  }
+
   function attachRenodeProcessHandlers(child) {
     child.stdout.on('data', (chunk) => {
-      const message = chunk.toString().trimEnd();
+      const rawMessage = chunk.toString();
+      captureUartAnalyzerOutput(rawMessage, 'stdout');
+      const message = rawMessage.trimEnd();
       if (message) {
         log(message);
       }
     });
 
     child.stderr.on('data', (chunk) => {
-      const message = chunk.toString().trimEnd();
+      const rawMessage = chunk.toString();
+      captureUartAnalyzerOutput(rawMessage, 'stderr');
+      const message = rawMessage.trimEnd();
       if (message) {
         log(message, 'error');
       }
@@ -395,6 +526,7 @@ function createRuntimeService(options = {}) {
     child.on('close', (code) => {
       closeBridgeSession();
       stopDebuggingInternal();
+      closeUartTerminal();
       state.renodeProcess = null;
       emit({
         type: 'simulation',
@@ -408,6 +540,7 @@ function createRuntimeService(options = {}) {
   function stopSimulationInternal() {
     closeBridgeSession();
     stopDebuggingInternal();
+    closeUartTerminal();
 
     if (state.renodeProcess) {
       try {
@@ -416,6 +549,34 @@ function createRuntimeService(options = {}) {
         // ignore already-exited child
       }
       state.renodeProcess = null;
+    }
+  }
+
+  function captureUartAnalyzerOutput(rawMessage, stream) {
+    if (!state.uartCapture.enabled || !state.uartCapture.peripheralName) {
+      return;
+    }
+
+    state.uartCapture.buffer += rawMessage;
+    let newlineIndex = state.uartCapture.buffer.indexOf('\n');
+    const peripheralName = String(state.uartCapture.peripheralName).toLowerCase();
+
+    while (newlineIndex >= 0) {
+      const line = state.uartCapture.buffer.slice(0, newlineIndex).replace(/\r$/, '');
+      state.uartCapture.buffer = state.uartCapture.buffer.slice(newlineIndex + 1);
+      const normalizedLine = line.toLowerCase();
+
+      if (
+        normalizedLine.includes(peripheralName) &&
+        (normalizedLine.includes('uart') ||
+          normalizedLine.includes('usart') ||
+          normalizedLine.includes('analyzer') ||
+          normalizedLine.includes('char'))
+      ) {
+        emitUart(`${line}\n`, stream);
+      }
+
+      newlineIndex = state.uartCapture.buffer.indexOf('\n');
     }
   }
 
@@ -529,6 +690,11 @@ function createRuntimeService(options = {}) {
     const gdbPort = request.gdbPort || DEFAULT_GDB_PORT;
     const monitorPort = await getFreePort();
     const machineName = request.machineName || 'NUCLEO-H753ZI GPIO Workbench';
+    const uartPeripheralName =
+      typeof request.uartPeripheralName === 'string' && request.uartPeripheralName.trim().length > 0
+        ? request.uartPeripheralName.trim()
+        : null;
+    const uartPort = uartPeripheralName ? await getFreePort() : null;
     const relativeElfPath = path
       .relative(workspaceDir, request.elfPath)
       .replace(/\\/g, '/');
@@ -544,6 +710,13 @@ function createRuntimeService(options = {}) {
       `sysbus LoadELF @${relativeElfPath}`,
       `emulation CreateExternalControlServer "local-control" ${bridgePort}`,
       `machine StartGdbServer ${gdbPort}`,
+      ...(uartPeripheralName && uartPort
+        ? [
+            `emulation CreateServerSocketTerminal ${uartPort} "local-uart" false`,
+            `connector Connect ${uartPeripheralName} local-uart`,
+            '',
+          ]
+        : []),
       'start',
       '',
     ].join('\n');
@@ -574,6 +747,7 @@ function createRuntimeService(options = {}) {
       state.activeWorkspaceDir = workspaceDir;
       attachRenodeProcessHandlers(child);
 
+      const uartReady = uartPeripheralName && uartPort ? await connectUartTerminal(uartPort, uartPeripheralName) : false;
       const bridgeReady = await connectBridge(bridgePort, machineName, request.peripheralManifest);
       if (!bridgeReady) {
         log(`Renode started, but the external control bridge on port ${bridgePort} did not answer in time.`, 'warn');
@@ -586,6 +760,8 @@ function createRuntimeService(options = {}) {
         gdbPort,
         bridgePort,
         monitorPort,
+        uartPeripheralName,
+        uartPort,
       });
 
       return {
@@ -597,11 +773,15 @@ function createRuntimeService(options = {}) {
         gdbPort,
         bridgePort,
         monitorPort,
+        uartPeripheralName,
+        uartPort,
+        uartReady,
         bridgeReady,
       };
     } catch (error) {
       state.renodeProcess = null;
       closeBridgeSession();
+      closeUartTerminal();
       return {
         success: false,
         message: `Failed to launch Renode: ${String(error)}`,
@@ -640,6 +820,36 @@ function createRuntimeService(options = {}) {
       return {
         success: false,
         message: `Failed to drive button state: ${String(error)}`,
+      };
+    }
+  }
+
+  async function sendUartData(request) {
+    const data = typeof request?.data === 'string' ? request.data : '';
+    if (!data) {
+      return {
+        success: false,
+        message: 'UART payload is empty.',
+      };
+    }
+
+    if (!state.uartSocket || !state.uartCapture.connected) {
+      return {
+        success: false,
+        message: 'UART terminal is not connected. Start the simulation first.',
+      };
+    }
+
+    try {
+      state.uartSocket.write(Buffer.from(data, 'utf8'));
+      emitUart(data, 'tx', 'data');
+      return {
+        success: true,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Failed to write UART data: ${String(error)}`,
       };
     }
   }
@@ -816,6 +1026,7 @@ function createRuntimeService(options = {}) {
     startSimulation,
     stopSimulation,
     sendPeripheralEvent,
+    sendUartData,
     startDebugging,
     stopDebugging,
     debugAction,

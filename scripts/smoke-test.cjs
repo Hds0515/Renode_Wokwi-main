@@ -1,27 +1,57 @@
 const {
   createRuntimeService,
 } = require('../electron/runtime.cjs');
+const fs = require('fs');
+const ts = require('typescript');
+
+require.extensions['.ts'] = (module, filename) => {
+  const source = fs.readFileSync(filename, 'utf8');
+  const result = ts.transpileModule(source, {
+    compilerOptions: {
+      esModuleInterop: true,
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+    },
+    fileName: filename,
+  });
+  module._compile(result.outputText, filename);
+};
+
+const { ACTIVE_BOARD_SCHEMA } = require('../src/lib/boards.ts');
 const {
-  DEFAULT_MAIN_SOURCE,
   DEFAULT_STARTUP_SOURCE,
-  DEFAULT_LINKER_FILENAME,
-  DEFAULT_LINKER_SCRIPT,
-  DEFAULT_GCC_ARGS,
   DEFAULT_DEMO_WIRING,
-  generateBoardRepl,
-  buildPeripheralManifest,
-} = require('../electron/firmware.cjs');
+} = require('../src/lib/firmware.ts');
+const {
+  compileNetlistToRenodeArtifacts,
+  createNetlistFromWiring,
+  validateNetlist,
+} = require('../src/lib/netlist.ts');
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitUntil(label, predicate, timeoutMs = 10000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (predicate()) {
+      return;
+    }
+    await wait(250);
+  }
+  throw new Error(`Timed out waiting for ${label}.`);
+}
+
 async function main() {
+  const board = ACTIVE_BOARD_SCHEMA;
   const runtime = createRuntimeService();
   const observed = {
     ledOn: false,
     ledOff: false,
     bridgeReady: false,
+    uartAttached: false,
+    uartTranscript: '',
   };
 
   runtime.on('event', (payload) => {
@@ -44,17 +74,33 @@ async function main() {
     if (payload.type === 'debug') {
       console.log(`[debug] ${JSON.stringify(payload)}`);
     }
+
+    if (payload.type === 'uart') {
+      if (payload.status === 'connected') {
+        observed.uartAttached = true;
+      }
+      observed.uartTranscript += payload.data || '';
+      console.log(`[uart:${payload.stream ?? 'stdout'}] ${String(payload.data || '').trimEnd()}`);
+    }
   });
 
   const tooling = await runtime.getTooling();
   console.log(JSON.stringify(tooling, null, 2));
+  const netlist = createNetlistFromWiring(DEFAULT_DEMO_WIRING, board);
+  const netlistErrors = validateNetlist(netlist, board).filter((issue) => issue.severity === 'error');
+  if (netlistErrors.length > 0) {
+    console.error(netlistErrors);
+    process.exitCode = 1;
+    return;
+  }
+  const artifacts = compileNetlistToRenodeArtifacts({ netlist, board });
 
   const compileResult = await runtime.compileFirmware({
-    mainSource: DEFAULT_MAIN_SOURCE,
+    mainSource: artifacts.mainSource,
     startupSource: DEFAULT_STARTUP_SOURCE,
-    linkerScript: DEFAULT_LINKER_SCRIPT,
-    linkerFileName: DEFAULT_LINKER_FILENAME,
-    gccArgs: DEFAULT_GCC_ARGS,
+    linkerScript: board.runtime.compiler.linkerScript,
+    linkerFileName: board.runtime.compiler.linkerFileName,
+    gccArgs: [...board.runtime.compiler.gccArgs],
   });
 
   if (!compileResult.success) {
@@ -66,8 +112,10 @@ async function main() {
   const startResult = await runtime.startSimulation({
     workspaceDir: compileResult.workspaceDir,
     elfPath: compileResult.elfPath,
-    boardRepl: generateBoardRepl(DEFAULT_DEMO_WIRING),
-    peripheralManifest: buildPeripheralManifest(DEFAULT_DEMO_WIRING),
+    boardRepl: artifacts.boardRepl,
+    peripheralManifest: artifacts.peripheralManifest,
+    uartPeripheralName: board.runtime.uart?.peripheralName ?? null,
+    machineName: board.machineName,
   });
 
   if (!startResult.success) {
@@ -76,19 +124,16 @@ async function main() {
     return;
   }
 
-  await wait(3000);
-
-  if (!observed.bridgeReady) {
-    console.error('Bridge never connected.');
-    await runtime.stopSimulation();
-    process.exitCode = 1;
-    return;
-  }
+  await waitUntil('bridge connection', () => observed.bridgeReady, 10000);
+  await waitUntil('UART terminal connection', () => observed.uartAttached, 10000);
+  await waitUntil('generated UART boot text', () => observed.uartTranscript.includes('Renode Wokwi UART ready'), 10000);
 
   await runtime.sendPeripheralEvent({ type: 'button', id: 'button-1', state: 1 });
   await wait(1500);
   await runtime.sendPeripheralEvent({ type: 'button', id: 'button-1', state: 0 });
   await wait(1500);
+  await runtime.sendUartData({ data: 'Q' });
+  await waitUntil('UART echo', () => observed.uartTranscript.includes('UART RX: Q'), 10000);
 
   const debugResult = await runtime.startDebugging({
     workspaceDir: compileResult.workspaceDir,

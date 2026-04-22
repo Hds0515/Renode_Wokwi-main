@@ -13,6 +13,7 @@ import {
   DemoBoardRuntime,
   DemoBoardConnector,
   DemoBoardPad,
+  inferPadCapabilities,
 } from './firmware';
 
 export type BoardConnectorFrame = {
@@ -89,22 +90,35 @@ function createSimpleConnector(options: {
     subtitle: options.subtitle,
     placement: options.placement,
     layout: 'single',
-    pins: options.pins.map((pin) => ({
-      id: `${options.id}-${pin.pinNumber}`,
-      connectorId: options.id,
-      connectorTitle: options.title,
-      connectorPlacement: options.placement,
-      connectorLayout: 'single',
-      pinNumber: pin.pinNumber,
-      pinLabel: pin.pinLabel,
-      mcuPinId: pin.mcuPinId,
-      signalName: pin.signalName ?? pin.pinLabel,
-      note: pin.note ?? null,
-      role: pin.blockedReason ? 'reserved' : 'gpio',
-      column: 'single',
-      selectable: !pin.blockedReason,
-      blockedReason: pin.blockedReason ?? null,
-    })),
+    pins: options.pins.map((pin) => {
+      const role = pin.blockedReason ? 'reserved' : 'gpio';
+      const selectable = !pin.blockedReason;
+      const signalName = pin.signalName ?? pin.pinLabel;
+
+      return {
+        id: `${options.id}-${pin.pinNumber}`,
+        connectorId: options.id,
+        connectorTitle: options.title,
+        connectorPlacement: options.placement,
+        connectorLayout: 'single',
+        pinNumber: pin.pinNumber,
+        pinLabel: pin.pinLabel,
+        mcuPinId: pin.mcuPinId,
+        signalName,
+        note: pin.note ?? null,
+        role,
+        column: 'single',
+        selectable,
+        blockedReason: pin.blockedReason ?? null,
+        capabilities: inferPadCapabilities({
+          pinLabel: pin.pinLabel,
+          signalName,
+          mcuPinId: pin.mcuPinId,
+          role,
+          selectable,
+        }),
+      };
+    }),
   };
 }
 
@@ -336,6 +350,14 @@ export const STM32F4_DISCOVERY_BOARD_SCHEMA: BoardSchema = {
       rccEnableRegisterOffset: 0x30,
       rccEnableRegisterName: 'RCC_AHB1ENR',
     },
+    uart: {
+      peripheralName: 'usart2',
+      displayName: 'USART2',
+      registerModel: 'stm32-usart',
+      baseAddress: 0x40004400,
+      txPinId: 'PA2',
+      rxPinId: 'PA3',
+    },
   },
   connectors: {
     all: STM32F4_DISCOVERY_CONNECTORS,
@@ -394,6 +416,14 @@ export const STM32F103_GPIO_LAB_BOARD_SCHEMA: BoardSchema = {
       rccBaseAddress: 0x40021000,
       rccEnableRegisterOffset: 0x18,
       rccEnableRegisterName: 'RCC_APB2ENR',
+    },
+    uart: {
+      peripheralName: 'usart2',
+      displayName: 'USART2',
+      registerModel: 'stm32-usart',
+      baseAddress: 0x40004400,
+      txPinId: 'PA2',
+      rxPinId: 'PA3',
     },
   },
   connectors: {

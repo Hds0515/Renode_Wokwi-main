@@ -13,6 +13,7 @@
     "start": "electron .",
     "lint": "tsc --noEmit",
     "smoke": "node scripts/smoke-test.cjs",
+    "validate:netlist": "node scripts/validate-netlist.cjs",
     "validate:boards": "node scripts/validate-boards.cjs",
     "check:env": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\check-env.ps1",
     "run:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-local.ps1 -Mode dev",

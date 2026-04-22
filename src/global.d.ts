@@ -47,6 +47,7 @@ type StartSimulationRequest = {
   bridgePort?: number;
   gdbPort?: number;
   machineName?: string;
+  uartPeripheralName?: string | null;
 };
 
 type StartSimulationResult = {
@@ -58,10 +59,18 @@ type StartSimulationResult = {
   gdbPort?: number;
   bridgePort?: number;
   monitorPort?: number;
+  uartPeripheralName?: string | null;
+  uartPort?: number | null;
+  uartReady?: boolean;
   bridgeReady?: boolean;
 };
 
 type PeripheralEventResult = {
+  success: boolean;
+  message?: string;
+};
+
+type UartDataResult = {
   success: boolean;
   message?: string;
 };
@@ -85,13 +94,18 @@ type DebugActionRequest = {
 
 type LocalProjectDocument = {
   app: 'renode-local-visualizer';
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   savedAt: string;
   board: {
     id: string;
     name: string;
   };
   templates?: {
+    catalogVersion: number;
+    kinds: string[];
+  };
+  componentPackages?: {
+    schemaVersion: number;
     catalogVersion: number;
     kinds: string[];
   };
@@ -119,6 +133,7 @@ type LocalProjectDocument = {
       color: string | null;
     }>;
   };
+  netlist?: unknown;
   layout: {
     showFullPinout: boolean;
     peripheralPositions: Record<string, { x: number; y: number }>;
@@ -182,7 +197,18 @@ type RuntimeEvent =
       gdbPort?: number;
       bridgePort?: number;
       monitorPort?: number;
+      uartPeripheralName?: string | null;
+      uartPort?: number | null;
       exitCode?: number | null;
+    }
+  | {
+      type: 'uart';
+      stream?: 'rx' | 'tx' | 'stdout' | 'stderr' | 'system';
+      status?: 'connecting' | 'connected' | 'disconnected' | 'error' | 'data';
+      peripheralName?: string | null;
+      port?: number | null;
+      data?: string;
+      timestamp?: string;
     }
   | {
       type: 'debug';
@@ -210,6 +236,7 @@ declare global {
       startSimulation: (request: StartSimulationRequest) => Promise<StartSimulationResult>;
       stopSimulation: () => Promise<{ success: boolean; message: string }>;
       sendPeripheralEvent: (request: { type: 'button'; id: string; state: 0 | 1 }) => Promise<PeripheralEventResult>;
+      sendUartData: (request: { data: string }) => Promise<UartDataResult>;
       startDebugging: (request: StartDebuggingRequest) => Promise<StartDebuggingResult>;
       stopDebugging: () => Promise<{ success: boolean; message: string }>;
       debugAction: (request: DebugActionRequest) => Promise<{ success: boolean; message?: string; token?: number }>;

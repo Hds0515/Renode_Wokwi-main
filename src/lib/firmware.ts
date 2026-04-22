@@ -8,6 +8,17 @@ const NUCLEO_REPL_PATH = 'platforms/boards/nucleo_h753zi.repl';
 const MACHINE_NAME = 'NUCLEO-H753ZI GPIO Workbench';
 
 export type DemoGpioRegisterModel = 'stm32-modern' | 'stm32f1';
+export type DemoPadCapability = 'gpio' | 'digital-input' | 'digital-output' | 'uart-tx' | 'uart-rx' | 'pwm' | 'adc';
+export type DemoEndpointDirection = 'input' | 'output';
+
+export type DemoUartRuntime = {
+  peripheralName: string;
+  displayName: string;
+  registerModel: 'stm32-usart' | 'stm32f7-usart';
+  baseAddress: number;
+  txPinId?: string;
+  rxPinId?: string;
+};
 
 export type DemoBoardRuntime = {
   id: string;
@@ -28,6 +39,7 @@ export type DemoBoardRuntime = {
     rccEnableRegisterOffset: number;
     rccEnableRegisterName: string;
   };
+  uart?: DemoUartRuntime;
 };
 
 const RESERVED_MCU_PINS = new Map<string, string>([
@@ -61,6 +73,7 @@ export type DemoBoardPad = {
   column: PadColumn;
   selectable: boolean;
   blockedReason: string | null;
+  capabilities: readonly DemoPadCapability[];
 };
 
 export type DemoBoardConnector = {
@@ -89,6 +102,8 @@ export type DemoPeripheralTemplateEndpointDefinition = {
   kind: DemoPeripheralKind;
   accentColor: string;
   defaultSignalLabel: string;
+  direction: DemoEndpointDirection;
+  requiredCapabilities: readonly DemoPadCapability[];
 };
 
 export type DemoPeripheralTemplateDefinition = {
@@ -148,6 +163,41 @@ export type DemoWorkbenchDevice = {
   members: DemoPeripheral[];
 };
 
+export type DemoPeripheralCapabilitySchema = {
+  catalogVersion: 1;
+  templates: Array<{
+    kind: DemoPeripheralTemplateKind;
+    title: string;
+    category: DemoPeripheralTemplateDefinition['category'];
+    endpoints: Array<{
+      id: string;
+      label: string;
+      direction: DemoEndpointDirection;
+      requiredCapabilities: readonly DemoPadCapability[];
+    }>;
+  }>;
+};
+
+export type DemoWiringRuleSeverity = 'error' | 'warning';
+export type DemoWiringRuleIssue = {
+  id: string;
+  severity: DemoWiringRuleSeverity;
+  code:
+    | 'endpoint-unwired'
+    | 'unknown-pad'
+    | 'pad-unavailable'
+    | 'pad-shared'
+    | 'capability-mismatch'
+    | 'missing-driver'
+    | 'invalid-driver'
+    | 'unwired-driver';
+  message: string;
+  peripheralId?: string;
+  padId?: string;
+  endpointId?: string | null;
+  capability?: DemoPadCapability;
+};
+
 export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinition[] = [
   {
     kind: 'button',
@@ -164,6 +214,8 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
         kind: 'button',
         accentColor: '#d946ef',
         defaultSignalLabel: 'SIG',
+        direction: 'input',
+        requiredCapabilities: ['gpio', 'digital-input'],
       },
     ],
   },
@@ -182,6 +234,8 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
         kind: 'led',
         accentColor: '#f59e0b',
         defaultSignalLabel: 'SIG',
+        direction: 'output',
+        requiredCapabilities: ['gpio', 'digital-output'],
       },
     ],
   },
@@ -200,6 +254,8 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
         kind: 'led',
         accentColor: '#14b8a6',
         defaultSignalLabel: 'OUT',
+        direction: 'output',
+        requiredCapabilities: ['gpio', 'digital-output'],
       },
     ],
   },
@@ -218,6 +274,8 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
         kind: 'led',
         accentColor: '#ef4444',
         defaultSignalLabel: 'RED',
+        direction: 'output',
+        requiredCapabilities: ['gpio', 'digital-output'],
       },
       {
         id: 'green',
@@ -225,6 +283,8 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
         kind: 'led',
         accentColor: '#22c55e',
         defaultSignalLabel: 'GREEN',
+        direction: 'output',
+        requiredCapabilities: ['gpio', 'digital-output'],
       },
       {
         id: 'blue',
@@ -232,10 +292,27 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
         kind: 'led',
         accentColor: '#3b82f6',
         defaultSignalLabel: 'BLUE',
+        direction: 'output',
+        requiredCapabilities: ['gpio', 'digital-output'],
       },
     ],
   },
 ];
+
+export const DEMO_PERIPHERAL_CAPABILITY_SCHEMA: DemoPeripheralCapabilitySchema = {
+  catalogVersion: 1,
+  templates: DEMO_PERIPHERAL_TEMPLATES.map((template) => ({
+    kind: template.kind,
+    title: template.title,
+    category: template.category,
+    endpoints: template.endpoints.map((endpoint) => ({
+      id: endpoint.id,
+      label: endpoint.label,
+      direction: endpoint.direction,
+      requiredCapabilities: endpoint.requiredCapabilities,
+    })),
+  })),
+};
 
 const DEMO_PERIPHERAL_TEMPLATE_KIND_SET = new Set<DemoPeripheralTemplateKind>(
   DEMO_PERIPHERAL_TEMPLATES.map((template) => template.kind)
@@ -327,6 +404,39 @@ function detectRole(pinLabel: string, mcuPinId: string | null): PadRole {
   return 'control';
 }
 
+export function inferPadCapabilities(options: {
+  pinLabel: string;
+  signalName?: string | null;
+  mcuPinId?: string | null;
+  role?: PadRole;
+  selectable?: boolean;
+}): DemoPadCapability[] {
+  const capabilities = new Set<DemoPadCapability>();
+  const selectable = options.selectable ?? Boolean(options.mcuPinId && options.role !== 'reserved');
+
+  if (selectable && options.mcuPinId) {
+    capabilities.add('gpio');
+    capabilities.add('digital-input');
+    capabilities.add('digital-output');
+  }
+
+  const descriptor = `${options.pinLabel} ${options.signalName ?? ''}`.toUpperCase();
+  if (/\b(?:U?S?ART|LPUART)\d*\s*TX\b|\bTX\b/.test(descriptor)) {
+    capabilities.add('uart-tx');
+  }
+  if (/\b(?:U?S?ART|LPUART)\d*\s*RX\b|\bRX\b/.test(descriptor)) {
+    capabilities.add('uart-rx');
+  }
+  if (/\bPWM\b|\bTIM\d*\b|\bCH\d+\b/.test(descriptor)) {
+    capabilities.add('pwm');
+  }
+  if (/\bADC\b|\bADC\d|\bA(?:1[0-5]|[0-9])\b/.test(descriptor)) {
+    capabilities.add('adc');
+  }
+
+  return Array.from(capabilities);
+}
+
 function createPad(
   connector: Pick<DemoBoardConnector, 'id' | 'title' | 'placement'> & { layout: ConnectorLayout },
   definition: SingleConnectorPinDefinition,
@@ -335,6 +445,8 @@ function createPad(
   const mcuPinId = normalizeMcuPinId(definition.mcuPinId ?? definition.pinLabel);
   const blockedReason = mcuPinId ? RESERVED_MCU_PINS.get(mcuPinId) ?? null : null;
   const role = detectRole(definition.pinLabel, mcuPinId);
+  const selectable = Boolean(mcuPinId && !blockedReason);
+  const signalName = definition.signalName ?? definition.pinLabel;
 
   return {
     id: `${connector.id}-${definition.pinNumber}`,
@@ -345,12 +457,19 @@ function createPad(
     pinNumber: definition.pinNumber,
     pinLabel: definition.pinLabel,
     mcuPinId,
-    signalName: definition.signalName ?? definition.pinLabel,
+    signalName,
     note: definition.note ?? null,
     role,
     column,
-    selectable: Boolean(mcuPinId && !blockedReason),
+    selectable,
     blockedReason,
+    capabilities: inferPadCapabilities({
+      pinLabel: definition.pinLabel,
+      signalName,
+      mcuPinId,
+      role,
+      selectable,
+    }),
   };
 }
 
@@ -782,6 +901,15 @@ export function getPeripheralTemplateKind(peripheral: DemoPeripheral): DemoPerip
   return peripheral.kind === 'button' ? 'button' : 'led';
 }
 
+export function getPeripheralEndpointDefinition(peripheral: DemoPeripheral): DemoPeripheralTemplateEndpointDefinition {
+  const template = getPeripheralTemplateDefinition(getPeripheralTemplateKind(peripheral));
+  return (
+    template.endpoints.find((endpoint) => endpoint.id === peripheral.endpointId) ??
+    template.endpoints.find((endpoint) => endpoint.kind === peripheral.kind) ??
+    template.endpoints[0]
+  );
+}
+
 export function getWorkbenchDeviceId(peripheral: DemoPeripheral): string {
   return peripheral.groupId ?? peripheral.id;
 }
@@ -960,6 +1088,10 @@ function formatHex(value: number): string {
   return `0x${value.toString(16).toUpperCase()}`;
 }
 
+function cString(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
 function resolveMcuPin(mcuPinId: string, runtime: DemoBoardRuntime = DEFAULT_BOARD_RUNTIME): DemoBoardPin {
   const normalized = normalizeMcuPinId(mcuPinId);
   if (!normalized) {
@@ -1010,6 +1142,22 @@ export function describePad(pad: DemoBoardPad): string {
   return `${pad.connectorTitle} pin ${pad.pinNumber} (${pad.pinLabel}${mcuPinSuffix})`;
 }
 
+export function getPadCapabilities(pad: DemoBoardPad): readonly DemoPadCapability[] {
+  return pad.capabilities.length > 0
+    ? pad.capabilities
+    : inferPadCapabilities({
+        pinLabel: pad.pinLabel,
+        signalName: pad.signalName,
+        mcuPinId: pad.mcuPinId,
+        role: pad.role,
+        selectable: pad.selectable,
+      });
+}
+
+export function formatPadCapabilities(capabilities: readonly DemoPadCapability[]): string {
+  return capabilities.length > 0 ? capabilities.join(', ') : 'none';
+}
+
 export function describePeripheral(
   peripheral: DemoPeripheral,
   boardPads: readonly DemoBoardPad[] = DEMO_BOARD_PADS
@@ -1017,6 +1165,144 @@ export function describePeripheral(
   const padSummary = peripheral.padId ? describePad(resolveSelectablePad(peripheral.padId, boardPads)) : 'not connected';
   const endpointSummary = peripheral.endpointLabel ? ` ${peripheral.endpointLabel}` : '';
   return `${peripheral.label}${endpointSummary} (${padSummary})`;
+}
+
+export function validateWiringRules(
+  wiring: DemoWiring,
+  boardPads: readonly DemoBoardPad[] = DEMO_BOARD_PADS
+): DemoWiringRuleIssue[] {
+  const issues: DemoWiringRuleIssue[] = [];
+  const padById = new Map(boardPads.map((pad) => [pad.id, pad]));
+  const peripheralById = new Map(wiring.peripherals.map((peripheral) => [peripheral.id, peripheral]));
+  const padUsers = new Map<string, DemoPeripheral[]>();
+
+  wiring.peripherals.forEach((peripheral) => {
+    if (!peripheral.padId) {
+      return;
+    }
+    const users = padUsers.get(peripheral.padId) ?? [];
+    users.push(peripheral);
+    padUsers.set(peripheral.padId, users);
+  });
+
+  padUsers.forEach((users, padId) => {
+    if (users.length <= 1) {
+      return;
+    }
+
+    const pad = padById.get(padId);
+    users.forEach((peripheral) => {
+      issues.push({
+        id: `pad-shared:${padId}:${peripheral.id}`,
+        severity: 'error',
+        code: 'pad-shared',
+        peripheralId: peripheral.id,
+        padId,
+        endpointId: peripheral.endpointId ?? null,
+        message: `${pad ? describePad(pad) : padId} is shared by ${users.map((user) => user.label).join(', ')}. Pick one endpoint per board pad.`,
+      });
+    });
+  });
+
+  wiring.peripherals.forEach((peripheral) => {
+    const endpoint = getPeripheralEndpointDefinition(peripheral);
+    if (!peripheral.padId) {
+      issues.push({
+        id: `endpoint-unwired:${peripheral.id}`,
+        severity: 'warning',
+        code: 'endpoint-unwired',
+        peripheralId: peripheral.id,
+        endpointId: endpoint.id,
+        message: `${peripheral.endpointLabel ?? endpoint.label} on ${peripheral.label} is not wired yet.`,
+      });
+      return;
+    }
+
+    const pad = padById.get(peripheral.padId);
+    if (!pad) {
+      issues.push({
+        id: `unknown-pad:${peripheral.id}:${peripheral.padId}`,
+        severity: 'error',
+        code: 'unknown-pad',
+        peripheralId: peripheral.id,
+        padId: peripheral.padId,
+        endpointId: endpoint.id,
+        message: `${peripheral.label} references unknown board pad "${peripheral.padId}".`,
+      });
+      return;
+    }
+
+    if (!pad.selectable || !pad.mcuPinId) {
+      issues.push({
+        id: `pad-unavailable:${peripheral.id}:${pad.id}`,
+        severity: 'error',
+        code: 'pad-unavailable',
+        peripheralId: peripheral.id,
+        padId: pad.id,
+        endpointId: endpoint.id,
+        message: `${peripheral.label} cannot use ${describePad(pad)} because it is ${pad.blockedReason ?? pad.role}.`,
+      });
+      return;
+    }
+
+    const capabilities = new Set(getPadCapabilities(pad));
+    endpoint.requiredCapabilities.forEach((capability) => {
+      if (!capabilities.has(capability)) {
+        issues.push({
+          id: `capability-mismatch:${peripheral.id}:${pad.id}:${capability}`,
+          severity: 'error',
+          code: 'capability-mismatch',
+          peripheralId: peripheral.id,
+          padId: pad.id,
+          endpointId: endpoint.id,
+          capability,
+          message: `${peripheral.label} ${endpoint.label} requires ${capability}, but ${describePad(pad)} provides ${formatPadCapabilities(getPadCapabilities(pad))}.`,
+        });
+      }
+    });
+  });
+
+  wiring.peripherals
+    .filter((peripheral) => peripheral.kind === 'led')
+    .forEach((peripheral) => {
+      if (!peripheral.sourcePeripheralId) {
+        issues.push({
+          id: `missing-driver:${peripheral.id}`,
+          severity: 'warning',
+          code: 'missing-driver',
+          peripheralId: peripheral.id,
+          endpointId: peripheral.endpointId ?? null,
+          message: `${peripheral.endpointLabel ?? 'Output'} on ${peripheral.label} has no controlling button, so generated firmware will keep it low.`,
+        });
+        return;
+      }
+
+      const driver = peripheralById.get(peripheral.sourcePeripheralId);
+      if (!driver || driver.kind !== 'button') {
+        issues.push({
+          id: `invalid-driver:${peripheral.id}:${peripheral.sourcePeripheralId}`,
+          severity: 'error',
+          code: 'invalid-driver',
+          peripheralId: peripheral.id,
+          endpointId: peripheral.endpointId ?? null,
+          message: `${peripheral.label} is controlled by a missing or non-button peripheral "${peripheral.sourcePeripheralId}".`,
+        });
+        return;
+      }
+
+      if (!driver.padId) {
+        issues.push({
+          id: `unwired-driver:${peripheral.id}:${driver.id}`,
+          severity: 'warning',
+          code: 'unwired-driver',
+          peripheralId: peripheral.id,
+          endpointId: peripheral.endpointId ?? null,
+          message: `${peripheral.label} is controlled by ${driver.label}, but that button is not wired yet.`,
+        });
+      }
+    });
+
+  return issues;
 }
 
 function buildPortEnableMaskExpression(pins: DemoBoardPin[], runtime: DemoBoardRuntime = DEFAULT_BOARD_RUNTIME): string {
@@ -1098,6 +1384,83 @@ static void write_output(uint32_t base, uint32_t pin, int on) {
     } else {
         GPIO_BSRR(base) = (1u << (pin + 16u));
     }
+}`;
+}
+
+function createUartRuntimeSource(runtime: DemoBoardRuntime): string {
+  if (!runtime.uart) {
+    return `static void demo_uart_init(void) {
+    // No board UART is configured for this profile.
+}
+
+static void demo_uart_write_char(char value) {
+    (void)value;
+}
+
+static int demo_uart_read_char(void) {
+    return -1;
+}`;
+  }
+
+  if (runtime.uart.registerModel === 'stm32f7-usart') {
+    return `#define DEMO_UART_BASE      ${formatHex(runtime.uart.baseAddress)}u
+#define DEMO_UART_CR1       (*(volatile uint32_t *)(DEMO_UART_BASE + 0x00u))
+#define DEMO_UART_BRR       (*(volatile uint32_t *)(DEMO_UART_BASE + 0x0Cu))
+#define DEMO_UART_ISR       (*(volatile uint32_t *)(DEMO_UART_BASE + 0x1Cu))
+#define DEMO_UART_RDR       (*(volatile uint32_t *)(DEMO_UART_BASE + 0x24u))
+#define DEMO_UART_TDR       (*(volatile uint32_t *)(DEMO_UART_BASE + 0x28u))
+#define DEMO_UART_CR1_UE    (1u << 0u)
+#define DEMO_UART_CR1_RE    (1u << 2u)
+#define DEMO_UART_CR1_TE    (1u << 3u)
+#define DEMO_UART_ISR_RXNE  (1u << 5u)
+#define DEMO_UART_ISR_TXE   (1u << 7u)
+
+static void demo_uart_init(void) {
+    DEMO_UART_BRR = 0x8Bu;
+    DEMO_UART_CR1 = DEMO_UART_CR1_UE | DEMO_UART_CR1_RE | DEMO_UART_CR1_TE;
+}
+
+static void demo_uart_write_char(char value) {
+    for(uint32_t guard = 0; guard < 1024u && (DEMO_UART_ISR & DEMO_UART_ISR_TXE) == 0u; guard++) {
+    }
+    DEMO_UART_TDR = (uint32_t)(unsigned char)value;
+}
+
+static int demo_uart_read_char(void) {
+    if((DEMO_UART_ISR & DEMO_UART_ISR_RXNE) == 0u) {
+        return -1;
+    }
+    return (int)(DEMO_UART_RDR & 0xFFu);
+}`;
+  }
+
+  return `#define DEMO_UART_BASE      ${formatHex(runtime.uart.baseAddress)}u
+#define DEMO_UART_SR        (*(volatile uint32_t *)(DEMO_UART_BASE + 0x00u))
+#define DEMO_UART_DR        (*(volatile uint32_t *)(DEMO_UART_BASE + 0x04u))
+#define DEMO_UART_BRR       (*(volatile uint32_t *)(DEMO_UART_BASE + 0x08u))
+#define DEMO_UART_CR1       (*(volatile uint32_t *)(DEMO_UART_BASE + 0x0Cu))
+#define DEMO_UART_SR_RXNE   (1u << 5u)
+#define DEMO_UART_SR_TXE    (1u << 7u)
+#define DEMO_UART_CR1_RE    (1u << 2u)
+#define DEMO_UART_CR1_TE    (1u << 3u)
+#define DEMO_UART_CR1_UE    (1u << 13u)
+
+static void demo_uart_init(void) {
+    DEMO_UART_BRR = 0x1D4Cu;
+    DEMO_UART_CR1 = DEMO_UART_CR1_UE | DEMO_UART_CR1_RE | DEMO_UART_CR1_TE;
+}
+
+static void demo_uart_write_char(char value) {
+    for(uint32_t guard = 0; guard < 1024u && (DEMO_UART_SR & DEMO_UART_SR_TXE) == 0u; guard++) {
+    }
+    DEMO_UART_DR = (uint32_t)(unsigned char)value;
+}
+
+static int demo_uart_read_char(void) {
+    if((DEMO_UART_SR & DEMO_UART_SR_RXNE) == 0u) {
+        return -1;
+    }
+    return (int)(DEMO_UART_DR & 0xFFu);
 }`;
 }
 
@@ -1240,6 +1603,14 @@ export const DEFAULT_BOARD_RUNTIME: DemoBoardRuntime = {
     rccEnableRegisterOffset: 0xe0,
     rccEnableRegisterName: 'RCC_AHB4ENR',
   },
+  uart: {
+    peripheralName: 'usart2',
+    displayName: 'USART2',
+    registerModel: 'stm32f7-usart',
+    baseAddress: 0x40004400,
+    txPinId: 'PA2',
+    rxPinId: 'PA3',
+  },
 };
 
 export const DEFAULT_MAIN_SOURCE = generateDemoMainSource(DEFAULT_DEMO_WIRING, DEFAULT_BOARD_RUNTIME);
@@ -1296,12 +1667,22 @@ export function generateDemoMainSource(
   const ledWrites = connectedLeds
     .map((led, index) => {
       const driver = resolveLedDriver(led, wiring);
-      if (!driver) {
-        return `        write_output(LED_${index}_GPIO_BASE, LED_${index}_PIN, 0);`;
-      }
-      const driverIndex = connectedButtons.findIndex((button) => button.id === driver.id);
-      return `        write_output(LED_${index}_GPIO_BASE, LED_${index}_PIN, button_state_${driverIndex});`;
+      const driverIndex = driver ? connectedButtons.findIndex((button) => button.id === driver.id) : -1;
+      const stateExpression = driver && driverIndex >= 0 ? `button_state_${driverIndex}` : '0';
+      return [
+        `        const int led_state_${index} = ${stateExpression};`,
+        `        write_output(LED_${index}_GPIO_BASE, LED_${index}_PIN, led_state_${index});`,
+        `        if(led_previous_${index} != led_state_${index}) {`,
+        `            led_previous_${index} = led_state_${index};`,
+        `            demo_uart_write_string("${cString(led.endpointLabel ? `${led.label} ${led.endpointLabel}` : led.label)} ");`,
+        `            demo_uart_write_string(led_state_${index} ? "ON\\r\\n" : "OFF\\r\\n");`,
+        '        }',
+      ].join('\n');
     })
+    .join('\n');
+
+  const ledStateDeclarations = connectedLeds
+    .map((_led, index) => `    int led_previous_${index} = -1;`)
     .join('\n');
 
   const wiringSummary = [
@@ -1318,6 +1699,7 @@ export function generateDemoMainSource(
     connectedLeds.length === 0 ? '// No external LEDs are connected. The loop still samples buttons.\n' : '';
 
   const gpioRuntime = createGpioRuntimeSource(runtime);
+  const uartRuntime = createUartRuntimeSource(runtime);
 
   return `// Auto-generated demo firmware for the Renode ${runtime.name} workbench.
 ${wiringSummary || '// No peripherals are connected yet.'}
@@ -1339,19 +1721,36 @@ static void enable_gpio_clocks(void) {
 
 ${gpioRuntime}
 
+${uartRuntime}
+
+static void demo_uart_write_string(const char *value) {
+    while(*value) {
+        demo_uart_write_char(*value++);
+    }
+}
+
 static int read_input(uint32_t base, uint32_t pin) {
     return (GPIO_IDR(base) & (1u << pin)) != 0;
 }
 
 int main(void) {
     enable_gpio_clocks();
+    demo_uart_init();
+    demo_uart_write_string("Renode Wokwi UART ready on ${cString(runtime.name)}\\r\\n");
 ${configureLeds || '    // No LED outputs connected.'}
 ${configureButtons || '    // No button inputs connected.'}
+${ledStateDeclarations || '    // No output state history needed.'}
 
     while(1) {
 ${noButtonsNotice}${noLedsNotice}
 ${buttonReads || '        // No button states to sample.'}
 ${ledWrites || '        // No LED states to update.'}
+        const int uart_rx = demo_uart_read_char();
+        if(uart_rx >= 0) {
+            demo_uart_write_string("UART RX: ");
+            demo_uart_write_char((char)uart_rx);
+            demo_uart_write_string("\\r\\n");
+        }
     }
 }
 `;
@@ -1410,9 +1809,18 @@ export function generateRescPreview(options: {
   gdbPort: number;
   bridgePort: number;
   machineName?: string;
+  uartPeripheralName?: string | null;
+  uartPort?: number | null;
 }): string {
   const elfPath = options.elfPath ?? '${workspace}/build/firmware.elf';
   const machineName = options.machineName ?? MACHINE_NAME;
+  const uartBridgeLines = options.uartPeripheralName
+    ? [
+        `emulation CreateServerSocketTerminal ${options.uartPort ?? '${uartPort}'} "local-uart" false`,
+        `connector Connect ${options.uartPeripheralName} local-uart`,
+        '',
+      ]
+    : [];
 
   return [
     `$name?="${machineName}"`,
@@ -1423,6 +1831,7 @@ export function generateRescPreview(options: {
     `sysbus LoadELF @${elfPath}`,
     `emulation CreateExternalControlServer "local-control" ${options.bridgePort}`,
     `machine StartGdbServer ${options.gdbPort}`,
+    ...uartBridgeLines,
     'start',
     '',
   ].join('\n');

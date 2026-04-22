@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('localWokwi', {
   startSimulation: (request) => ipcRenderer.invoke('local-wokwi:start-simulation', request),
   stopSimulation: () => ipcRenderer.invoke('local-wokwi:stop-simulation'),
   sendPeripheralEvent: (request) => ipcRenderer.invoke('local-wokwi:send-peripheral-event', request),
+  sendUartData: (request) => ipcRenderer.invoke('local-wokwi:send-uart-data', request),
   startDebugging: (request) => ipcRenderer.invoke('local-wokwi:start-debugging', request),
   stopDebugging: () => ipcRenderer.invoke('local-wokwi:stop-debugging'),
   debugAction: (request) => ipcRenderer.invoke('local-wokwi:debug-action', request),
