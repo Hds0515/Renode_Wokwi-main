@@ -71,7 +71,7 @@ export type BoardSchema = {
 type SimpleBoardPin = {
   pinNumber: number;
   pinLabel: string;
-  mcuPinId: string;
+  mcuPinId?: string | null;
   signalName?: string;
   note?: string;
   blockedReason?: string | null;
@@ -91,8 +91,18 @@ function createSimpleConnector(options: {
     placement: options.placement,
     layout: 'single',
     pins: options.pins.map((pin) => {
-      const role = pin.blockedReason ? 'reserved' : 'gpio';
-      const selectable = !pin.blockedReason;
+      const mcuPinId = pin.mcuPinId ?? null;
+      const normalizedLabel = pin.pinLabel.toUpperCase();
+      const role = pin.blockedReason
+        ? 'reserved'
+        : mcuPinId
+          ? 'gpio'
+          : normalizedLabel.includes('GND')
+            ? 'ground'
+            : normalizedLabel.includes('3V3') || normalizedLabel.includes('5V') || normalizedLabel.includes('VDD') || normalizedLabel.includes('VIN')
+              ? 'power'
+              : 'control';
+      const selectable = Boolean(mcuPinId && !pin.blockedReason);
       const signalName = pin.signalName ?? pin.pinLabel;
 
       return {
@@ -103,7 +113,7 @@ function createSimpleConnector(options: {
         connectorLayout: 'single',
         pinNumber: pin.pinNumber,
         pinLabel: pin.pinLabel,
-        mcuPinId: pin.mcuPinId,
+        mcuPinId,
         signalName,
         note: pin.note ?? null,
         role,
@@ -206,6 +216,19 @@ const STM32F4_GPIOD_CONNECTOR = createSimpleConnector({
   ],
 });
 
+const STM32F4_POWER_CONNECTOR = createSimpleConnector({
+  id: 'F4P',
+  title: 'POWER',
+  subtitle: 'STM32F4 Discovery teaching power rails',
+  placement: 'right',
+  pins: [
+    { pinNumber: 1, pinLabel: '3V3', mcuPinId: null, signalName: '3.3V rail' },
+    { pinNumber: 2, pinLabel: '5V', mcuPinId: null, signalName: '5V rail' },
+    { pinNumber: 3, pinLabel: 'GND', mcuPinId: null, signalName: 'Ground' },
+    { pinNumber: 4, pinLabel: 'GND', mcuPinId: null, signalName: 'Ground' },
+  ],
+});
+
 const STM32F103_GPIOA_CONNECTOR = createSimpleConnector({
   id: 'F1A',
   title: 'GPIOA',
@@ -237,6 +260,19 @@ const STM32F103_GPIOB_CONNECTOR = createSimpleConnector({
     { pinNumber: 6, pinLabel: 'PB8', mcuPinId: 'PB8', signalName: 'GPIO / CAN RX' },
     { pinNumber: 7, pinLabel: 'PB9', mcuPinId: 'PB9', signalName: 'GPIO / CAN TX' },
     { pinNumber: 8, pinLabel: 'PC13', mcuPinId: 'PC13', signalName: 'Blue Pill LED', blockedReason: 'Reserved by common Blue Pill LED.' },
+  ],
+});
+
+const STM32F103_POWER_CONNECTOR = createSimpleConnector({
+  id: 'F1P',
+  title: 'POWER',
+  subtitle: 'Blue Pill-style teaching power rails',
+  placement: 'right',
+  pins: [
+    { pinNumber: 1, pinLabel: '3V3', mcuPinId: null, signalName: '3.3V rail' },
+    { pinNumber: 2, pinLabel: '5V', mcuPinId: null, signalName: '5V rail' },
+    { pinNumber: 3, pinLabel: 'GND', mcuPinId: null, signalName: 'Ground' },
+    { pinNumber: 4, pinLabel: 'GND', mcuPinId: null, signalName: 'Ground' },
   ],
 });
 
@@ -319,8 +355,8 @@ export const NUCLEO_H753ZI_BOARD_SCHEMA: BoardSchema = {
   },
 };
 
-const STM32F4_DISCOVERY_CONNECTORS = [STM32F4_GPIOA_CONNECTOR, STM32F4_GPIOD_CONNECTOR] as const;
-const STM32F103_CONNECTORS = [STM32F103_GPIOA_CONNECTOR, STM32F103_GPIOB_CONNECTOR] as const;
+const STM32F4_DISCOVERY_CONNECTORS = [STM32F4_GPIOA_CONNECTOR, STM32F4_GPIOD_CONNECTOR, STM32F4_POWER_CONNECTOR] as const;
+const STM32F103_CONNECTORS = [STM32F103_GPIOA_CONNECTOR, STM32F103_GPIOB_CONNECTOR, STM32F103_POWER_CONNECTOR] as const;
 
 export const STM32F4_DISCOVERY_BOARD_SCHEMA: BoardSchema = {
   id: 'stm32f4-discovery',
@@ -364,7 +400,7 @@ export const STM32F4_DISCOVERY_BOARD_SCHEMA: BoardSchema = {
   connectors: {
     all: STM32F4_DISCOVERY_CONNECTORS,
     left: [STM32F4_GPIOA_CONNECTOR],
-    right: [STM32F4_GPIOD_CONNECTOR],
+    right: [STM32F4_GPIOD_CONNECTOR, STM32F4_POWER_CONNECTOR],
     leftMorpho: null,
     rightMorpho: null,
     selectablePads: STM32F4_DISCOVERY_CONNECTORS.flatMap((connector) => connector.pins).filter((pad) => pad.selectable),
@@ -373,6 +409,7 @@ export const STM32F4_DISCOVERY_BOARD_SCHEMA: BoardSchema = {
     connectorFrames: {
       F4A: { x: 128, y: 50, width: 90, layout: 'single' },
       F4D: { x: 542, y: 50, width: 90, layout: 'single' },
+      F4P: { x: 542, y: 250, width: 90, layout: 'single' },
     },
     onboardFeatures: [
       { label: 'Renode', detail: 'platforms/boards/stm32f4_discovery.repl' },
@@ -431,7 +468,7 @@ export const STM32F103_GPIO_LAB_BOARD_SCHEMA: BoardSchema = {
   connectors: {
     all: STM32F103_CONNECTORS,
     left: [STM32F103_GPIOA_CONNECTOR],
-    right: [STM32F103_GPIOB_CONNECTOR],
+    right: [STM32F103_GPIOB_CONNECTOR, STM32F103_POWER_CONNECTOR],
     leftMorpho: null,
     rightMorpho: null,
     selectablePads: STM32F103_CONNECTORS.flatMap((connector) => connector.pins).filter((pad) => pad.selectable),
@@ -440,6 +477,7 @@ export const STM32F103_GPIO_LAB_BOARD_SCHEMA: BoardSchema = {
     connectorFrames: {
       F1A: { x: 128, y: 50, width: 90, layout: 'single' },
       F1B: { x: 542, y: 50, width: 90, layout: 'single' },
+      F1P: { x: 542, y: 250, width: 90, layout: 'single' },
     },
     onboardFeatures: [
       { label: 'Renode', detail: 'platforms/cpus/stm32f103.repl CPU profile' },

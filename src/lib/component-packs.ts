@@ -1,5 +1,7 @@
 import {
   DEMO_PERIPHERAL_TEMPLATES,
+  DemoPeripheralBehavior,
+  DemoPeripheralPowerBinding,
   DemoEndpointDirection,
   DemoPadCapability,
   DemoPeripheralKind,
@@ -8,9 +10,10 @@ import {
 } from './firmware';
 
 export const COMPONENT_PACKAGE_SCHEMA_VERSION = 1;
-export const COMPONENT_PACKAGE_CATALOG_VERSION = 1;
+export const COMPONENT_PACKAGE_CATALOG_VERSION = 2;
 
 export type ComponentPackagePinRole = 'gpio-signal' | 'i2c-scl' | 'i2c-sda';
+export type ComponentPackagePowerPinRole = 'power-vcc' | 'power-gnd';
 
 export type ComponentPackagePin = {
   id: string;
@@ -32,6 +35,14 @@ export type ComponentPackageRuntimeBinding = {
   model: 'ssd1306';
 };
 
+export type ComponentPackagePowerPin = {
+  id: 'vcc' | 'gnd';
+  label: 'VCC' | 'GND';
+  role: ComponentPackagePowerPinRole;
+  required: boolean;
+  requiredPadCapabilities: readonly DemoPadCapability[];
+};
+
 export type ComponentPackage = {
   schemaVersion: typeof COMPONENT_PACKAGE_SCHEMA_VERSION;
   kind: DemoPeripheralTemplateKind;
@@ -39,7 +50,10 @@ export type ComponentPackage = {
   subtitle: string;
   description: string;
   category: DemoPeripheralTemplateDefinition['category'];
+  behavior: DemoPeripheralBehavior;
+  defaultPower: DemoPeripheralPowerBinding;
   pins: readonly ComponentPackagePin[];
+  powerPins: readonly ComponentPackagePowerPin[];
   visual: {
     accentColor: string;
     defaultWidth: number;
@@ -70,6 +84,7 @@ function createRuntimeBinding(template: DemoPeripheralTemplateDefinition): Compo
 }
 
 function createComponentPackage(template: DemoPeripheralTemplateDefinition): ComponentPackage {
+  const powerRequired = template.behavior.powerRequired;
   return {
     schemaVersion: COMPONENT_PACKAGE_SCHEMA_VERSION,
     kind: template.kind,
@@ -77,6 +92,18 @@ function createComponentPackage(template: DemoPeripheralTemplateDefinition): Com
     subtitle: template.subtitle,
     description: template.description,
     category: template.category,
+    behavior: {
+      schemaVersion: 2,
+      role: template.behavior.role,
+      controller: template.behavior.defaultController,
+      powerRequired,
+    },
+    defaultPower: {
+      schemaVersion: 1,
+      vccPadId: null,
+      gndPadId: null,
+      voltage: null,
+    },
     pins: template.endpoints.map((endpoint) => ({
       id: endpoint.id,
       label: endpoint.label,
@@ -87,6 +114,22 @@ function createComponentPackage(template: DemoPeripheralTemplateDefinition): Com
       accentColor: endpoint.accentColor,
       legacyPeripheralKind: endpoint.kind,
     })),
+    powerPins: [
+      {
+        id: 'vcc',
+        label: 'VCC',
+        role: 'power-vcc',
+        required: powerRequired,
+        requiredPadCapabilities: ['power-vcc'],
+      },
+      {
+        id: 'gnd',
+        label: 'GND',
+        role: 'power-gnd',
+        required: powerRequired,
+        requiredPadCapabilities: ['ground'],
+      },
+    ],
     visual: {
       accentColor: template.accentColor,
       defaultWidth: template.kind === 'rgb-led' || template.kind === 'ssd1306-oled' ? 168 : 138,

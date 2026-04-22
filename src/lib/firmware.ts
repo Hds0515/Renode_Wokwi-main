@@ -11,6 +11,10 @@ const MACHINE_NAME = 'NUCLEO-H753ZI GPIO Workbench';
 export type DemoGpioRegisterModel = 'stm32-modern' | 'stm32f1';
 export type DemoPadCapability =
   | 'gpio'
+  | 'power-vcc'
+  | 'power-3v3'
+  | 'power-5v'
+  | 'ground'
   | 'digital-input'
   | 'digital-output'
   | 'uart-tx'
@@ -23,6 +27,42 @@ export type DemoPadCapability =
   | 'pwm'
   | 'adc';
 export type DemoEndpointDirection = 'input' | 'output' | 'bidirectional';
+export type DemoPeripheralControllerType = 'firmware' | 'mirror-input' | 'blink';
+export type DemoPeripheralBehaviorRole = 'momentary-input' | 'gpio-output' | 'i2c-display';
+export type DemoPeripheralPowerVoltage = '3v3' | '5v' | 'vin' | 'external';
+
+export type DemoPeripheralController =
+  | {
+      type: 'firmware';
+    }
+  | {
+      type: 'mirror-input';
+      sourcePeripheralId: string | null;
+    }
+  | {
+      type: 'blink';
+      periodTicks: number;
+    };
+
+export type DemoPeripheralBehavior = {
+  schemaVersion: 2;
+  role: DemoPeripheralBehaviorRole;
+  controller: DemoPeripheralController | null;
+  powerRequired: boolean;
+};
+
+export type DemoPeripheralPowerBinding = {
+  schemaVersion: 1;
+  vccPadId: string | null;
+  gndPadId: string | null;
+  voltage: DemoPeripheralPowerVoltage | null;
+};
+
+export type DemoPeripheralTemplateBehaviorDefinition = {
+  role: DemoPeripheralBehaviorRole;
+  powerRequired: boolean;
+  defaultController: DemoPeripheralController | null;
+};
 
 export type DemoUartRuntime = {
   peripheralName: string;
@@ -127,6 +167,7 @@ export type DemoPeripheralTemplateDefinition = {
   labelPrefix: string;
   accentColor: string;
   category: 'input' | 'output' | 'grouped-output' | 'display';
+  behavior: DemoPeripheralTemplateBehaviorDefinition;
   endpoints: DemoPeripheralTemplateEndpointDefinition[];
 };
 
@@ -135,7 +176,14 @@ export type DemoPeripheral = {
   kind: DemoPeripheralKind;
   label: string;
   padId: string | null;
+  /**
+   * Legacy v1 shortcut kept for old project files. New code should use
+   * behavior.controller so outputs can be driven by firmware, inputs, scripts,
+   * or future instruments without hard-coding Button -> LED.
+   */
   sourcePeripheralId: string | null;
+  behavior?: DemoPeripheralBehavior;
+  power?: DemoPeripheralPowerBinding;
   templateKind?: DemoPeripheralTemplateKind;
   groupId?: string | null;
   groupLabel?: string | null;
@@ -177,11 +225,12 @@ export type DemoWorkbenchDevice = {
 };
 
 export type DemoPeripheralCapabilitySchema = {
-  catalogVersion: 1;
+  catalogVersion: 2;
   templates: Array<{
     kind: DemoPeripheralTemplateKind;
     title: string;
     category: DemoPeripheralTemplateDefinition['category'];
+    behavior: DemoPeripheralTemplateBehaviorDefinition;
     endpoints: Array<{
       id: string;
       label: string;
@@ -201,6 +250,10 @@ export type DemoWiringRuleIssue = {
     | 'pad-unavailable'
     | 'pad-shared'
     | 'capability-mismatch'
+    | 'missing-power'
+    | 'missing-ground'
+    | 'invalid-power'
+    | 'invalid-ground'
     | 'missing-driver'
     | 'invalid-driver'
     | 'unwired-driver';
@@ -220,6 +273,11 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
     labelPrefix: 'Button',
     accentColor: '#d946ef',
     category: 'input',
+    behavior: {
+      role: 'momentary-input',
+      powerRequired: false,
+      defaultController: null,
+    },
     endpoints: [
       {
         id: 'signal',
@@ -240,6 +298,13 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
     labelPrefix: 'LED',
     accentColor: '#f59e0b',
     category: 'output',
+    behavior: {
+      role: 'gpio-output',
+      powerRequired: true,
+      defaultController: {
+        type: 'firmware',
+      },
+    },
     endpoints: [
       {
         id: 'signal',
@@ -260,6 +325,13 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
     labelPrefix: 'Buzzer',
     accentColor: '#14b8a6',
     category: 'output',
+    behavior: {
+      role: 'gpio-output',
+      powerRequired: true,
+      defaultController: {
+        type: 'firmware',
+      },
+    },
     endpoints: [
       {
         id: 'signal',
@@ -280,6 +352,13 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
     labelPrefix: 'RGB LED',
     accentColor: '#06b6d4',
     category: 'grouped-output',
+    behavior: {
+      role: 'gpio-output',
+      powerRequired: true,
+      defaultController: {
+        type: 'firmware',
+      },
+    },
     endpoints: [
       {
         id: 'red',
@@ -318,6 +397,11 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
     labelPrefix: 'OLED',
     accentColor: '#38bdf8',
     category: 'display',
+    behavior: {
+      role: 'i2c-display',
+      powerRequired: true,
+      defaultController: null,
+    },
     endpoints: [
       {
         id: 'scl',
@@ -342,11 +426,12 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
 ];
 
 export const DEMO_PERIPHERAL_CAPABILITY_SCHEMA: DemoPeripheralCapabilitySchema = {
-  catalogVersion: 1,
+  catalogVersion: 2,
   templates: DEMO_PERIPHERAL_TEMPLATES.map((template) => ({
     kind: template.kind,
     title: template.title,
     category: template.category,
+    behavior: template.behavior,
     endpoints: template.endpoints.map((endpoint) => ({
       id: endpoint.id,
       label: endpoint.label,
@@ -375,6 +460,126 @@ export function getPeripheralTemplateDefinition(
     throw new Error(`Unknown peripheral template kind: ${templateKind}`);
   }
   return definition;
+}
+
+function cloneController(controller: DemoPeripheralController | null): DemoPeripheralController | null {
+  if (!controller) {
+    return null;
+  }
+  return {
+    ...controller,
+  };
+}
+
+export function createDefaultPeripheralBehavior(templateKind: DemoPeripheralTemplateKind): DemoPeripheralBehavior {
+  const template = getPeripheralTemplateDefinition(templateKind);
+  return {
+    schemaVersion: 2,
+    role: template.behavior.role,
+    controller: cloneController(template.behavior.defaultController),
+    powerRequired: template.behavior.powerRequired,
+  };
+}
+
+export function createDefaultPowerBinding(): DemoPeripheralPowerBinding {
+  return {
+    schemaVersion: 1,
+    vccPadId: null,
+    gndPadId: null,
+    voltage: null,
+  };
+}
+
+export function getPeripheralBehavior(peripheral: DemoPeripheral): DemoPeripheralBehavior {
+  if (peripheral.behavior?.schemaVersion === 2) {
+    return {
+      ...peripheral.behavior,
+      controller: cloneController(peripheral.behavior.controller),
+    };
+  }
+
+  const templateKind = isDemoPeripheralTemplateKind(peripheral.templateKind)
+    ? peripheral.templateKind
+    : peripheral.kind === 'button'
+      ? 'button'
+      : peripheral.kind === 'i2c'
+        ? 'ssd1306-oled'
+        : 'led';
+  const behavior = createDefaultPeripheralBehavior(templateKind);
+  if (peripheral.kind === 'led' && peripheral.sourcePeripheralId) {
+    behavior.controller = {
+      type: 'mirror-input',
+      sourcePeripheralId: peripheral.sourcePeripheralId,
+    };
+  }
+  return behavior;
+}
+
+export function getPeripheralController(peripheral: DemoPeripheral): DemoPeripheralController | null {
+  return getPeripheralBehavior(peripheral).controller;
+}
+
+export function getPeripheralPowerBinding(peripheral: DemoPeripheral): DemoPeripheralPowerBinding {
+  return {
+    ...createDefaultPowerBinding(),
+    ...(peripheral.power ?? {}),
+  };
+}
+
+export function getPowerPads(boardPads: readonly DemoBoardPad[]): DemoBoardPad[] {
+  return boardPads.filter((pad) => getPadCapabilities(pad).some((capability) => capability === 'power-vcc'));
+}
+
+export function getGroundPads(boardPads: readonly DemoBoardPad[]): DemoBoardPad[] {
+  return boardPads.filter((pad) => getPadCapabilities(pad).some((capability) => capability === 'ground'));
+}
+
+export function inferPowerVoltage(pad: DemoBoardPad | null): DemoPeripheralPowerVoltage | null {
+  if (!pad) {
+    return null;
+  }
+  const capabilities = new Set(getPadCapabilities(pad));
+  if (capabilities.has('power-3v3')) {
+    return '3v3';
+  }
+  if (capabilities.has('power-5v')) {
+    return '5v';
+  }
+  if (pad.pinLabel.toUpperCase().includes('VIN')) {
+    return 'vin';
+  }
+  return 'external';
+}
+
+export function isDevicePowered(device: DemoWorkbenchDevice, boardPads: readonly DemoBoardPad[]): boolean {
+  const template = getPeripheralTemplateDefinition(device.templateKind);
+  if (!template.behavior.powerRequired) {
+    return true;
+  }
+
+  const power = getPeripheralPowerBinding(device.members[0]);
+  const vccPad = power.vccPadId ? boardPads.find((pad) => pad.id === power.vccPadId) ?? null : null;
+  const gndPad = power.gndPadId ? boardPads.find((pad) => pad.id === power.gndPadId) ?? null : null;
+  return Boolean(
+    vccPad &&
+      gndPad &&
+      getPadCapabilities(vccPad).includes('power-vcc') &&
+      getPadCapabilities(gndPad).includes('ground')
+  );
+}
+
+export function getPeripheralControllerLabel(peripheral: DemoPeripheral, wiring: DemoWiring): string {
+  const controller = getPeripheralController(peripheral);
+  if (!controller || controller.type === 'firmware') {
+    return 'Firmware GPIO';
+  }
+  if (controller.type === 'blink') {
+    return `Blink ${controller.periodTicks} ticks`;
+  }
+  if (!controller.sourcePeripheralId) {
+    return 'Mirror input: unassigned';
+  }
+  return `Mirror ${wiring.peripherals.find((item) => item.id === controller.sourcePeripheralId)?.label ?? 'missing input'}`;
 }
 
 type SingleConnectorPinDefinition = {
@@ -463,6 +668,18 @@ export function inferPadCapabilities(options: {
   }
 
   const descriptor = `${options.pinLabel} ${options.signalName ?? ''}`.toUpperCase();
+  if (options.role === 'ground' || /\bA?GND\b|\bGROUND\b/.test(descriptor)) {
+    capabilities.add('ground');
+  }
+  if (options.role === 'power') {
+    capabilities.add('power-vcc');
+    if (/\b3V3\b|\b3\.3V\b|\bVDD\b|\bVDDA\b|\bIOREF\b/.test(descriptor)) {
+      capabilities.add('power-3v3');
+    }
+    if (/\b5V\b/.test(descriptor)) {
+      capabilities.add('power-5v');
+    }
+  }
   if (/\b(?:U?S?ART|LPUART)\d*\s*TX\b|\bTX\b/.test(descriptor)) {
     capabilities.add('uart-tx');
   }
@@ -922,6 +1139,8 @@ export const DEFAULT_DEMO_WIRING: DemoWiring = {
       label: 'Button 1',
       padId: 'CN10-3',
       sourcePeripheralId: null,
+      behavior: createDefaultPeripheralBehavior('button'),
+      power: createDefaultPowerBinding(),
       templateKind: 'button',
       groupId: null,
       groupLabel: null,
@@ -935,6 +1154,19 @@ export const DEFAULT_DEMO_WIRING: DemoWiring = {
       label: 'LED 1',
       padId: 'CN7-10',
       sourcePeripheralId: 'button-1',
+      behavior: {
+        ...createDefaultPeripheralBehavior('led'),
+        controller: {
+          type: 'mirror-input',
+          sourcePeripheralId: 'button-1',
+        },
+      },
+      power: {
+        schemaVersion: 1,
+        vccPadId: 'CN7-3',
+        gndPadId: 'CN7-5',
+        voltage: '3v3',
+      },
       templateKind: 'led',
       groupId: null,
       groupLabel: null,
@@ -955,7 +1187,7 @@ export function getPeripheralTemplateKind(peripheral: DemoPeripheral): DemoPerip
   if (isDemoPeripheralTemplateKind(peripheral.templateKind)) {
     return peripheral.templateKind;
   }
-  return peripheral.kind === 'button' ? 'button' : 'led';
+  return peripheral.kind === 'button' ? 'button' : peripheral.kind === 'i2c' ? 'ssd1306-oled' : 'led';
 }
 
 export function getPeripheralEndpointDefinition(peripheral: DemoPeripheral): DemoPeripheralTemplateEndpointDefinition {
@@ -1061,7 +1293,9 @@ function buildTemplatePeripheral(
     kind: endpoint.kind,
     label: options?.label ?? label,
     padId: null,
-    sourcePeripheralId: endpoint.kind === 'led' ? options?.sourcePeripheralId ?? null : null,
+    sourcePeripheralId: options?.sourcePeripheralId ?? null,
+    behavior: options?.behavior ?? createDefaultPeripheralBehavior(definition.kind),
+    power: options?.power ?? createDefaultPowerBinding(),
     templateKind: definition.kind,
     groupId,
     groupLabel,
@@ -1324,30 +1558,90 @@ export function validateWiringRules(
     });
   });
 
+  buildWorkbenchDevices(wiring).forEach((device) => {
+    const template = getPeripheralTemplateDefinition(device.templateKind);
+    const representative = device.members[0];
+    const power = getPeripheralPowerBinding(representative);
+
+    if (template.behavior.powerRequired) {
+      if (!power.vccPadId) {
+        issues.push({
+          id: `missing-power:${device.id}`,
+          severity: 'warning',
+          code: 'missing-power',
+          peripheralId: representative.id,
+          message: `${device.label} is missing VCC. It can stay wired, but the visual runtime will treat it as unpowered.`,
+        });
+      }
+      if (!power.gndPadId) {
+        issues.push({
+          id: `missing-ground:${device.id}`,
+          severity: 'warning',
+          code: 'missing-ground',
+          peripheralId: representative.id,
+          message: `${device.label} is missing GND. It can stay wired, but the visual runtime will treat it as unpowered.`,
+        });
+      }
+    }
+
+    if (power.vccPadId) {
+      const pad = padById.get(power.vccPadId);
+      if (!pad || !getPadCapabilities(pad).includes('power-vcc')) {
+        issues.push({
+          id: `invalid-power:${device.id}:${power.vccPadId}`,
+          severity: 'error',
+          code: 'invalid-power',
+          peripheralId: representative.id,
+          padId: power.vccPadId,
+          message: `${device.label} VCC is connected to ${pad ? describePad(pad) : power.vccPadId}, which is not a power rail.`,
+        });
+      }
+    }
+
+    if (power.gndPadId) {
+      const pad = padById.get(power.gndPadId);
+      if (!pad || !getPadCapabilities(pad).includes('ground')) {
+        issues.push({
+          id: `invalid-ground:${device.id}:${power.gndPadId}`,
+          severity: 'error',
+          code: 'invalid-ground',
+          peripheralId: representative.id,
+          padId: power.gndPadId,
+          message: `${device.label} GND is connected to ${pad ? describePad(pad) : power.gndPadId}, which is not a ground rail.`,
+        });
+      }
+    }
+  });
+
   wiring.peripherals
     .filter((peripheral) => peripheral.kind === 'led')
     .forEach((peripheral) => {
-      if (!peripheral.sourcePeripheralId) {
+      const controller = getPeripheralController(peripheral);
+      if (controller?.type !== 'mirror-input') {
+        return;
+      }
+
+      if (!controller.sourcePeripheralId) {
         issues.push({
           id: `missing-driver:${peripheral.id}`,
           severity: 'warning',
           code: 'missing-driver',
           peripheralId: peripheral.id,
           endpointId: peripheral.endpointId ?? null,
-          message: `${peripheral.endpointLabel ?? 'Output'} on ${peripheral.label} has no controlling button, so generated firmware will keep it low.`,
+          message: `${peripheral.endpointLabel ?? 'Output'} on ${peripheral.label} mirrors an input, but no input source is selected.`,
         });
         return;
       }
 
-      const driver = peripheralById.get(peripheral.sourcePeripheralId);
+      const driver = peripheralById.get(controller.sourcePeripheralId);
       if (!driver || driver.kind !== 'button') {
         issues.push({
-          id: `invalid-driver:${peripheral.id}:${peripheral.sourcePeripheralId}`,
+          id: `invalid-driver:${peripheral.id}:${controller.sourcePeripheralId}`,
           severity: 'error',
           code: 'invalid-driver',
           peripheralId: peripheral.id,
           endpointId: peripheral.endpointId ?? null,
-          message: `${peripheral.label} is controlled by a missing or non-button peripheral "${peripheral.sourcePeripheralId}".`,
+          message: `${peripheral.label} mirrors a missing or non-button input "${controller.sourcePeripheralId}".`,
         });
         return;
       }
@@ -1359,7 +1653,7 @@ export function validateWiringRules(
           code: 'unwired-driver',
           peripheralId: peripheral.id,
           endpointId: peripheral.endpointId ?? null,
-          message: `${peripheral.label} is controlled by ${driver.label}, but that button is not wired yet.`,
+          message: `${peripheral.label} mirrors ${driver.label}, but that input is not wired yet.`,
         });
       }
     });
@@ -1382,10 +1676,15 @@ function resolveLedDriver(led: DemoPeripheral, wiring: DemoWiring): DemoPeripher
     return null;
   }
 
-  const preferredButton = led.sourcePeripheralId
-    ? connectedButtons.find((button) => button.id === led.sourcePeripheralId) ?? null
+  const controller = getPeripheralController(led);
+  const sourcePeripheralId =
+    controller?.type === 'mirror-input'
+      ? controller.sourcePeripheralId
+      : led.sourcePeripheralId;
+  const preferredButton = sourcePeripheralId
+    ? connectedButtons.find((button) => button.id === sourcePeripheralId) ?? null
     : null;
-  return preferredButton ?? connectedButtons[0];
+  return preferredButton;
 }
 
 function createGpioRuntimeSource(runtime: DemoBoardRuntime): string {
@@ -1704,10 +2003,18 @@ export function generateDemoMainSource(
     .map((led, index) => {
       const pin = ledPins[index];
       const pad = resolveConnectedPeripheralPad(led, boardPads);
+      const controller = getPeripheralController(led);
       const driver = resolveLedDriver(led, wiring);
-      const driverSummary = driver ? driver.label : 'no assigned button';
+      const driverSummary =
+        controller?.type === 'mirror-input'
+          ? driver
+            ? `mirrors ${driver.label}`
+            : 'mirror input not selected'
+          : controller?.type === 'blink'
+            ? `blink every ${controller.periodTicks} loop tick(s)`
+            : 'firmware-controlled GPIO';
       return [
-        `// ${led.label}: ${describePad(pad)} (driven by ${driverSummary})`,
+        `// ${led.label}: ${describePad(pad)} (${driverSummary})`,
         `#define LED_${index}_GPIO_BASE ${formatHex(pin.baseAddress)}u`,
         `#define LED_${index}_PIN ${pin.number}u`,
       ].join('\n');
@@ -1728,9 +2035,20 @@ export function generateDemoMainSource(
 
   const ledWrites = connectedLeds
     .map((led, index) => {
+      const controller = getPeripheralController(led);
       const driver = resolveLedDriver(led, wiring);
       const driverIndex = driver ? connectedButtons.findIndex((button) => button.id === driver.id) : -1;
-      const stateExpression = driver && driverIndex >= 0 ? `button_state_${driverIndex}` : '0';
+      const stateExpression =
+        controller?.type === 'mirror-input' && driver && driverIndex >= 0
+          ? `button_state_${driverIndex}`
+          : controller?.type === 'blink'
+            ? `((demo_tick / ${Math.max(1, controller.periodTicks)}u) & 1u)`
+            : null;
+      if (!stateExpression) {
+        return [
+          `        // ${cString(led.endpointLabel ? `${led.label} ${led.endpointLabel}` : led.label)} is firmware-controlled; generated code leaves this GPIO for user code.`,
+        ].join('\n');
+      }
       return [
         `        const int led_state_${index} = ${stateExpression};`,
         `        write_output(LED_${index}_GPIO_BASE, LED_${index}_PIN, led_state_${index});`,
@@ -1746,12 +2064,22 @@ export function generateDemoMainSource(
   const ledStateDeclarations = connectedLeds
     .map((_led, index) => `    int led_previous_${index} = -1;`)
     .join('\n');
+  const hasBlinkOutputs = connectedLeds.some((led) => getPeripheralController(led)?.type === 'blink');
 
   const wiringSummary = [
     ...connectedButtons.map((button) => `// Input  ${button.label}: ${describePeripheral(button, boardPads)}`),
     ...connectedLeds.map((led) => {
       const driver = resolveLedDriver(led, wiring);
-      return `// Output ${led.label}: ${describePeripheral(led, boardPads)}${driver ? ` <= ${driver.label}` : ''}`;
+      const controller = getPeripheralController(led);
+      const behaviorSummary =
+        controller?.type === 'mirror-input'
+          ? driver
+            ? ` <= ${driver.label}`
+            : ' <= unassigned input'
+          : controller?.type === 'blink'
+            ? ` <= blink(${controller.periodTicks})`
+            : ' <= firmware';
+      return `// Output ${led.label}: ${describePeripheral(led, boardPads)}${behaviorSummary}`;
     }),
   ].join('\n');
 
@@ -1802,11 +2130,13 @@ int main(void) {
 ${configureLeds || '    // No LED outputs connected.'}
 ${configureButtons || '    // No button inputs connected.'}
 ${ledStateDeclarations || '    // No output state history needed.'}
+${hasBlinkOutputs ? '    uint32_t demo_tick = 0u;' : '    // No generated blink outputs.'}
 
     while(1) {
 ${noButtonsNotice}${noLedsNotice}
 ${buttonReads || '        // No button states to sample.'}
 ${ledWrites || '        // No LED states to update.'}
+${hasBlinkOutputs ? '        demo_tick++;' : ''}
         const int uart_rx = demo_uart_read_char();
         if(uart_rx >= 0) {
             demo_uart_write_string("UART RX: ");

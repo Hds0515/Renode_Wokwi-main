@@ -1,10 +1,17 @@
 import {
   DEMO_PERIPHERAL_TEMPLATES,
   DemoPeripheral,
+  DemoPeripheralBehavior,
+  DemoPeripheralController,
+  DemoPeripheralPowerBinding,
   DemoPeripheralTemplateKind,
   DemoWiring,
   buildWorkbenchDevices,
+  createDefaultPeripheralBehavior,
+  createDefaultPowerBinding,
   generateDemoMainSource,
+  getPeripheralTemplateKind,
+  inferPowerVoltage,
   isDemoPeripheralTemplateKind,
   synchronizeWiringWires,
 } from './firmware';
@@ -38,12 +45,12 @@ export type ProjectDocument = {
     name: string;
   };
   templates: {
-    catalogVersion: 1;
+    catalogVersion: 2;
     kinds: DemoPeripheralTemplateKind[];
   };
   componentPackages: {
     schemaVersion: 1;
-    catalogVersion: 1;
+    catalogVersion: 2;
     kinds: DemoPeripheralTemplateKind[];
   };
   wiring: DemoWiring;
@@ -65,7 +72,7 @@ export type ProjectLoadResult = {
 
 export const PROJECT_APP_ID = 'renode-local-visualizer';
 export const PROJECT_SCHEMA_VERSION = 2;
-export const PROJECT_TEMPLATE_CATALOG_VERSION = 1;
+export const PROJECT_TEMPLATE_CATALOG_VERSION = 2;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -73,6 +80,92 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function normalizeNullableString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
+
+function normalizePeripheralController(value: unknown): DemoPeripheralController | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (value.type === 'firmware') {
+    return { type: 'firmware' };
+  }
+  if (value.type === 'mirror-input') {
+    return {
+      type: 'mirror-input',
+      sourcePeripheralId: normalizeNullableString(value.sourcePeripheralId),
+    };
+  }
+  if (value.type === 'blink') {
+    return {
+      type: 'blink',
+      periodTicks: typeof value.periodTicks === 'number' && value.periodTicks > 0 ? Math.round(value.periodTicks) : 25000,
+    };
+  }
+  return null;
+}
+
+function normalizePeripheralBehavior(
+  value: unknown,
+  templateKind: DemoPeripheralTemplateKind,
+  legacySourcePeripheralId: string | null
+): DemoPeripheralBehavior {
+  const fallback = createDefaultPeripheralBehavior(templateKind);
+  if (!isRecord(value)) {
+    return legacySourcePeripheralId
+      ? {
+          ...fallback,
+          controller: {
+            type: 'mirror-input',
+            sourcePeripheralId: legacySourcePeripheralId,
+          },
+        }
+      : fallback;
+  }
+
+  return {
+    schemaVersion: 2,
+    role:
+      value.role === 'momentary-input' || value.role === 'gpio-output' || value.role === 'i2c-display'
+        ? value.role
+        : fallback.role,
+    controller: normalizePeripheralController(value.controller) ?? fallback.controller,
+    powerRequired: typeof value.powerRequired === 'boolean' ? value.powerRequired : fallback.powerRequired,
+  };
+}
+
+function normalizePeripheralPower(
+  value: unknown,
+  board: BoardSchema,
+  warnings: string[],
+  peripheralId: string
+): DemoPeripheralPowerBinding {
+  const fallback = createDefaultPowerBinding();
+  if (!isRecord(value)) {
+    return fallback;
+  }
+
+  const padById = new Map(board.connectors.all.flatMap((connector) => connector.pins).map((pad) => [pad.id, pad]));
+  const vccPadId = normalizeNullableString(value.vccPadId);
+  const gndPadId = normalizeNullableString(value.gndPadId);
+  const vccPad = vccPadId ? padById.get(vccPadId) ?? null : null;
+  const gndPad = gndPadId ? padById.get(gndPadId) ?? null : null;
+
+  if (vccPadId && !vccPad) {
+    warnings.push(`Cleared missing VCC pad "${vccPadId}" from "${peripheralId}".`);
+  }
+  if (gndPadId && !gndPad) {
+    warnings.push(`Cleared missing GND pad "${gndPadId}" from "${peripheralId}".`);
+  }
+
+  return {
+    schemaVersion: 1,
+    vccPadId: vccPad ? vccPad.id : null,
+    gndPadId: gndPad ? gndPad.id : null,
+    voltage:
+      value.voltage === '3v3' || value.voltage === '5v' || value.voltage === 'vin' || value.voltage === 'external'
+        ? value.voltage
+        : inferPowerVoltage(vccPad),
+  };
 }
 
 function normalizeProjectPosition(value: unknown): ProjectPeripheralPosition | null {
@@ -180,13 +273,17 @@ function normalizeProjectWiring(value: unknown, board: BoardSchema, warnings: st
           : rawKind === 'i2c'
             ? 'ssd1306-oled'
             : 'led';
+      const legacySourcePeripheralId = normalizeNullableString(rawPeripheral.sourcePeripheralId);
+      const behavior = normalizePeripheralBehavior(rawPeripheral.behavior, templateKind, legacySourcePeripheralId);
 
       return {
         id: uniqueId,
         kind: rawKind,
         label: normalizeNullableString(rawPeripheral.label) ?? `${rawKind === 'button' ? 'Button' : rawKind === 'i2c' ? 'I2C' : 'LED'} ${index + 1}`,
         padId: padId && selectablePadIds.has(padId) ? padId : null,
-        sourcePeripheralId: normalizeNullableString(rawPeripheral.sourcePeripheralId),
+        sourcePeripheralId: behavior.controller?.type === 'mirror-input' ? behavior.controller.sourcePeripheralId : legacySourcePeripheralId,
+        behavior,
+        power: normalizePeripheralPower(rawPeripheral.power, board, warnings, uniqueId),
         templateKind,
         groupId: normalizeNullableString(rawPeripheral.groupId),
         groupLabel: normalizeNullableString(rawPeripheral.groupLabel),
@@ -200,17 +297,22 @@ function normalizeProjectWiring(value: unknown, board: BoardSchema, warnings: st
   const peripheralIds = new Set(peripherals.map((peripheral) => peripheral.id));
   return synchronizeWiringWires({
     peripherals: peripherals.map((peripheral) => {
-      const sourcePeripheralId =
-        peripheral.kind === 'led' && peripheral.sourcePeripheralId && peripheralIds.has(peripheral.sourcePeripheralId)
-          ? peripheral.sourcePeripheralId
-          : null;
-      if (peripheral.kind === 'led' && peripheral.sourcePeripheralId && !sourcePeripheralId) {
-        warnings.push(`Cleared missing driver reference "${peripheral.sourcePeripheralId}" from "${peripheral.id}".`);
+      let behavior = peripheral.behavior ?? createDefaultPeripheralBehavior(getPeripheralTemplateKind(peripheral));
+      if (behavior.controller?.type === 'mirror-input' && behavior.controller.sourcePeripheralId && !peripheralIds.has(behavior.controller.sourcePeripheralId)) {
+        warnings.push(`Cleared missing input reference "${behavior.controller.sourcePeripheralId}" from "${peripheral.id}".`);
+        behavior = {
+          ...behavior,
+          controller: {
+            ...behavior.controller,
+            sourcePeripheralId: null,
+          },
+        };
       }
 
       return {
         ...peripheral,
-        sourcePeripheralId,
+        sourcePeripheralId: behavior.controller?.type === 'mirror-input' ? behavior.controller.sourcePeripheralId : null,
+        behavior,
       };
     }),
   });

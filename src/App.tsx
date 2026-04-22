@@ -32,6 +32,8 @@ import {
   MAX_PERIPHERALS,
   DemoBoardConnector,
   DemoBoardPad,
+  DemoPeripheralController,
+  DemoPeripheralPowerBinding,
   DemoPeripheral,
   DemoPeripheralKind,
   DemoPeripheralTemplateKind,
@@ -42,17 +44,27 @@ import {
   buildWorkbenchDevices,
   countPeripheralTemplateInstances,
   createPeripheralTemplate,
+  createDefaultPeripheralBehavior,
+  createDefaultPowerBinding,
   describePad,
   formatPadCapabilities,
   getConnectedPeripherals,
   getPadCapabilities,
   getPeripheralsByKind,
   getPeripheralEndpointDefinition,
+  getPeripheralBehavior,
+  getPeripheralController,
+  getPeripheralControllerLabel,
+  getPeripheralPowerBinding,
   getPeripheralTemplateDefinition,
   getPeripheralTemplateKind,
+  getGroundPads,
+  getPowerPads,
   getWiringWires,
   getWorkbenchDeviceId,
+  inferPowerVoltage,
   isDemoPeripheralTemplateKind,
+  isDevicePowered,
   resolveSelectablePad,
   synchronizeWiringWires,
   validateWiringRules,
@@ -214,16 +226,39 @@ function getPadDescription(padId: string | null, board: BoardSchema, fallback: s
   return describePad(resolveSelectablePad(padId, getBoardPads(board)));
 }
 
+function getDevicePower(device: DemoWorkbenchDevice): DemoPeripheralPowerBinding {
+  return getPeripheralPowerBinding(device.members[0]);
+}
+
+function getDevicePowerLabel(device: DemoWorkbenchDevice): string {
+  const template = getPeripheralTemplateDefinition(device.templateKind);
+  if (!template.behavior.powerRequired) {
+    return 'Power optional';
+  }
+  const power = getDevicePower(device);
+  if (!power.vccPadId || !power.gndPadId) {
+    return 'Unpowered';
+  }
+  return `${power.voltage?.toUpperCase() ?? 'VCC'} + GND`;
+}
+
 function reconcileWiringForBoard(wiring: DemoWiring, board: BoardSchema): DemoWiring {
   const selectablePadIds = new Set(board.connectors.selectablePads.map((pad) => pad.id));
+  const boardPadIds = new Set(getBoardPads(board).map((pad) => pad.id));
   return synchronizeWiringWires({
     peripherals: wiring.peripherals.map((peripheral) =>
-      peripheral.padId && !selectablePadIds.has(peripheral.padId)
-        ? {
-            ...peripheral,
-            padId: null,
-          }
-        : peripheral
+      ({
+        ...peripheral,
+        padId: peripheral.padId && selectablePadIds.has(peripheral.padId) ? peripheral.padId : null,
+        power: peripheral.power
+          ? {
+              ...peripheral.power,
+              vccPadId: peripheral.power.vccPadId && boardPadIds.has(peripheral.power.vccPadId) ? peripheral.power.vccPadId : null,
+              gndPadId: peripheral.power.gndPadId && boardPadIds.has(peripheral.power.gndPadId) ? peripheral.power.gndPadId : null,
+            }
+          : createDefaultPowerBinding(),
+        behavior: peripheral.behavior ?? createDefaultPeripheralBehavior(getPeripheralTemplateKind(peripheral)),
+      })
     ),
   });
 }
@@ -915,8 +950,11 @@ function getPadTone(
 function buildWorkbenchConnectorGroups(wiring: DemoWiring, showFullPinout: boolean, board: BoardSchema = DEFAULT_BOARD) {
   const curatedPadIds = new Set<string>(board.teaching.curatedPadIds);
   const connectedPadIds = new Set(
-    getConnectedPeripherals(wiring)
-      .map((peripheral) => peripheral.padId)
+    wiring.peripherals
+      .flatMap((peripheral) => {
+        const power = getPeripheralPowerBinding(peripheral);
+        return [peripheral.padId, power.vccPadId, power.gndPadId];
+      })
       .filter((padId): padId is string => Boolean(padId))
   );
 
@@ -1363,6 +1401,8 @@ function PeripheralRackCard({
   onRemove,
   onPress,
   onSourceChange,
+  onBehaviorChange,
+  onPowerChange,
 }: {
   board: BoardSchema;
   peripheral: DemoPeripheral;
@@ -1376,9 +1416,17 @@ function PeripheralRackCard({
   onRemove: () => void;
   onPress: (pressed: boolean) => void;
   onSourceChange: (sourceId: string | null) => void;
+  onBehaviorChange: (controller: DemoPeripheralController) => void;
+  onPowerChange: (power: Partial<DemoPeripheralPowerBinding>) => void;
 }) {
   const templateKind = getPeripheralTemplateKind(peripheral);
   const palette = getTemplatePalette(templateKind);
+  const behavior = getPeripheralBehavior(peripheral);
+  const controller = getPeripheralController(peripheral);
+  const power = getPeripheralPowerBinding(peripheral);
+  const powerPads = getPowerPads(getBoardPads(board));
+  const groundPads = getGroundPads(getBoardPads(board));
+  const powered = !behavior.powerRequired || (Boolean(power.vccPadId) && Boolean(power.gndPadId));
   const baseTone =
     peripheral.kind === 'button'
       ? buttonPressed
@@ -1415,21 +1463,85 @@ function PeripheralRackCard({
         {getPadDescription(peripheral.padId, board, 'Not connected to a board pad')}
       </div>
 
+      {behavior.powerRequired ? (
+        <div className="mt-3 rounded-2xl border border-current/20 bg-black/10 p-3">
+          <div className="text-xs uppercase tracking-[0.22em] text-current/70">Power Rails</div>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <select
+              value={power.vccPadId ?? ''}
+              onChange={(event) => {
+                const pad = powerPads.find((candidate) => candidate.id === event.target.value) ?? null;
+                onPowerChange({
+                  vccPadId: pad?.id ?? null,
+                  voltage: inferPowerVoltage(pad),
+                });
+              }}
+              className="rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
+            >
+              <option value="">VCC...</option>
+              {powerPads.map((pad) => (
+                <option key={pad.id} value={pad.id} className="text-slate-900">
+                  {pad.connectorTitle} {pad.pinLabel}
+                </option>
+              ))}
+            </select>
+            <select
+              value={power.gndPadId ?? ''}
+              onChange={(event) => onPowerChange({ gndPadId: event.target.value || null })}
+              className="rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
+            >
+              <option value="">GND...</option>
+              {groundPads.map((pad) => (
+                <option key={pad.id} value={pad.id} className="text-slate-900">
+                  {pad.connectorTitle} {pad.pinLabel}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="mt-2 text-[11px] text-current/70">
+            {powered ? `${power.voltage?.toUpperCase() ?? 'VCC'} and GND connected.` : 'Missing VCC/GND: visual output stays unpowered.'}
+          </div>
+        </div>
+      ) : null}
+
       {peripheral.kind === 'led' ? (
         <div className="mt-3">
-          <div className="text-xs uppercase tracking-[0.22em] text-current/70">Driven By</div>
+          <div className="text-xs uppercase tracking-[0.22em] text-current/70">Behavior</div>
           <select
-            value={peripheral.sourcePeripheralId ?? ''}
+            value={controller?.type ?? 'firmware'}
+            onChange={(event) => {
+              const type = event.target.value;
+              if (type === 'mirror-input') {
+                onBehaviorChange({ type: 'mirror-input', sourcePeripheralId: buttons[0]?.id ?? null });
+              } else if (type === 'blink') {
+                onBehaviorChange({ type: 'blink', periodTicks: 25000 });
+              } else {
+                onBehaviorChange({ type: 'firmware' });
+              }
+            }}
+            className="mt-2 w-full rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
+          >
+            <option value="firmware" className="text-slate-900">Firmware controls GPIO</option>
+            <option value="mirror-input" className="text-slate-900">Mirror input button</option>
+            <option value="blink" className="text-slate-900">Generated blink demo</option>
+          </select>
+          {controller?.type === 'mirror-input' ? (
+          <>
+          <div className="mt-3 text-xs uppercase tracking-[0.22em] text-current/70">Input Source</div>
+          <select
+            value={controller.sourcePeripheralId ?? ''}
             onChange={(event) => onSourceChange(event.target.value || null)}
             className="mt-2 w-full rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
           >
-            <option value="">No button selected</option>
+            <option value="">No input selected</option>
             {buttons.map((button) => (
               <option key={button.id} value={button.id} className="text-slate-900">
                 {button.label}
               </option>
             ))}
           </select>
+          </>
+          ) : null}
         </div>
       ) : null}
 
@@ -1471,7 +1583,7 @@ function PeripheralRackCard({
         </button>
       ) : (
         <div className="mt-3 rounded-2xl border border-current/20 bg-black/10 px-3 py-3 text-center text-sm font-semibold">
-          {templateKind === 'buzzer' ? (ledOn ? 'Buzzer is active' : 'Buzzer is idle') : ledOn ? 'LED is glowing' : 'LED is idle'}
+          {behavior.powerRequired && !powered ? 'Unpowered' : templateKind === 'buzzer' ? (ledOn ? 'Buzzer is active' : 'Buzzer is idle') : ledOn ? 'LED is glowing' : 'LED is idle'}
         </div>
       )}
     </div>
@@ -1679,6 +1791,64 @@ function BoardTopView({
       }
     >;
   }, [board, boardPads, resolveCanvasPosition, wiring, workbenchDevices]);
+  const powerWires = useMemo(() => {
+    const deviceIndexById = new Map(workbenchDevices.map((device, index) => [device.id, index]));
+    const boardPadById = new Map<string, DemoBoardPad>(boardPads.map((pad) => [pad.id, pad]));
+
+    return workbenchDevices.flatMap((device) => {
+      const template = getPeripheralTemplateDefinition(device.templateKind);
+      if (!template.behavior.powerRequired) {
+        return [];
+      }
+
+      const deviceIndex = deviceIndexById.get(device.id);
+      if (deviceIndex === undefined) {
+        return [];
+      }
+
+      const frame = resolveCanvasPosition(device.id, deviceIndex);
+      const power = getPeripheralPowerBinding(device.members[0]);
+      const rails = [
+        {
+          id: `${device.id}:vcc`,
+          label: `${device.label} VCC`,
+          padId: power.vccPadId,
+          color: '#22c55e',
+          start: {
+            x: frame.x + PERIPHERAL_CARD_WIDTH + (device.templateKind === 'ssd1306-oled' ? 34 : 18),
+            y: frame.y + PERIPHERAL_CARD_HEIGHT - 30,
+          },
+        },
+        {
+          id: `${device.id}:gnd`,
+          label: `${device.label} GND`,
+          padId: power.gndPadId,
+          color: '#64748b',
+          start: {
+            x: frame.x + PERIPHERAL_CARD_WIDTH + (device.templateKind === 'ssd1306-oled' ? 34 : 18),
+            y: frame.y + PERIPHERAL_CARD_HEIGHT - 14,
+          },
+        },
+      ];
+
+      return rails.flatMap((rail) => {
+        const pad = rail.padId ? boardPadById.get(rail.padId) ?? null : null;
+        if (!pad) {
+          return [];
+        }
+        const padAnchor = getPadAnchor(pad, board);
+        return [
+          {
+            id: rail.id,
+            label: rail.label,
+            pad,
+            path: buildWirePath(rail.start, padAnchor),
+            color: rail.color,
+          },
+        ];
+      });
+    });
+  }, [board, boardPads, resolveCanvasPosition, workbenchDevices]);
   const selectedWire = selectedWireId ? wires.find((wire) => wire.id === selectedWireId) ?? null : null;
 
   useEffect(() => {
@@ -1975,6 +2145,19 @@ function BoardTopView({
             viewBox={`0 0 ${BOARD_CANVAS_WIDTH} ${canvasHeight}`}
             preserveAspectRatio="none"
           >
+            {powerWires.map((wire) => (
+              <path
+                key={wire.id}
+                d={wire.path}
+                fill="none"
+                stroke={wire.color}
+                strokeWidth="2.5"
+                strokeDasharray={wire.id.endsWith(':gnd') ? '5 7' : undefined}
+                strokeLinecap="round"
+                opacity="0.72"
+                style={{ pointerEvents: 'none' }}
+              />
+            ))}
             {wires.map((wire) => (
               <g key={wire.id}>
                 <path
@@ -2258,6 +2441,7 @@ function BoardTopView({
             const anchor = getPadAnchor(pad, board);
             const occupant = findPeripheralForPad(wiring, pad.id);
             const isHovered = hoveredPadId === pad.id;
+            const isPowerRail = pad.role === 'power' || pad.role === 'ground';
             const accent = occupant?.kind === 'button' ? '#d946ef' : occupant?.accentColor ?? (occupant?.kind === 'led' ? '#f59e0b' : '#06b6d4');
 
             return (
@@ -2266,12 +2450,16 @@ function BoardTopView({
                   onClick={() => onAssignPad(pad)}
                   onPointerEnter={() => setHoveredPadId(pad.id)}
                   onPointerLeave={() => setHoveredPadId((current) => (current === pad.id ? null : current))}
-                  disabled={simulationRunning}
+                  disabled={simulationRunning || isPowerRail}
                   data-board-pad-id={pad.id}
                   className={`absolute rounded-full border transition ${
                     simulationRunning
                       ? 'cursor-not-allowed border-slate-300/60 bg-white/70'
-                      : occupant
+                      : isPowerRail
+                        ? pad.role === 'power'
+                          ? 'cursor-default border-emerald-200 bg-emerald-400 shadow-[0_0_0_4px_rgba(34,197,94,0.18)]'
+                          : 'cursor-default border-slate-200 bg-slate-500 shadow-[0_0_0_4px_rgba(100,116,139,0.18)]'
+                        : occupant
                         ? 'border-white/90 bg-white shadow-[0_0_0_4px_rgba(255,255,255,0.25)]'
                         : armedPeripheralId
                           ? 'border-cyan-300 bg-cyan-200/95 hover:scale-110 hover:bg-cyan-300'
@@ -2296,7 +2484,7 @@ function BoardTopView({
                     }}
                   >
                     <div className="font-semibold text-slate-900">{pad.pinLabel}</div>
-                    <div className="mt-0.5 text-slate-600">{pad.mcuPinId}</div>
+                    <div className="mt-0.5 text-slate-600">{pad.mcuPinId || pad.signalName}</div>
                   </div>
                 ) : null}
               </div>
@@ -2396,10 +2584,6 @@ function BoardTopView({
                 >
                   {device.members.map((member, endpointIndex) => {
                     const anchor = getDeviceEndpointAnchor(frame, endpointIndex, device.members.length);
-                    const sourceLabel = member.sourcePeripheralId
-                      ? wiring.peripherals.find((item) => item.id === member.sourcePeripheralId)?.label ?? 'Button'
-                      : null;
-
                     return (
                       <button
                         key={member.id}
@@ -2452,9 +2636,7 @@ function BoardTopView({
                   <div className="mt-3 space-y-2">
                     {device.members.map((member) => {
                       const active = Boolean(ledStates[member.id]);
-                      const sourceLabel = member.sourcePeripheralId
-                        ? wiring.peripherals.find((item) => item.id === member.sourcePeripheralId)?.label ?? 'Button'
-                        : null;
+                      const controllerLabel = getPeripheralControllerLabel(member, wiring);
 
                       return (
                         <div key={member.id} className="rounded-2xl border border-slate-200 bg-white/80 px-3 py-2">
@@ -2462,7 +2644,7 @@ function BoardTopView({
                             <div className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: member.accentColor ?? '#0f172a' }}>
                               {member.endpointLabel}
                             </div>
-                            <div className="text-[11px] text-slate-500">{active ? 'On' : sourceLabel ? `<= ${sourceLabel}` : 'No driver'}</div>
+                            <div className="text-[11px] text-slate-500">{active ? 'On' : controllerLabel}</div>
                           </div>
                           <div className="mt-1 text-[11px] text-slate-600">
                             {getPadDescription(member.padId, board, 'Wire this channel to a GPIO pad')}
@@ -2479,10 +2661,7 @@ function BoardTopView({
             const templateKind = getPeripheralTemplateKind(peripheral);
             const isButton = peripheral.kind === 'button';
             const active = isButton ? buttonStates[peripheral.id] : ledStates[peripheral.id];
-            const sourceLabel =
-              peripheral.kind === 'led' && peripheral.sourcePeripheralId
-                ? wiring.peripherals.find((item) => item.id === peripheral.sourcePeripheralId)?.label ?? 'Button'
-                : null;
+            const controllerLabel = peripheral.kind === 'led' ? getPeripheralControllerLabel(peripheral, wiring) : null;
             const baseTone = isButton
               ? active
                 ? 'border-fuchsia-300 bg-fuchsia-500/90 text-white'
@@ -2563,14 +2742,10 @@ function BoardTopView({
                       {templateKind === 'buzzer'
                         ? active
                           ? 'Buzzing'
-                          : sourceLabel
-                            ? `Driven By ${sourceLabel}`
-                            : 'Awaiting Button Source'
+                          : controllerLabel ?? 'Idle'
                         : active
                           ? 'Glow On'
-                          : sourceLabel
-                            ? `Driven By ${sourceLabel}`
-                            : 'Awaiting Button Source'}
+                          : controllerLabel ?? 'Idle'}
                     </div>
                   )}
                 </div>
@@ -2618,6 +2793,8 @@ function WiringWorkbench({
   onRemovePeripheral,
   onPressPeripheral,
   onSourceChange,
+  onBehaviorChange,
+  onPowerChange,
   onToggleFullPinout,
   onMovePeripheral,
 }: {
@@ -2639,6 +2816,8 @@ function WiringWorkbench({
   onRemovePeripheral: (peripheralId: string) => void;
   onPressPeripheral: (peripheralId: string, pressed: boolean) => void;
   onSourceChange: (peripheralId: string, sourceId: string | null) => void;
+  onBehaviorChange: (peripheralId: string, controller: DemoPeripheralController) => void;
+  onPowerChange: (deviceId: string, power: Partial<DemoPeripheralPowerBinding>) => void;
   onToggleFullPinout: () => void;
   onMovePeripheral: (peripheralId: string, position: PeripheralPosition) => void;
 }) {
@@ -2647,6 +2826,9 @@ function WiringWorkbench({
   const workbenchDevices = useMemo(() => buildWorkbenchDevices(wiring), [wiring]);
   const [libraryDragKind, setLibraryDragKind] = useState<DemoPeripheralTemplateKind | null>(null);
   const workbenchConnectors = useMemo(() => buildWorkbenchConnectorGroups(wiring, showFullPinout, board), [board, wiring, showFullPinout]);
+  const boardPads = useMemo(() => getBoardPads(board), [board]);
+  const powerPads = useMemo(() => getPowerPads(boardPads), [boardPads]);
+  const groundPads = useMemo(() => getGroundPads(boardPads), [boardPads]);
   const hiddenPadCount = Math.max(0, board.connectors.selectablePads.length - workbenchConnectors.visibleSelectablePads);
   const deviceCounts = useMemo(
     () => ({
@@ -2659,7 +2841,10 @@ function WiringWorkbench({
     [workbenchDevices]
   );
   const visibleCanvasPads = useMemo(
-    () => workbenchConnectors.connectors.flatMap((connector) => connector.pins).filter((pad) => pad.selectable),
+    () =>
+      workbenchConnectors.connectors
+        .flatMap((connector) => connector.pins)
+        .filter((pad) => pad.selectable || pad.role === 'power' || pad.role === 'ground'),
     [workbenchConnectors]
   );
 
@@ -2832,6 +3017,8 @@ function WiringWorkbench({
                     onRemove={() => onRemovePeripheral(peripheral.id)}
                     onPress={(pressed) => onPressPeripheral(peripheral.id, pressed)}
                     onSourceChange={(sourceId) => onSourceChange(peripheral.id, sourceId)}
+                    onBehaviorChange={(controller) => onBehaviorChange(peripheral.id, controller)}
+                    onPowerChange={(power) => onPowerChange(device.id, power)}
                   />
                 </div>
               );
@@ -2856,6 +3043,39 @@ function WiringWorkbench({
 
                   <div className="mt-3 rounded-2xl border border-sky-200/20 bg-black/30 px-3 py-3 text-sm text-sky-50/90">
                     Wire SCL and SDA to matching I2C-capable pads. Runtime transactions at address 0x3C update the OLED preview panel.
+                  </div>
+
+                  <div className="mt-3 rounded-2xl border border-sky-200/20 bg-black/20 p-3">
+                    <div className="text-xs uppercase tracking-[0.22em] text-sky-100/70">Power Rails</div>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      <select
+                        value={getDevicePower(device).vccPadId ?? ''}
+                        onChange={(event) => {
+                          const pad = powerPads.find((candidate) => candidate.id === event.target.value) ?? null;
+                          onPowerChange(device.id, { vccPadId: pad?.id ?? null, voltage: inferPowerVoltage(pad) });
+                        }}
+                        className="rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
+                      >
+                        <option value="">VCC...</option>
+                        {powerPads.map((pad) => (
+                          <option key={pad.id} value={pad.id} className="text-slate-900">
+                            {pad.connectorTitle} {pad.pinLabel}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={getDevicePower(device).gndPadId ?? ''}
+                        onChange={(event) => onPowerChange(device.id, { gndPadId: event.target.value || null })}
+                        className="rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
+                      >
+                        <option value="">GND...</option>
+                        {groundPads.map((pad) => (
+                          <option key={pad.id} value={pad.id} className="text-slate-900">
+                            {pad.connectorTitle} {pad.pinLabel}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
 
                   <div className="mt-3 space-y-3">
@@ -2910,7 +3130,41 @@ function WiringWorkbench({
                       boxShadow: rgbGlow.glow,
                     }}
                   />
-                  <div className="text-sm text-cyan-50/90">Three independent channels. Wire each color to a GPIO and choose which button will drive it.</div>
+                  <div className="text-sm text-cyan-50/90">Three independent channels. Wire each color to a GPIO, then choose firmware, input mirror, or blink behavior per channel.</div>
+                </div>
+
+                <div className="mt-3 rounded-2xl border border-current/20 bg-black/10 p-3">
+                  <div className="text-xs uppercase tracking-[0.22em] text-current/70">Power Rails</div>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <select
+                      value={getDevicePower(device).vccPadId ?? ''}
+                      onChange={(event) => {
+                        const pad = powerPads.find((candidate) => candidate.id === event.target.value) ?? null;
+                        onPowerChange(device.id, { vccPadId: pad?.id ?? null, voltage: inferPowerVoltage(pad) });
+                      }}
+                      className="rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
+                    >
+                      <option value="">VCC...</option>
+                      {powerPads.map((pad) => (
+                        <option key={pad.id} value={pad.id} className="text-slate-900">
+                          {pad.connectorTitle} {pad.pinLabel}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={getDevicePower(device).gndPadId ?? ''}
+                      onChange={(event) => onPowerChange(device.id, { gndPadId: event.target.value || null })}
+                      className="rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
+                    >
+                      <option value="">GND...</option>
+                      {groundPads.map((pad) => (
+                        <option key={pad.id} value={pad.id} className="text-slate-900">
+                          {pad.connectorTitle} {pad.pinLabel}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="mt-2 text-[11px] text-current/70">{getDevicePowerLabel(device)}</div>
                 </div>
 
                 <div className="mt-3 space-y-3">
@@ -2933,19 +3187,39 @@ function WiringWorkbench({
                         {getPadDescription(member.padId, board, 'Not connected to a board pad')}
                       </div>
                       <div className="mt-3">
-                        <div className="text-xs uppercase tracking-[0.22em] text-current/70">Driven By</div>
+                        <div className="text-xs uppercase tracking-[0.22em] text-current/70">Behavior</div>
                         <select
-                          value={member.sourcePeripheralId ?? ''}
-                          onChange={(event) => onSourceChange(member.id, event.target.value || null)}
+                          value={getPeripheralController(member)?.type ?? 'firmware'}
+                          onChange={(event) => {
+                            const type = event.target.value;
+                            if (type === 'mirror-input') {
+                              onBehaviorChange(member.id, { type: 'mirror-input', sourcePeripheralId: buttons[0]?.id ?? null });
+                            } else if (type === 'blink') {
+                              onBehaviorChange(member.id, { type: 'blink', periodTicks: 25000 });
+                            } else {
+                              onBehaviorChange(member.id, { type: 'firmware' });
+                            }
+                          }}
                           className="mt-2 w-full rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
                         >
-                          <option value="">No button selected</option>
-                          {buttons.map((button) => (
-                            <option key={button.id} value={button.id} className="text-slate-900">
-                              {button.label}
-                            </option>
-                          ))}
+                          <option value="firmware" className="text-slate-900">Firmware controls GPIO</option>
+                          <option value="mirror-input" className="text-slate-900">Mirror input button</option>
+                          <option value="blink" className="text-slate-900">Generated blink demo</option>
                         </select>
+                        {getPeripheralController(member)?.type === 'mirror-input' ? (
+                          <select
+                            value={(getPeripheralController(member) as Extract<DemoPeripheralController, { type: 'mirror-input' }>).sourcePeripheralId ?? ''}
+                            onChange={(event) => onSourceChange(member.id, event.target.value || null)}
+                            className="mt-2 w-full rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
+                          >
+                            <option value="">No input selected</option>
+                            {buttons.map((button) => (
+                              <option key={button.id} value={button.id} className="text-slate-900">
+                                {button.label}
+                              </option>
+                            ))}
+                          </select>
+                        ) : null}
                       </div>
                       <div className="mt-3 grid gap-2 sm:grid-cols-2">
                         <button
@@ -3048,7 +3322,7 @@ function WiringWorkbench({
               4. Any pad you already connected stays visible, so the board never loses the context of your wiring.
             </div>
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-              5. Compile, start Renode, and press each external button card to drive the wired outputs in real time.
+              5. Bind VCC/GND for powered parts, compile, start Renode, then press input cards to drive only the outputs you explicitly configured.
             </div>
           </div>
         </div>
@@ -3116,6 +3390,23 @@ export default function App() {
   const connectedButtons = useMemo(() => getConnectedPeripherals(wiring, 'button'), [wiring]);
   const connectedLeds = useMemo(() => getConnectedPeripherals(wiring, 'led'), [wiring]);
   const workbenchDevices = useMemo(() => buildWorkbenchDevices(wiring), [wiring]);
+  const poweredDeviceIds = useMemo(
+    () => new Set(workbenchDevices.filter((device) => isDevicePowered(device, selectedBoardPads)).map((device) => device.id)),
+    [selectedBoardPads, workbenchDevices]
+  );
+  const effectiveLedStates = useMemo(() => {
+    const memberDeviceId = new Map<string, string>();
+    workbenchDevices.forEach((device) => {
+      device.members.forEach((member) => memberDeviceId.set(member.id, device.id));
+    });
+    return Object.fromEntries(
+      Object.entries(ledStates).map(([peripheralId, state]) => {
+        const deviceId = memberDeviceId.get(peripheralId);
+        const powered = deviceId ? poweredDeviceIds.has(deviceId) : true;
+        return [peripheralId, Boolean(state && powered)];
+      })
+    );
+  }, [ledStates, poweredDeviceIds, workbenchDevices]);
   const circuitNetlist = useMemo(() => createNetlistFromWiring(wiring, selectedBoard), [selectedBoard, wiring]);
   const netlistSummary = useMemo(() => summarizeNetlist(circuitNetlist), [circuitNetlist]);
   const signalDefinitions = useMemo(() => createSignalDefinitionsFromNetlist(circuitNetlist), [circuitNetlist]);
@@ -3653,16 +3944,8 @@ export default function App() {
         return;
       }
 
-      const firstButton = getPeripheralsByKind(wiring, 'button')[0] ?? null;
       const ordinal = countPeripheralTemplateInstances(wiring, templateKind) + 1;
-      const nextPeripherals = createPeripheralTemplate(templateKind, ordinal).map((peripheral) =>
-        peripheral.kind === 'led'
-          ? {
-              ...peripheral,
-              sourcePeripheralId: firstButton?.id ?? null,
-            }
-          : peripheral
-      );
+      const nextPeripherals = createPeripheralTemplate(templateKind, ordinal);
       const deviceId = getWorkbenchDeviceId(nextPeripherals[0]);
 
       setWiring((current) => ({
@@ -3678,7 +3961,7 @@ export default function App() {
       setArmedPeripheralId(nextPeripherals[0].id);
       appendLog(`${nextPeripherals[0].groupLabel ?? nextPeripherals[0].label} added. Drag its wire stub onto a free board hotspot to place it.`);
     },
-    [appendLog, simulation.running, wiring, workbenchDevices.length]
+    [appendLog, simulation.running, workbenchDevices.length]
   );
 
   const assignPadToPeripheral = useCallback(
@@ -3782,14 +4065,23 @@ export default function App() {
       setWiring((current) => {
         const nextPeripherals = current.peripherals
           .filter((item) => item.id !== peripheralId)
-          .map((item) =>
-            item.kind === 'led' && item.sourcePeripheralId === peripheralId
-              ? {
-                  ...item,
-                  sourcePeripheralId: null,
-                }
-              : item
-          );
+          .map((item) => {
+            const controller = getPeripheralController(item);
+            if (controller?.type === 'mirror-input' && controller.sourcePeripheralId === peripheralId) {
+              return {
+                ...item,
+                sourcePeripheralId: null,
+                behavior: {
+                  ...getPeripheralBehavior(item),
+                  controller: {
+                    ...controller,
+                    sourcePeripheralId: null,
+                  },
+                },
+              };
+            }
+            return item;
+          });
         return { peripherals: nextPeripherals };
       });
 
@@ -3827,14 +4119,23 @@ export default function App() {
       setWiring((current) => ({
         peripherals: current.peripherals
           .filter((item) => !removedIds.has(item.id))
-          .map((item) =>
-            item.kind === 'led' && item.sourcePeripheralId && removedIds.has(item.sourcePeripheralId)
-              ? {
-                  ...item,
-                  sourcePeripheralId: null,
-                }
-              : item
-          ),
+          .map((item) => {
+            const controller = getPeripheralController(item);
+            if (controller?.type === 'mirror-input' && controller.sourcePeripheralId && removedIds.has(controller.sourcePeripheralId)) {
+              return {
+                ...item,
+                sourcePeripheralId: null,
+                behavior: {
+                  ...getPeripheralBehavior(item),
+                  controller: {
+                    ...controller,
+                    sourcePeripheralId: null,
+                  },
+                },
+              };
+            }
+            return item;
+          }),
       }));
       setArmedPeripheralId((current) => (current && removedIds.has(current) ? null : current));
       setButtonStates((current) => {
@@ -3852,16 +4153,45 @@ export default function App() {
     [appendLog, simulation.running, wiring]
   );
 
-  const updateLedSource = useCallback((ledId: string, sourceId: string | null) => {
+  const updatePeripheralBehavior = useCallback((peripheralId: string, controller: DemoPeripheralController) => {
     setWiring((current) => ({
       peripherals: current.peripherals.map((item) =>
-        item.id === ledId
+        item.id === peripheralId
           ? {
               ...item,
-              sourcePeripheralId: sourceId,
+              sourcePeripheralId: controller.type === 'mirror-input' ? controller.sourcePeripheralId : null,
+              behavior: {
+                ...getPeripheralBehavior(item),
+                controller,
+              },
             }
           : item
       ),
+    }));
+  }, []);
+
+  const updateLedSource = useCallback((ledId: string, sourceId: string | null) => {
+    updatePeripheralBehavior(ledId, {
+      type: 'mirror-input',
+      sourcePeripheralId: sourceId,
+    });
+  }, [updatePeripheralBehavior]);
+
+  const updateDevicePower = useCallback((deviceId: string, power: Partial<DemoPeripheralPowerBinding>) => {
+    setWiring((current) => ({
+      peripherals: current.peripherals.map((item) => {
+        if (getWorkbenchDeviceId(item) !== deviceId) {
+          return item;
+        }
+        const currentPower = getPeripheralPowerBinding(item);
+        return {
+          ...item,
+          power: {
+            ...currentPower,
+            ...power,
+          },
+        };
+      }),
     }));
   }, []);
 
@@ -4236,7 +4566,7 @@ export default function App() {
               board={selectedBoard}
               wiring={wiring}
               armedPeripheralId={armedPeripheralId}
-              ledStates={ledStates}
+              ledStates={effectiveLedStates}
               buttonStates={buttonStates}
               simulationRunning={simulation.running}
               showFullPinout={showFullPinout}
@@ -4251,6 +4581,8 @@ export default function App() {
               onRemovePeripheral={removePeripheral}
               onPressPeripheral={(peripheralId, pressed) => void sendButtonState(peripheralId, pressed)}
               onSourceChange={updateLedSource}
+              onBehaviorChange={updatePeripheralBehavior}
+              onPowerChange={updateDevicePower}
               onToggleFullPinout={() => setShowFullPinout((current) => !current)}
               onMovePeripheral={movePeripheral}
             />

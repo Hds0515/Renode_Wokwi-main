@@ -203,6 +203,22 @@ type LocalProjectDocument = {
       label: string;
       padId: string | null;
       sourcePeripheralId: string | null;
+      behavior?: {
+        schemaVersion: 2;
+        role: 'momentary-input' | 'gpio-output' | 'i2c-display';
+        powerRequired: boolean;
+        controller:
+          | { type: 'firmware' }
+          | { type: 'mirror-input'; sourcePeripheralId: string | null }
+          | { type: 'blink'; periodTicks: number }
+          | null;
+      };
+      power?: {
+        schemaVersion: 1;
+        vccPadId: string | null;
+        gndPadId: string | null;
+        voltage: '3v3' | '5v' | 'vin' | 'external' | null;
+      };
       templateKind?: 'button' | 'led' | 'buzzer' | 'rgb-led' | 'ssd1306-oled';
       groupId?: string | null;
       groupLabel?: string | null;

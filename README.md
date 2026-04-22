@@ -8,8 +8,10 @@ It keeps the visual workflow from the original prototype, but moves execution in
 - board selector for `NUCLEO-H753ZI`, experimental `STM32F4 Discovery`, and experimental `STM32F103 GPIO Lab`
 - pin-level placement on the selected board's connector layout
 - drag-in peripheral templates, wire-stub-to-pad gestures, and selectable wires on the main canvas
+- logical `VCC` / `GND` power rail binding for power-aware peripherals
 - local project save/load as `.renode-wokwi.json`
 - project schema v2 with a unified Netlist/IR plus component package catalog metadata
+- peripheral behavior schema v2 so outputs can be controlled by firmware, a chosen input, or generated demo behavior instead of hard-coded LED/Button rules
 - Signal Broker schema v2 with runtime signal manifest metadata
 - SimulationClock schema v1 for clocked runtime events with sequence and virtual-time fields
 - Bus Transaction Broker schema v1 so GPIO, UART, I2C, and SPI events share one timeline
@@ -39,7 +41,9 @@ The current MVP has one validated Renode-backed board plus two Renode-verified e
 - board schema abstraction for board metadata, visual frames, curated pins, compiler settings, linker scripts, GPIO register model, and Renode platform path
 - board-aware generated `main.c`, `board.repl`, `.resc`, compiler args, and bundled example projects
 - project document schema v2 for wiring, Netlist/IR, workbench layout, code mode, and component package metadata
-- component package catalog for `Button`, `LED`, `Buzzer`, grouped `RGB LED`, and `SSD1306 OLED` pin/capability definitions
+- component package catalog for `Button`, `LED`, `Buzzer`, grouped `RGB LED`, and `SSD1306 OLED` pin/capability, power-pin, and behavior definitions
+- functional `VCC` / `GND` power rails exposed on each board profile and emitted as Netlist/IR power and ground nets
+- behavior schema v2 for reusable output behavior: firmware-controlled GPIO, explicit input mirroring, or generated blink demo logic
 - Signal Broker schema v2 derived from Netlist/IR GPIO nets and Electron runtime `signal` events
 - runtime signal manifest passed from the renderer to Electron so signal events carry net, component, pin, pad, and MCU metadata
 - SimulationClock snapshots attached to runtime `signal`, `uart`, `bus`, and `timeline` events
@@ -54,6 +58,8 @@ The current MVP has one validated Renode-backed board plus two Renode-verified e
 - GDB server enabled on port `3333`
 
 This is intentionally narrower than a full Wokwi replacement. The goal is to finish the local execution chain first and then extend the device library and debugger UX.
+
+The power model is intentionally digital and educational: `VCC` / `GND` validate whether a component is logically powered and make project wiring look closer to real hardware, but they are not SPICE rails and do not simulate impedance, current draw, RC timing, or analog voltage drop.
 
 ## Requirements
 
@@ -103,15 +109,16 @@ The helper launcher `scripts/run-local.ps1` will install dependencies automatica
 3. Pull the device's cyan wire stub directly onto a hotspot on the board canvas, or use the pin chooser on the lower half of the UI.
 4. Click any existing wire to open the inline wire action popover. From there you can `Rewire`, `Delete`, or press `Delete` / `Backspace`.
 5. Drag the device card around the workbench until the layout feels right.
-6. For `Buzzer` and `RGB LED`, choose which button drives each output endpoint from the rack below the board.
-7. For `SSD1306 OLED`, connect `SCL` and `SDA` to the board's I2C-capable teaching pins. The generated runtime manifest will attach the OLED device to that bus and the I2C demo feed will update the framebuffer preview.
-8. If you need a less common GPIO, click `Show Full Pinout`.
-9. The app regenerates `main.c`, `board.repl`, and the Renode launch preview from that board and wiring.
-10. Use `Save`, `Save As`, or `Load` in the control panel to persist the board choice, wiring, and workbench layout.
-11. Or choose a bundled board-specific example in `Control -> Project -> Examples` and click `Open Example`.
-12. Click `Compile`, then `Start`.
-13. Press and hold the external button card in the board canvas and watch the output cards update in real time.
-14. Open a board-specific `SSD1306 OLED over I2C` example to verify the complex-bus path. On start, the runtime emits an I2C write transaction that the UI decodes into the OLED framebuffer preview.
+6. For power-aware outputs, choose `VCC` and `GND` rails in the rack below the board. Unpowered components stay visually disabled and produce validation warnings.
+7. For `LED`, `Buzzer`, and `RGB LED` endpoints, choose the behavior explicitly: firmware controls GPIO, mirror one selected input, or generated blink demo logic.
+8. For `SSD1306 OLED`, connect `SCL` and `SDA` to the board's I2C-capable teaching pins and bind `VCC` / `GND`. The generated runtime manifest will attach the OLED device to that bus and the I2C demo feed will update the framebuffer preview.
+9. If you need a less common GPIO, click `Show Full Pinout`.
+10. The app regenerates `main.c`, `board.repl`, and the Renode launch preview from that board and wiring.
+11. Use `Save`, `Save As`, or `Load` in the control panel to persist the board choice, wiring, behavior, power rails, and workbench layout.
+12. Or choose a bundled board-specific example in `Control -> Project -> Examples` and click `Open Example`.
+13. Click `Compile`, then `Start`.
+14. Press and hold the external button card in the board canvas and watch only the explicitly mirrored output cards update in real time.
+15. Open a board-specific `SSD1306 OLED over I2C` example to verify the complex-bus path. On start, the runtime emits an I2C write transaction that the UI decodes into the OLED framebuffer preview.
 
 ## Project files
 
@@ -120,6 +127,8 @@ The desktop shell can save and load local `.renode-wokwi.json` files. A saved pr
 - board identity for the selected board profile
 - the external peripheral wiring graph
 - explicit `wiring.wires[]` entries for each GPIO connection, derived from the endpoint-to-pad assignment
+- per-component behavior definitions, including explicit controller selection for output endpoints
+- per-component logical power bindings for `VCC` / `GND` rails
 - a unified `netlist` IR with board component, package-backed component instances, GPIO nets, and endpoint-to-pad references
 - `componentPackages` catalog metadata so future packages can be versioned independently from project files
 - Wokwi-like workbench card positions
@@ -216,6 +225,8 @@ npm run start
   - GPIO state read/write for live peripherals
 - `src/lib/boards.ts`
   - board schemas for identity, connector groups, teaching-friendly pad selection, board canvas coordinates, compiler defaults, linker scripts, and Renode runtime metadata
+- `src/lib/firmware.ts`
+  - peripheral templates, behavior schema v2, logical power validation, board-aware generated `main.c`, and Renode runtime manifest generation
 - `src/App.tsx`
   - board selector plus common-pin-first wiring UX for the selected board
   - draggable peripherals, drag-in templates, grouped RGB devices, selectable wires, and wire-stub hotspots for more Wokwi-like placement
@@ -226,10 +237,10 @@ npm run start
   - `.renode-wokwi.json` project document schema v2
   - project load normalization and forward-compatible warning collection
 - `src/lib/component-packs.ts`
-  - versioned component package catalog with pins, capabilities, visual metadata, and Renode GPIO runtime binding
+  - versioned component package catalog with pins, capabilities, power pins, behavior defaults, visual metadata, and Renode GPIO runtime binding
 - `src/lib/netlist.ts`
   - unified Netlist/IR schema
-  - compiler from wiring to Netlist/IR, Netlist validation, Netlist round-trip, and Renode artifact generation
+  - compiler from wiring to Netlist/IR, power/ground net emission, Netlist validation, Netlist round-trip, and Renode artifact generation
 - `src/lib/signal-broker.ts`
   - Signal Broker schema v2, runtime signal manifest generation, edge counting, signal definitions from Netlist/IR, runtime signal reducer, and summary helpers
 - `src/lib/runtime-timeline.ts`

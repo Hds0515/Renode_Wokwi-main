@@ -7,22 +7,24 @@
     "name": "NUCLEO-H753ZI"
   },
   "templates": {
-    "catalogVersion": 1,
+    "catalogVersion": 2,
     "kinds": [
       "button",
       "led",
       "buzzer",
-      "rgb-led"
+      "rgb-led",
+      "ssd1306-oled"
     ]
   },
   "componentPackages": {
     "schemaVersion": 1,
-    "catalogVersion": 1,
+    "catalogVersion": 2,
     "kinds": [
       "button",
       "led",
       "buzzer",
-      "rgb-led"
+      "rgb-led",
+      "ssd1306-oled"
     ]
   },
   "wiring": {
@@ -33,6 +35,18 @@
         "label": "Button 1",
         "padId": "CN10-3",
         "sourcePeripheralId": null,
+        "behavior": {
+          "schemaVersion": 2,
+          "role": "momentary-input",
+          "controller": null,
+          "powerRequired": false
+        },
+        "power": {
+          "schemaVersion": 1,
+          "vccPadId": null,
+          "gndPadId": null,
+          "voltage": null
+        },
         "templateKind": "button",
         "groupId": null,
         "groupLabel": null,
@@ -46,6 +60,21 @@
         "label": "Buzzer 1",
         "padId": "CN10-7",
         "sourcePeripheralId": "button-1",
+        "behavior": {
+          "schemaVersion": 2,
+          "role": "gpio-output",
+          "controller": {
+            "type": "mirror-input",
+            "sourcePeripheralId": "button-1"
+          },
+          "powerRequired": true
+        },
+        "power": {
+          "schemaVersion": 1,
+          "vccPadId": "CN11-5",
+          "gndPadId": "CN11-8",
+          "voltage": "3v3"
+        },
         "templateKind": "buzzer",
         "groupId": null,
         "groupLabel": null,
@@ -85,7 +114,7 @@
     },
     "componentPackages": {
       "schemaVersion": 1,
-      "catalogVersion": 1
+      "catalogVersion": 2
     },
     "components": [
       {
@@ -93,6 +122,35 @@
         "kind": "board",
         "label": "NUCLEO-H753ZI",
         "pins": [
+          {
+            "id": "CN11-5",
+            "label": "3V3",
+            "role": "board-power",
+            "direction": "bidirectional",
+            "requiredPadCapabilities": [],
+            "capabilities": [
+              "power-vcc",
+              "power-3v3"
+            ],
+            "padId": "CN11-5",
+            "mcuPinId": null,
+            "selectable": false,
+            "accentColor": null
+          },
+          {
+            "id": "CN11-8",
+            "label": "GND",
+            "role": "board-ground",
+            "direction": "bidirectional",
+            "requiredPadCapabilities": [],
+            "capabilities": [
+              "ground"
+            ],
+            "padId": "CN11-8",
+            "mcuPinId": null,
+            "selectable": false,
+            "accentColor": null
+          },
           {
             "id": "CN10-3",
             "label": "D7",
@@ -118,7 +176,8 @@
             "capabilities": [
               "gpio",
               "digital-input",
-              "digital-output"
+              "digital-output",
+              "spi-mosi"
             ],
             "padId": "CN10-7",
             "mcuPinId": "PA7",
@@ -135,7 +194,7 @@
         "id": "button-1",
         "kind": "button",
         "label": "Button 1",
-        "packageVersion": 1,
+        "packageVersion": 2,
         "pins": [
           {
             "id": "signal",
@@ -152,11 +211,42 @@
             "mcuPinId": null,
             "selectable": true,
             "accentColor": "#d946ef"
+          },
+          {
+            "id": "vcc",
+            "label": "VCC",
+            "role": "component-power",
+            "direction": "bidirectional",
+            "requiredPadCapabilities": [
+              "power-vcc"
+            ],
+            "capabilities": [],
+            "endpointId": "vcc",
+            "padId": null,
+            "mcuPinId": null,
+            "selectable": true,
+            "accentColor": "#22c55e"
+          },
+          {
+            "id": "gnd",
+            "label": "GND",
+            "role": "component-power",
+            "direction": "bidirectional",
+            "requiredPadCapabilities": [
+              "ground"
+            ],
+            "capabilities": [],
+            "endpointId": "gnd",
+            "padId": null,
+            "mcuPinId": null,
+            "selectable": true,
+            "accentColor": "#64748b"
           }
         ],
         "properties": {
           "category": "input",
-          "pinCount": 1
+          "pinCount": 1,
+          "powerRequired": false
         },
         "metadata": {
           "legacyPeripherals": [
@@ -166,6 +256,18 @@
               "label": "Button 1",
               "padId": "CN10-3",
               "sourcePeripheralId": null,
+              "behavior": {
+                "schemaVersion": 2,
+                "role": "momentary-input",
+                "controller": null,
+                "powerRequired": false
+              },
+              "power": {
+                "schemaVersion": 1,
+                "vccPadId": null,
+                "gndPadId": null,
+                "voltage": null
+              },
               "templateKind": "button",
               "groupId": null,
               "groupLabel": null,
@@ -183,7 +285,7 @@
         "id": "buzzer-1",
         "kind": "buzzer",
         "label": "Buzzer 1",
-        "packageVersion": 1,
+        "packageVersion": 2,
         "pins": [
           {
             "id": "signal",
@@ -200,11 +302,42 @@
             "mcuPinId": null,
             "selectable": true,
             "accentColor": "#14b8a6"
+          },
+          {
+            "id": "vcc",
+            "label": "VCC",
+            "role": "component-power",
+            "direction": "bidirectional",
+            "requiredPadCapabilities": [
+              "power-vcc"
+            ],
+            "capabilities": [],
+            "endpointId": "vcc",
+            "padId": "CN11-5",
+            "mcuPinId": null,
+            "selectable": true,
+            "accentColor": "#22c55e"
+          },
+          {
+            "id": "gnd",
+            "label": "GND",
+            "role": "component-power",
+            "direction": "bidirectional",
+            "requiredPadCapabilities": [
+              "ground"
+            ],
+            "capabilities": [],
+            "endpointId": "gnd",
+            "padId": "CN11-8",
+            "mcuPinId": null,
+            "selectable": true,
+            "accentColor": "#64748b"
           }
         ],
         "properties": {
           "category": "output",
-          "pinCount": 1
+          "pinCount": 1,
+          "powerRequired": true
         },
         "metadata": {
           "legacyPeripherals": [
@@ -214,6 +347,21 @@
               "label": "Buzzer 1",
               "padId": "CN10-7",
               "sourcePeripheralId": "button-1",
+              "behavior": {
+                "schemaVersion": 2,
+                "role": "gpio-output",
+                "controller": {
+                  "type": "mirror-input",
+                  "sourcePeripheralId": "button-1"
+                },
+                "powerRequired": true
+              },
+              "power": {
+                "schemaVersion": 1,
+                "vccPadId": "CN11-5",
+                "gndPadId": "CN11-8",
+                "voltage": "3v3"
+              },
               "templateKind": "buzzer",
               "groupId": null,
               "groupLabel": null,
@@ -282,10 +430,60 @@
           "padId": "CN10-7",
           "mcuPinId": "PA7"
         }
+      },
+      {
+        "id": "net:buzzer-1:vcc",
+        "kind": "power",
+        "label": "Buzzer 1 VCC",
+        "connections": [
+          {
+            "componentId": "buzzer-1",
+            "pinId": "vcc",
+            "role": "component-power"
+          },
+          {
+            "componentId": "board:nucleo-h753zi",
+            "pinId": "CN11-5",
+            "role": "board-power",
+            "padId": "CN11-5"
+          }
+        ],
+        "metadata": {
+          "boardId": "nucleo-h753zi",
+          "peripheralId": "buzzer-1",
+          "endpointId": "vcc",
+          "padId": "CN11-5",
+          "mcuPinId": null
+        }
+      },
+      {
+        "id": "net:buzzer-1:gnd",
+        "kind": "ground",
+        "label": "Buzzer 1 GND",
+        "connections": [
+          {
+            "componentId": "buzzer-1",
+            "pinId": "gnd",
+            "role": "component-power"
+          },
+          {
+            "componentId": "board:nucleo-h753zi",
+            "pinId": "CN11-8",
+            "role": "board-ground",
+            "padId": "CN11-8"
+          }
+        ],
+        "metadata": {
+          "boardId": "nucleo-h753zi",
+          "peripheralId": "buzzer-1",
+          "endpointId": "gnd",
+          "padId": "CN11-8",
+          "mcuPinId": null
+        }
       }
     ],
     "metadata": {
-      "generatedAt": "2026-04-22T02:32:32.769Z",
+      "generatedAt": "2026-04-22T12:40:39.991Z",
       "generator": "demo-wiring-v1",
       "sourceSchema": "DemoWiring"
     }
@@ -305,6 +503,6 @@
   },
   "code": {
     "mode": "generated",
-    "mainSource": "// Auto-generated demo firmware for the Renode NUCLEO-H753ZI workbench.\n// Input  Button 1: Button 1 SIG (CN10 pin 3 (D7 / PG12))\n// Output Buzzer 1: Buzzer 1 OUT (CN10 pin 7 (D11/MOSI / PA7)) <= Button 1\n\ntypedef unsigned int uint32_t;\n\n#define RCC_BASE            0x58024400u\n#define RCC_AHB4ENR         (*(volatile uint32_t *)(RCC_BASE + 0xE0u))\n\n#define PERIPHERAL_PORT_ENABLE_MASK (1u << 6u) | (1u << 0u)\n\n// Button 1: CN10 pin 3 (D7 / PG12)\n#define BUTTON_0_GPIO_BASE 0x58021800u\n#define BUTTON_0_PIN 12u\n\n// Buzzer 1: CN10 pin 7 (D11/MOSI / PA7) (driven by Button 1)\n#define LED_0_GPIO_BASE 0x58020000u\n#define LED_0_PIN 7u\n\nstatic void enable_gpio_clocks(void) {\n    RCC_AHB4ENR |= PERIPHERAL_PORT_ENABLE_MASK;\n}\n\n#define GPIO_MODER(base)    (*(volatile uint32_t *)((base) + 0x00u))\n#define GPIO_PUPDR(base)    (*(volatile uint32_t *)((base) + 0x0Cu))\n#define GPIO_IDR(base)      (*(volatile uint32_t *)((base) + 0x10u))\n#define GPIO_BSRR(base)     (*(volatile uint32_t *)((base) + 0x18u))\n\nstatic void configure_output(uint32_t base, uint32_t pin) {\n    GPIO_MODER(base) &= ~(3u << (pin * 2u));\n    GPIO_MODER(base) |=  (1u << (pin * 2u));\n}\n\nstatic void configure_input(uint32_t base, uint32_t pin) {\n    GPIO_MODER(base) &= ~(3u << (pin * 2u));\n    GPIO_PUPDR(base) &= ~(3u << (pin * 2u));\n    GPIO_PUPDR(base) |=  (2u << (pin * 2u));\n}\n\nstatic void write_output(uint32_t base, uint32_t pin, int on) {\n    if(on) {\n        GPIO_BSRR(base) = (1u << pin);\n    } else {\n        GPIO_BSRR(base) = (1u << (pin + 16u));\n    }\n}\n\n#define DEMO_UART_BASE      0x40004400u\n#define DEMO_UART_CR1       (*(volatile uint32_t *)(DEMO_UART_BASE + 0x00u))\n#define DEMO_UART_BRR       (*(volatile uint32_t *)(DEMO_UART_BASE + 0x0Cu))\n#define DEMO_UART_ISR       (*(volatile uint32_t *)(DEMO_UART_BASE + 0x1Cu))\n#define DEMO_UART_RDR       (*(volatile uint32_t *)(DEMO_UART_BASE + 0x24u))\n#define DEMO_UART_TDR       (*(volatile uint32_t *)(DEMO_UART_BASE + 0x28u))\n#define DEMO_UART_CR1_UE    (1u << 0u)\n#define DEMO_UART_CR1_RE    (1u << 2u)\n#define DEMO_UART_CR1_TE    (1u << 3u)\n#define DEMO_UART_ISR_RXNE  (1u << 5u)\n#define DEMO_UART_ISR_TXE   (1u << 7u)\n\nstatic void demo_uart_init(void) {\n    DEMO_UART_BRR = 0x8Bu;\n    DEMO_UART_CR1 = DEMO_UART_CR1_UE | DEMO_UART_CR1_RE | DEMO_UART_CR1_TE;\n}\n\nstatic void demo_uart_write_char(char value) {\n    for(uint32_t guard = 0; guard < 1024u && (DEMO_UART_ISR & DEMO_UART_ISR_TXE) == 0u; guard++) {\n    }\n    DEMO_UART_TDR = (uint32_t)(unsigned char)value;\n}\n\nstatic int demo_uart_read_char(void) {\n    if((DEMO_UART_ISR & DEMO_UART_ISR_RXNE) == 0u) {\n        return -1;\n    }\n    return (int)(DEMO_UART_RDR & 0xFFu);\n}\n\nstatic void demo_uart_write_string(const char *value) {\n    while(*value) {\n        demo_uart_write_char(*value++);\n    }\n}\n\nstatic int read_input(uint32_t base, uint32_t pin) {\n    return (GPIO_IDR(base) & (1u << pin)) != 0;\n}\n\nint main(void) {\n    enable_gpio_clocks();\n    demo_uart_init();\n    demo_uart_write_string(\"Renode Wokwi UART ready on NUCLEO-H753ZI\\r\\n\");\n    configure_output(LED_0_GPIO_BASE, LED_0_PIN);\n    configure_input(BUTTON_0_GPIO_BASE, BUTTON_0_PIN);\n    int led_previous_0 = -1;\n\n    while(1) {\n\n        const int button_state_0 = read_input(BUTTON_0_GPIO_BASE, BUTTON_0_PIN);\n        const int led_state_0 = button_state_0;\n        write_output(LED_0_GPIO_BASE, LED_0_PIN, led_state_0);\n        if(led_previous_0 != led_state_0) {\n            led_previous_0 = led_state_0;\n            demo_uart_write_string(\"Buzzer 1 OUT \");\n            demo_uart_write_string(led_state_0 ? \"ON\\r\\n\" : \"OFF\\r\\n\");\n        }\n        const int uart_rx = demo_uart_read_char();\n        if(uart_rx >= 0) {\n            demo_uart_write_string(\"UART RX: \");\n            demo_uart_write_char((char)uart_rx);\n            demo_uart_write_string(\"\\r\\n\");\n        }\n    }\n}\n"
+    "mainSource": "// Auto-generated demo firmware for the Renode NUCLEO-H753ZI workbench.\n// Input  Button 1: Button 1 SIG (CN10 pin 3 (D7 / PG12))\n// Output Buzzer 1: Buzzer 1 OUT (CN10 pin 7 (D11/MOSI / PA7)) <= Button 1\n\ntypedef unsigned int uint32_t;\n\n#define RCC_BASE            0x58024400u\n#define RCC_AHB4ENR         (*(volatile uint32_t *)(RCC_BASE + 0xE0u))\n\n#define PERIPHERAL_PORT_ENABLE_MASK (1u << 6u) | (1u << 0u)\n\n// Button 1: CN10 pin 3 (D7 / PG12)\n#define BUTTON_0_GPIO_BASE 0x58021800u\n#define BUTTON_0_PIN 12u\n\n// Buzzer 1: CN10 pin 7 (D11/MOSI / PA7) (mirrors Button 1)\n#define LED_0_GPIO_BASE 0x58020000u\n#define LED_0_PIN 7u\n\nstatic void enable_gpio_clocks(void) {\n    RCC_AHB4ENR |= PERIPHERAL_PORT_ENABLE_MASK;\n}\n\n#define GPIO_MODER(base)    (*(volatile uint32_t *)((base) + 0x00u))\n#define GPIO_PUPDR(base)    (*(volatile uint32_t *)((base) + 0x0Cu))\n#define GPIO_IDR(base)      (*(volatile uint32_t *)((base) + 0x10u))\n#define GPIO_BSRR(base)     (*(volatile uint32_t *)((base) + 0x18u))\n\nstatic void configure_output(uint32_t base, uint32_t pin) {\n    GPIO_MODER(base) &= ~(3u << (pin * 2u));\n    GPIO_MODER(base) |=  (1u << (pin * 2u));\n}\n\nstatic void configure_input(uint32_t base, uint32_t pin) {\n    GPIO_MODER(base) &= ~(3u << (pin * 2u));\n    GPIO_PUPDR(base) &= ~(3u << (pin * 2u));\n    GPIO_PUPDR(base) |=  (2u << (pin * 2u));\n}\n\nstatic void write_output(uint32_t base, uint32_t pin, int on) {\n    if(on) {\n        GPIO_BSRR(base) = (1u << pin);\n    } else {\n        GPIO_BSRR(base) = (1u << (pin + 16u));\n    }\n}\n\n#define DEMO_UART_BASE      0x40004400u\n#define DEMO_UART_CR1       (*(volatile uint32_t *)(DEMO_UART_BASE + 0x00u))\n#define DEMO_UART_BRR       (*(volatile uint32_t *)(DEMO_UART_BASE + 0x0Cu))\n#define DEMO_UART_ISR       (*(volatile uint32_t *)(DEMO_UART_BASE + 0x1Cu))\n#define DEMO_UART_RDR       (*(volatile uint32_t *)(DEMO_UART_BASE + 0x24u))\n#define DEMO_UART_TDR       (*(volatile uint32_t *)(DEMO_UART_BASE + 0x28u))\n#define DEMO_UART_CR1_UE    (1u << 0u)\n#define DEMO_UART_CR1_RE    (1u << 2u)\n#define DEMO_UART_CR1_TE    (1u << 3u)\n#define DEMO_UART_ISR_RXNE  (1u << 5u)\n#define DEMO_UART_ISR_TXE   (1u << 7u)\n\nstatic void demo_uart_init(void) {\n    DEMO_UART_BRR = 0x8Bu;\n    DEMO_UART_CR1 = DEMO_UART_CR1_UE | DEMO_UART_CR1_RE | DEMO_UART_CR1_TE;\n}\n\nstatic void demo_uart_write_char(char value) {\n    for(uint32_t guard = 0; guard < 1024u && (DEMO_UART_ISR & DEMO_UART_ISR_TXE) == 0u; guard++) {\n    }\n    DEMO_UART_TDR = (uint32_t)(unsigned char)value;\n}\n\nstatic int demo_uart_read_char(void) {\n    if((DEMO_UART_ISR & DEMO_UART_ISR_RXNE) == 0u) {\n        return -1;\n    }\n    return (int)(DEMO_UART_RDR & 0xFFu);\n}\n\nstatic void demo_uart_write_string(const char *value) {\n    while(*value) {\n        demo_uart_write_char(*value++);\n    }\n}\n\nstatic int read_input(uint32_t base, uint32_t pin) {\n    return (GPIO_IDR(base) & (1u << pin)) != 0;\n}\n\nint main(void) {\n    enable_gpio_clocks();\n    demo_uart_init();\n    demo_uart_write_string(\"Renode Wokwi UART ready on NUCLEO-H753ZI\\r\\n\");\n    configure_output(LED_0_GPIO_BASE, LED_0_PIN);\n    configure_input(BUTTON_0_GPIO_BASE, BUTTON_0_PIN);\n    int led_previous_0 = -1;\n    // No generated blink outputs.\n\n    while(1) {\n\n        const int button_state_0 = read_input(BUTTON_0_GPIO_BASE, BUTTON_0_PIN);\n        const int led_state_0 = button_state_0;\n        write_output(LED_0_GPIO_BASE, LED_0_PIN, led_state_0);\n        if(led_previous_0 != led_state_0) {\n            led_previous_0 = led_state_0;\n            demo_uart_write_string(\"Buzzer 1 OUT \");\n            demo_uart_write_string(led_state_0 ? \"ON\\r\\n\" : \"OFF\\r\\n\");\n        }\n\n        const int uart_rx = demo_uart_read_char();\n        if(uart_rx >= 0) {\n            demo_uart_write_string(\"UART RX: \");\n            demo_uart_write_char((char)uart_rx);\n            demo_uart_write_string(\"\\r\\n\");\n        }\n    }\n}\n"
   }
 }
