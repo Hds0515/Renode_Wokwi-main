@@ -182,6 +182,22 @@ type RuntimeEvent =
       state: number;
     }
   | {
+      type: 'signal';
+      id: string;
+      peripheralId: string;
+      peripheralKind: 'button' | 'led';
+      label: string;
+      direction: 'input' | 'output';
+      value: 0 | 1;
+      source: 'bridge' | 'renode';
+      changed?: boolean;
+      gpioPortName?: string;
+      gpioNumber?: number;
+      mcuPinId?: string;
+      timestampMs?: number;
+      timestamp?: string;
+    }
+  | {
       type: 'bridge';
       status: 'connected' | 'disconnected' | 'ready' | 'button-event';
       ledHooked?: boolean;

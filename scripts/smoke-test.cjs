@@ -49,6 +49,10 @@ async function main() {
   const observed = {
     ledOn: false,
     ledOff: false,
+    signalButtonHigh: false,
+    signalButtonLowAfterHigh: false,
+    signalLedOn: false,
+    signalLedOffAfterOn: false,
     bridgeReady: false,
     uartAttached: false,
     uartTranscript: '',
@@ -69,6 +73,22 @@ async function main() {
 
     if (payload.type === 'led' && payload.state === 0) {
       observed.ledOff = true;
+    }
+
+    if (payload.type === 'signal') {
+      console.log(`[signal] ${payload.peripheralId}=${payload.value} (${payload.source})`);
+      if (payload.peripheralId === 'button-1' && payload.value === 1) {
+        observed.signalButtonHigh = true;
+      }
+      if (payload.peripheralId === 'button-1' && payload.value === 0 && observed.signalButtonHigh) {
+        observed.signalButtonLowAfterHigh = true;
+      }
+      if (payload.peripheralId === 'led-1' && payload.value === 1) {
+        observed.signalLedOn = true;
+      }
+      if (payload.peripheralId === 'led-1' && payload.value === 0 && observed.signalLedOn) {
+        observed.signalLedOffAfterOn = true;
+      }
     }
 
     if (payload.type === 'debug') {
@@ -152,10 +172,21 @@ async function main() {
 
   await runtime.stopSimulation();
 
-  if (!observed.ledOn || !observed.ledOff) {
+  if (
+    !observed.ledOn ||
+    !observed.ledOff ||
+    !observed.signalButtonHigh ||
+    !observed.signalButtonLowAfterHigh ||
+    !observed.signalLedOn ||
+    !observed.signalLedOffAfterOn
+  ) {
     console.error({
       ledOn: observed.ledOn,
       ledOff: observed.ledOff,
+      signalButtonHigh: observed.signalButtonHigh,
+      signalButtonLowAfterHigh: observed.signalButtonLowAfterHigh,
+      signalLedOn: observed.signalLedOn,
+      signalLedOffAfterOn: observed.signalLedOffAfterOn,
     });
     process.exitCode = 1;
     return;

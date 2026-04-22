@@ -25,6 +25,12 @@ const {
   summarizeNetlist,
   validateNetlist,
 } = require('../src/lib/netlist.ts');
+const {
+  createSignalBrokerState,
+  createSignalDefinitionsFromNetlist,
+  recordSignalSample,
+  summarizeSignalBroker,
+} = require('../src/lib/signal-broker.ts');
 const { validateWiringRules } = require('../src/lib/firmware.ts');
 
 function connectedPairs(wiring) {
@@ -91,8 +97,26 @@ function validateProjectExample(example) {
 
   const summary = summarizeNetlist(project.netlist);
   assert(summary.netCount > 0, `${example.id} should contain at least one GPIO net.`);
+
+  const signalDefinitions = createSignalDefinitionsFromNetlist(project.netlist);
+  const signalState = createSignalBrokerState(signalDefinitions, 1000);
+  const signalSummary = summarizeSignalBroker(signalState);
+  assert(signalSummary.signalCount === summary.netCount, `${example.id} signal count should match GPIO net count.`);
+  assert(signalSummary.inputCount > 0, `${example.id} should expose at least one input signal.`);
+  assert(signalSummary.outputCount > 0, `${example.id} should expose at least one output signal.`);
+
+  const firstSignal = signalDefinitions[0];
+  const sampledState = recordSignalSample(signalState, {
+    peripheralId: firstSignal.peripheralId,
+    value: 1,
+    source: 'ui',
+    timestampMs: 1010,
+  });
+  assert(sampledState.values[firstSignal.id].value === 1, `${example.id} signal broker did not update sampled value.`);
+  assert(sampledState.samples.length === signalState.samples.length + 1, `${example.id} signal broker did not append edge sample.`);
+
   console.log(
-    `[netlist] ${example.id}: ${summary.packageComponentCount} component(s), ${summary.netCount} net(s), ${artifacts.peripheralManifest.length} Renode endpoint(s)`
+    `[netlist] ${example.id}: ${summary.packageComponentCount} component(s), ${summary.netCount} net(s), ${signalSummary.signalCount} signal(s), ${artifacts.peripheralManifest.length} Renode endpoint(s)`
   );
 }
 

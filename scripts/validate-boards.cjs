@@ -175,6 +175,8 @@ async function validateBoard(board, index) {
     bridgeReady: false,
     ledOn: false,
     ledOffAfterOn: false,
+    signalLedOn: false,
+    signalLedOffAfterOn: false,
   };
 
   runtime.on('event', (payload) => {
@@ -188,6 +190,14 @@ async function validateBoard(board, index) {
       observed.ledOn = true;
     }
     if (payload.type === 'led' && payload.id === remap.outputId && payload.state === 0 && observed.ledOn) {
+      observed.ledOffAfterOn = true;
+    }
+    if (payload.type === 'signal' && payload.peripheralId === remap.outputId && payload.value === 1) {
+      observed.signalLedOn = true;
+      observed.ledOn = true;
+    }
+    if (payload.type === 'signal' && payload.peripheralId === remap.outputId && payload.value === 0 && observed.signalLedOn) {
+      observed.signalLedOffAfterOn = true;
       observed.ledOffAfterOn = true;
     }
   });
@@ -227,6 +237,7 @@ async function validateBoard(board, index) {
     started = true;
 
     await waitUntil(`${board.name} bridge`, () => observed.bridgeReady, 10000);
+    await wait(250);
     await runtime.sendPeripheralEvent({ type: 'button', id: remap.buttonId, state: 1 });
     await waitUntil(`${board.name} remapped LED on`, () => observed.ledOn, 8000);
     await runtime.sendPeripheralEvent({ type: 'button', id: remap.buttonId, state: 0 });

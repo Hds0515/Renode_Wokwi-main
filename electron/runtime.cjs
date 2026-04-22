@@ -129,6 +129,7 @@ function createRuntimeService(options = {}) {
     bridgePolling: false,
     bridgeManifest: [],
     ledStateCache: new Map(),
+    signalStateCache: new Map(),
     debugProcess: null,
     debugBuffer: '',
     debugSequence: 1,
@@ -187,6 +188,30 @@ function createRuntimeService(options = {}) {
       peripheralName: state.uartCapture.peripheralName,
       port: state.uartCapture.port,
       data,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  function emitSignal(entry, value, source) {
+    const numericValue = value ? 1 : 0;
+    const cacheKey = `${entry.id}:${source}`;
+    const previousValue = state.signalStateCache.get(cacheKey);
+    state.signalStateCache.set(cacheKey, numericValue);
+
+    emit({
+      type: 'signal',
+      id: `signal:${entry.id}`,
+      peripheralId: entry.id,
+      peripheralKind: entry.kind,
+      label: entry.label,
+      direction: entry.kind === 'button' ? 'input' : 'output',
+      value: numericValue,
+      source,
+      changed: previousValue !== numericValue,
+      gpioPortName: entry.gpioPortName,
+      gpioNumber: entry.gpioNumber,
+      mcuPinId: entry.mcuPinId,
+      timestampMs: Date.now(),
       timestamp: new Date().toISOString(),
     });
   }
@@ -289,6 +314,7 @@ function createRuntimeService(options = {}) {
     state.bridgeClient = null;
     state.bridgeManifest = [];
     state.ledStateCache = new Map();
+    state.signalStateCache = new Map();
   }
 
   function startBridgePolling() {
@@ -316,6 +342,7 @@ function createRuntimeService(options = {}) {
           }
 
           state.ledStateCache.set(entry.id, nextState);
+          emitSignal(entry, nextState, 'renode');
           emit({
             type: 'led',
             id: entry.id,
@@ -357,6 +384,7 @@ function createRuntimeService(options = {}) {
       state.bridgeClient = client;
       state.bridgeManifest = manifest;
       state.ledStateCache = new Map();
+      state.signalStateCache = new Map();
 
       emit({ type: 'bridge', status: 'connected' });
       emit({
@@ -807,6 +835,7 @@ function createRuntimeService(options = {}) {
 
     try {
       await state.bridgeClient.setPeripheralState(entry, request.state === 1);
+      emitSignal(entry, request.state === 1, 'bridge');
       emit({
         type: 'bridge',
         status: 'button-event',

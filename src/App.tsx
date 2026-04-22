@@ -71,6 +71,17 @@ import {
   normalizeLoadedProjectDocument,
 } from './lib/project';
 import { EXAMPLE_PROJECTS, getExampleProject, getExamplesForBoard } from './lib/examples';
+import {
+  DEFAULT_LOGIC_ANALYZER_WINDOW_MS,
+  SignalBrokerState,
+  SignalDefinition,
+  SignalSample,
+  createSignalBrokerState,
+  createSignalDefinitionsFromNetlist,
+  getSignalSamples,
+  recordSignalSample,
+  summarizeSignalBroker,
+} from './lib/signal-broker';
 
 type ToolingStatus = {
   found: boolean;
@@ -389,6 +400,140 @@ function getTemplateRequirementSummary(templateKind: DemoPeripheralTemplateKind)
   return componentPackage.pins
     .map((pin) => `${pin.label}: ${pin.requiredPadCapabilities.join(' + ')}`)
     .join(' / ');
+}
+
+function buildLogicAnalyzerPoints(options: {
+  samples: SignalSample[];
+  currentValue: 0 | 1;
+  nowMs: number;
+  windowMs: number;
+  width: number;
+  highY: number;
+  lowY: number;
+}): string {
+  const startMs = options.nowMs - options.windowMs;
+  const sortedSamples = [...options.samples].sort((left, right) => left.timestampMs - right.timestampMs);
+  const yForValue = (value: 0 | 1) => (value === 1 ? options.highY : options.lowY);
+  const xForTime = (timestampMs: number) =>
+    Math.max(0, Math.min(options.width, ((timestampMs - startMs) / options.windowMs) * options.width));
+
+  let value: 0 | 1 = 0;
+  sortedSamples.forEach((sample) => {
+    if (sample.timestampMs <= startMs) {
+      value = sample.value;
+    }
+  });
+
+  const points = [`0,${yForValue(value)}`];
+  sortedSamples
+    .filter((sample) => sample.timestampMs > startMs && sample.timestampMs <= options.nowMs)
+    .forEach((sample) => {
+      const x = xForTime(sample.timestampMs).toFixed(1);
+      points.push(`${x},${yForValue(value)}`, `${x},${yForValue(sample.value)}`);
+      value = sample.value;
+    });
+
+  points.push(`${options.width},${yForValue(options.currentValue)}`);
+  return points.join(' ');
+}
+
+function LogicAnalyzerPanel({
+  state,
+  nowMs,
+  onClear,
+}: {
+  state: SignalBrokerState;
+  nowMs: number;
+  onClear: () => void;
+}) {
+  const summary = summarizeSignalBroker(state);
+  const width = 420;
+  const rowHeight = 38;
+  const windowMs = DEFAULT_LOGIC_ANALYZER_WINDOW_MS;
+
+  return (
+    <div className="mt-4 rounded-3xl border border-slate-800 bg-slate-900/70 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Signal Broker / Logic Analyzer</div>
+          <div className="mt-1 text-sm text-slate-300">
+            Runtime GPIO samples are normalized into one signal bus before the waveforms are drawn.
+          </div>
+        </div>
+        <button
+          onClick={onClear}
+          className="rounded-2xl border border-slate-700 bg-slate-950/60 px-3 py-1.5 text-xs font-medium text-slate-200 transition hover:border-slate-500 hover:text-white"
+        >
+          Clear
+        </button>
+      </div>
+
+      <div className="mt-3 grid grid-cols-4 gap-2 text-xs text-slate-300">
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Signals</div>
+          <div className="mt-1 font-semibold text-white">{summary.signalCount}</div>
+        </div>
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Inputs</div>
+          <div className="mt-1 font-semibold text-white">{summary.inputCount}</div>
+        </div>
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Outputs</div>
+          <div className="mt-1 font-semibold text-white">{summary.outputCount}</div>
+        </div>
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Samples</div>
+          <div className="mt-1 font-semibold text-white">{summary.sampleCount}</div>
+        </div>
+      </div>
+
+      <div className="mt-3 max-h-[300px] overflow-auto rounded-2xl border border-slate-800 bg-slate-950/60 p-2">
+        {state.definitions.length === 0 ? (
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-400">
+            Connect at least one GPIO endpoint to create observable signals.
+          </div>
+        ) : (
+          state.definitions.map((definition: SignalDefinition) => {
+            const value = state.values[definition.id]?.value ?? 0;
+            const samples = getSignalSamples(state, definition.id);
+            const points = buildLogicAnalyzerPoints({
+              samples,
+              currentValue: value,
+              nowMs,
+              windowMs,
+              width,
+              highY: 8,
+              lowY: 28,
+            });
+
+            return (
+              <div key={definition.id} className="grid grid-cols-[132px_minmax(0,1fr)] items-center gap-2 border-b border-slate-900 py-2 last:border-b-0">
+                <div className="min-w-0">
+                  <div className="truncate text-xs font-semibold text-slate-100">{definition.label}</div>
+                  <div className="mt-1 flex flex-wrap gap-1 text-[10px] uppercase tracking-[0.14em]">
+                    <span
+                      className={`rounded-full px-2 py-0.5 ${
+                        definition.direction === 'input' ? 'bg-fuchsia-500/15 text-fuchsia-200' : 'bg-amber-500/15 text-amber-200'
+                      }`}
+                    >
+                      {definition.direction}
+                    </span>
+                    <span className="rounded-full bg-slate-800 px-2 py-0.5 text-slate-300">{definition.mcuPinId ?? definition.padId ?? 'unmapped'}</span>
+                    <span className={value === 1 ? 'text-emerald-300' : 'text-slate-500'}>{value === 1 ? 'HIGH' : 'LOW'}</span>
+                  </div>
+                </div>
+                <svg viewBox={`0 0 ${width} ${rowHeight}`} className="h-[38px] w-full overflow-hidden rounded-xl bg-slate-950">
+                  <line x1="0" y1="8" x2={width} y2="8" stroke="rgba(148,163,184,0.18)" strokeDasharray="4 7" />
+                  <line x1="0" y1="28" x2={width} y2="28" stroke="rgba(148,163,184,0.14)" strokeDasharray="4 7" />
+                  <polyline points={points} fill="none" stroke={definition.color} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
+                </svg>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
 }
 
 function getPeripheralDisplayTone(
@@ -2476,6 +2621,8 @@ export default function App() {
   });
   const [buttonStates, setButtonStates] = useState<Record<string, boolean>>({});
   const [ledStates, setLedStates] = useState<Record<string, boolean>>({});
+  const [signalBrokerState, setSignalBrokerState] = useState<SignalBrokerState>(() => createSignalBrokerState([]));
+  const [logicAnalyzerClock, setLogicAnalyzerClock] = useState(Date.now());
   const [codeMode, setCodeMode] = useState<CodeMode>('generated');
   const [code, setCode] = useState(DEFAULT_MAIN_SOURCE);
   const [uartTranscript, setUartTranscript] = useState('UART terminal idle. Start Renode to attach the board UART socket.\n');
@@ -2510,6 +2657,7 @@ export default function App() {
   const workbenchDevices = useMemo(() => buildWorkbenchDevices(wiring), [wiring]);
   const circuitNetlist = useMemo(() => createNetlistFromWiring(wiring, selectedBoard), [selectedBoard, wiring]);
   const netlistSummary = useMemo(() => summarizeNetlist(circuitNetlist), [circuitNetlist]);
+  const signalDefinitions = useMemo(() => createSignalDefinitionsFromNetlist(circuitNetlist), [circuitNetlist]);
   const renodeArtifacts = useMemo(
     () =>
       compileNetlistToRenodeArtifacts({
@@ -2540,6 +2688,7 @@ export default function App() {
   const projectDisplayName = projectFilePath?.split(/[\\/]/).pop() ?? projectTitle ?? 'Untitled project';
   const boardExamples = useMemo(() => getExamplesForBoard(selectedBoard.id), [selectedBoard.id]);
   const selectedExample = useMemo(() => getExampleProject(selectedExampleId, selectedBoard.id), [selectedBoard.id, selectedExampleId]);
+  const logicAnalyzerNow = simulation.running ? logicAnalyzerClock : signalBrokerState.lastUpdatedAtMs;
 
   const appendLog = useCallback((message: string, level: RuntimeLog['level'] = 'info') => {
     setLogs((current) => [...current, createLogEntry(message, level)]);
@@ -2611,6 +2760,21 @@ export default function App() {
   useEffect(() => {
     refreshTooling();
   }, [refreshTooling]);
+
+  useEffect(() => {
+    const nowMs = Date.now();
+    setSignalBrokerState(createSignalBrokerState(signalDefinitions, nowMs));
+    setLogicAnalyzerClock(nowMs);
+  }, [signalDefinitions]);
+
+  useEffect(() => {
+    if (!simulation.running) {
+      return undefined;
+    }
+
+    const interval = window.setInterval(() => setLogicAnalyzerClock(Date.now()), 250);
+    return () => window.clearInterval(interval);
+  }, [simulation.running]);
 
   useEffect(() => {
     setCodeDirty(true);
@@ -2691,6 +2855,18 @@ export default function App() {
     return window.localWokwi.onSimulationEvent((event) => {
       if (event.type === 'log') {
         appendLog(event.message, event.level ?? 'info');
+        return;
+      }
+
+      if (event.type === 'signal') {
+        setSignalBrokerState((current) =>
+          recordSignalSample(current, {
+            peripheralId: event.peripheralId,
+            value: event.value,
+            source: event.source,
+            timestampMs: event.timestampMs ?? Date.now(),
+          })
+        );
         return;
       }
 
@@ -3213,6 +3389,14 @@ export default function App() {
         ...current,
         [peripheralId]: pressed,
       }));
+      setSignalBrokerState((current) =>
+        recordSignalSample(current, {
+          peripheralId,
+          value: pressed,
+          source: 'ui',
+          timestampMs: Date.now(),
+        })
+      );
 
       const result = await window.localWokwi.sendPeripheralEvent({
         type: 'button',
@@ -3252,6 +3436,12 @@ export default function App() {
     },
     [appendLog, simulation.running, simulation.uartConnected, uartInput]
   );
+
+  const clearLogicAnalyzer = useCallback(() => {
+    const nowMs = Date.now();
+    setSignalBrokerState(createSignalBrokerState(signalDefinitions, nowMs));
+    setLogicAnalyzerClock(nowMs);
+  }, [signalDefinitions]);
 
   const useGeneratedDemoCode = useCallback(() => {
     setCode(generatedCode);
@@ -3386,6 +3576,7 @@ export default function App() {
     }));
     setButtonStates({});
     setLedStates({});
+    setSignalBrokerState(createSignalBrokerState(signalDefinitions, Date.now()));
     setUartTranscript(
       `UART terminal starting for ${selectedBoard.runtime.uart?.displayName ?? uartPeripheralName ?? 'board UART'} (${uartPeripheralName ?? 'none'}).\n`
     );
@@ -3399,6 +3590,7 @@ export default function App() {
     peripheralManifest,
     selectedBoard.machineName,
     selectedBoard.runtime.uart?.displayName,
+    signalDefinitions,
     simulation.bridgePort,
     simulation.gdbPort,
     uartPeripheralName,
@@ -3495,6 +3687,7 @@ export default function App() {
               <StatusPill active={debugState.connected} label="Debugger attached" />
               <StatusPill active={wiringRuleErrors.length === 0} label="Pin rules OK" />
               <StatusPill active={netlistErrors.length === 0} label="Netlist OK" />
+              <StatusPill active={signalDefinitions.length > 0} label="Signal broker" />
             </div>
 
             <div className="mt-4 grid gap-3 rounded-[28px] border border-slate-800 bg-slate-950/70 p-4 lg:grid-cols-[minmax(0,1fr)_260px]">
@@ -3776,6 +3969,8 @@ export default function App() {
                 )}
               </div>
             </div>
+
+            <LogicAnalyzerPanel state={signalBrokerState} nowMs={logicAnalyzerNow} onClear={clearLogicAnalyzer} />
 
             <div className="mt-4 grid gap-2 text-sm text-slate-300">
               <div className="rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2">

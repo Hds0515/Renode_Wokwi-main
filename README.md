@@ -10,6 +10,8 @@ It keeps the visual workflow from the original prototype, but moves execution in
 - drag-in peripheral templates, wire-stub-to-pad gestures, and selectable wires on the main canvas
 - local project save/load as `.renode-wokwi.json`
 - project schema v2 with a unified Netlist/IR plus component package catalog metadata
+- Signal Broker MVP that normalizes GPIO runtime events from Electron runtime before visualization
+- Logic Analyzer MVP for live digital waveforms from connected GPIO endpoints
 - bundled example projects that can be opened from the control panel
 - auto-generated Renode `.repl` and `.resc`
 - local ARM GCC compilation
@@ -32,6 +34,8 @@ The current MVP has one validated Renode-backed board plus two Renode-verified e
 - board-aware generated `main.c`, `board.repl`, `.resc`, compiler args, and bundled example projects
 - project document schema v2 for wiring, Netlist/IR, workbench layout, code mode, and component package metadata
 - component package catalog for `Button`, `LED`, `Buzzer`, and grouped `RGB LED` pin/capability definitions
+- Signal Broker schema derived from Netlist/IR GPIO nets and Electron runtime `signal` events
+- live Logic Analyzer panel for input/output edge samples
 - local `arm-none-eabi-gcc` compilation with generated startup and linker files
 - local Renode launch through the bundled `renode/renode/renode.exe` when present
 - GDB server enabled on port `3333`
@@ -168,6 +172,7 @@ npm run start
   - local compile pipeline
   - Renode process management
   - Renode external-control connection management
+  - runtime `signal` events for button injection and Renode LED polling
 - `electron/preload.cjs`
   - safe renderer API exposed as `window.localWokwi`
   - local project save/load bridge
@@ -190,6 +195,8 @@ npm run start
 - `src/lib/netlist.ts`
   - unified Netlist/IR schema
   - compiler from wiring to Netlist/IR, Netlist validation, Netlist round-trip, and Renode artifact generation
+- `src/lib/signal-broker.ts`
+  - Signal Broker schema, signal definitions from Netlist/IR, runtime signal reducer, and summary helpers
 - `src/lib/examples.ts`
   - board-specific bundled project catalog used by the control-panel example opener
 - `src/lib/firmware.ts`
@@ -214,6 +221,8 @@ npm run start
 - project loading now normalizes compatible files, upgrades them into project schema v2, and reports schema/pad/reference warnings in the log
 - bundled examples can be opened from the control panel and mirrored as project files under `examples/`
 - `wiring` now compiles into a unified Netlist/IR before emitting Renode files and generated firmware
+- Signal Broker records UI-predicted button edges plus Electron runtime button/LED `signal` events into one timeline
+- Logic Analyzer renders the most recent GPIO signal window from the Signal Broker sample stream
 - `npm run validate:netlist` validates component packages, Netlist round-trips, examples, and Renode artifacts
 - button presses go through Renode external control
 - LED state is polled back from Renode and updates the board view
