@@ -406,6 +406,19 @@ export const STM32F4_DISCOVERY_BOARD_SCHEMA: BoardSchema = {
       txPinId: 'PA2',
       rxPinId: 'PA3',
     },
+    i2c: [
+      {
+        peripheralName: 'i2c1',
+        displayName: 'I2C1',
+        registerModel: 'stm32f1-i2c',
+        baseAddress: 0x40005400,
+        sclPinId: 'PB6',
+        sdaPinId: 'PB7',
+        rccEnableRegisterOffset: 0x40,
+        rccEnableRegisterName: 'RCC_APB1ENR',
+        rccEnableBit: 21,
+      },
+    ],
   },
   connectors: {
     all: STM32F4_DISCOVERY_CONNECTORS,
@@ -474,6 +487,19 @@ export const STM32F103_GPIO_LAB_BOARD_SCHEMA: BoardSchema = {
       txPinId: 'PA2',
       rxPinId: 'PA3',
     },
+    i2c: [
+      {
+        peripheralName: 'i2c1',
+        displayName: 'I2C1',
+        registerModel: 'stm32f1-i2c',
+        baseAddress: 0x40005400,
+        sclPinId: 'PB6',
+        sdaPinId: 'PB7',
+        rccEnableRegisterOffset: 0x1c,
+        rccEnableRegisterName: 'RCC_APB1ENR',
+        rccEnableBit: 21,
+      },
+    ],
   },
   connectors: {
     all: STM32F103_CONNECTORS,

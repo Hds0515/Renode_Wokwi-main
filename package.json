@@ -14,6 +14,7 @@
     "lint": "tsc --noEmit",
     "smoke": "node scripts/smoke-test.cjs",
     "smoke:i2c": "node scripts/smoke-i2c-demo.cjs",
+    "smoke:si7021": "node scripts/smoke-si7021-native.cjs",
     "smoke:broker": "node scripts/smoke-broker-bridge.cjs",
     "validate:netlist": "node scripts/validate-netlist.cjs",
     "validate:boards": "node scripts/validate-boards.cjs",

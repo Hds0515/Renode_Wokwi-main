@@ -32,7 +32,10 @@ type RuntimeBusManifestEntry = {
     componentKind: string;
     label: string;
     address: number | null;
-    model: 'ssd1306' | 'generic-i2c';
+    model: 'ssd1306' | 'si7021' | 'generic-i2c';
+    sensorPackage?: 'si7021-sensor';
+    nativeRenodeName?: string | null;
+    nativeRenodePath?: string | null;
   }>;
 };
 
@@ -162,6 +165,39 @@ type UartDataResult = {
   message?: string;
 };
 
+type BusTransactionRequest = {
+  protocol: 'uart' | 'i2c' | 'spi';
+  source?: 'ui' | 'system' | 'renode' | 'uart' | 'i2c' | 'spi';
+  status?: 'data' | 'connecting' | 'connected' | 'disconnected' | 'error' | 'planned';
+  busId?: string | null;
+  busLabel?: string | null;
+  peripheralName?: string | null;
+  direction: 'rx' | 'tx' | 'read' | 'write' | 'transfer' | 'system';
+  address?: number | string | null;
+  data?: string | number[] | Uint8Array;
+  bytes?: number[];
+};
+
+type BusTransactionResult = {
+  success: boolean;
+  message?: string;
+};
+
+type NativeSensorControlRequest = {
+  path: string;
+  temperatureC?: number;
+  humidityPercent?: number;
+};
+
+type NativeSensorControlResult = {
+  success: boolean;
+  message?: string;
+  values?: {
+    temperatureC?: number | null;
+    humidityPercent?: number | null;
+  };
+};
+
 type StartDebuggingRequest = {
   workspaceDir?: string;
   elfPath: string;
@@ -196,6 +232,11 @@ type LocalProjectDocument = {
     catalogVersion: number;
     kinds: string[];
   };
+  sensorPackages?: {
+    schemaVersion: number;
+    catalogVersion: number;
+    kinds: string[];
+  };
   wiring: {
     peripherals: Array<{
       id: string;
@@ -205,7 +246,7 @@ type LocalProjectDocument = {
       sourcePeripheralId: string | null;
       behavior?: {
         schemaVersion: 2;
-        role: 'momentary-input' | 'gpio-output' | 'i2c-display';
+        role: 'momentary-input' | 'gpio-output' | 'i2c-display' | 'i2c-sensor';
         powerRequired: boolean;
         controller:
           | { type: 'firmware' }
@@ -219,7 +260,7 @@ type LocalProjectDocument = {
         gndPadId: string | null;
         voltage: '3v3' | '5v' | 'vin' | 'external' | null;
       };
-      templateKind?: 'button' | 'led' | 'buzzer' | 'rgb-led' | 'ssd1306-oled';
+      templateKind?: 'button' | 'led' | 'buzzer' | 'rgb-led' | 'ssd1306-oled' | 'si7021-sensor';
       groupId?: string | null;
       groupLabel?: string | null;
       endpointId?: string | null;
@@ -393,6 +434,16 @@ type RuntimeEvent =
       timestamp?: string;
     }
   | {
+      type: 'sensor';
+      status?: 'updated' | 'error';
+      path?: string;
+      temperatureC?: number | null;
+      humidityPercent?: number | null;
+      message?: string;
+      clock?: SimulationClockSnapshot;
+      timestamp?: string;
+    }
+  | {
       type: 'debug';
       stream?: 'mi' | 'console' | 'stderr';
       status?: 'connected' | 'disconnected' | 'running' | 'stopped' | 'breakpoint' | 'done' | 'error';
@@ -419,6 +470,8 @@ declare global {
       stopSimulation: () => Promise<{ success: boolean; message: string }>;
       sendPeripheralEvent: (request: { type: 'button'; id: string; state: 0 | 1 }) => Promise<PeripheralEventResult>;
       sendUartData: (request: { data: string }) => Promise<UartDataResult>;
+      sendBusTransaction: (request: BusTransactionRequest) => Promise<BusTransactionResult>;
+      setNativeSensor: (request: NativeSensorControlRequest) => Promise<NativeSensorControlResult>;
       startDebugging: (request: StartDebuggingRequest) => Promise<StartDebuggingResult>;
       stopDebugging: () => Promise<{ success: boolean; message: string }>;
       debugAction: (request: DebugActionRequest) => Promise<{ success: boolean; message?: string; token?: number }>;

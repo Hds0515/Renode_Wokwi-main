@@ -42,6 +42,17 @@ const {
   recordRuntimeTimelineEvent,
   summarizeRuntimeTimeline,
 } = require('../src/lib/runtime-timeline.ts');
+const {
+  createSi70xxMeasurementTransactions,
+  createSi70xxState,
+  applySi70xxTransaction,
+} = require('../src/lib/si70xx.ts');
+const {
+  SENSOR_PACKAGE_SCHEMA_VERSION,
+  SENSOR_PACKAGE_CATALOG_VERSION,
+  SENSOR_PACKAGES,
+  getSensorPackage,
+} = require('../src/lib/sensor-packages.ts');
 const { validateWiringRules } = require('../src/lib/firmware.ts');
 
 function connectedPairs(wiring) {
@@ -68,6 +79,20 @@ function validateComponentPackages() {
   });
 }
 
+function validateSensorPackages() {
+  assert(SENSOR_PACKAGE_SCHEMA_VERSION === 1, 'Expected Sensor Package schema v1.');
+  assert(SENSOR_PACKAGE_CATALOG_VERSION === 1, 'Expected Sensor Package catalog v1.');
+  assert(SENSOR_PACKAGES.length >= 1, 'Expected at least one reusable sensor package.');
+  const si7021 = getSensorPackage('si7021-sensor');
+  assert(si7021.native.renodeType === 'Sensors.SI70xx', 'SI7021 package should map to Renode Sensors.SI70xx.');
+  assert(si7021.native.defaultAddress === 0x40, 'SI7021 package should use I2C address 0x40.');
+  assert(
+    si7021.native.control.channels.some((channel) => channel.renodeProperty === 'Temperature') &&
+      si7021.native.control.channels.some((channel) => channel.renodeProperty === 'Humidity'),
+    'SI7021 package should expose Renode native Temperature and Humidity controls.'
+  );
+}
+
 function validateProjectExample(example) {
   const board = BOARD_SCHEMAS.find((candidate) => candidate.id === example.boardId);
   assert(board, `${example.id} references unknown board ${example.boardId}.`);
@@ -78,6 +103,7 @@ function validateProjectExample(example) {
   const project = loadResult.project;
   assert(project.schemaVersion === 2, `${example.id} did not normalize to project schema v2.`);
   assert(project.netlist, `${example.id} does not contain a netlist.`);
+  assert(project.sensorPackages?.schemaVersion === 1, `${example.id} should save Sensor Package schema v1.`);
 
   const regeneratedNetlist = createNetlistFromWiring(project.wiring, board);
   const netlistIssues = validateNetlist(project.netlist, board);
@@ -141,14 +167,6 @@ function validateProjectExample(example) {
     assert(signalSummary.inputCount > 0, `${example.id} should expose at least one input signal.`);
     assert(signalSummary.outputCount > 0, `${example.id} should expose at least one output signal.`);
   }
-  if (project.netlist.components.some((component) => component.kind === 'ssd1306-oled')) {
-    assert(
-      busManifest.some((entry) => entry.protocol === 'i2c' && Array.isArray(entry.devices) && entry.devices.some((device) => device.model === 'ssd1306')),
-      `${example.id} should expose an SSD1306 device in the I2C bus manifest.`
-    );
-  }
-
-  const firstSignal = signalDefinitions[0];
   const timelineClock = {
     schemaVersion: 1,
     sequence: 1,
@@ -160,6 +178,65 @@ function validateProjectExample(example) {
     timeScale: 1,
     paused: false,
   };
+  if (project.netlist.components.some((component) => component.kind === 'ssd1306-oled')) {
+    assert(
+      busManifest.some((entry) => entry.protocol === 'i2c' && Array.isArray(entry.devices) && entry.devices.some((device) => device.model === 'ssd1306')),
+      `${example.id} should expose an SSD1306 device in the I2C bus manifest.`
+    );
+  }
+  if (project.netlist.components.some((component) => component.kind === 'si7021-sensor')) {
+    const sensorBus = busManifest.find((entry) => entry.protocol === 'i2c' && Array.isArray(entry.devices) && entry.devices.some((device) => device.model === 'si7021'));
+    assert(sensorBus, `${example.id} should expose an SI7021 device in the I2C bus manifest.`);
+    assert(artifacts.boardRepl.includes('Sensors.SI70xx'), `${example.id} should attach the SI7021 as a native Renode sensor.`);
+    assert(artifacts.mainSource.includes('si7021_read_raw'), `${example.id} should generate native firmware I2C sensor reads.`);
+
+    const sensor = sensorBus.devices.find((device) => device.model === 'si7021');
+    assert(sensor, `${example.id} SI7021 runtime device metadata is missing.`);
+    assert(sensor.sensorPackage === 'si7021-sensor', `${example.id} SI7021 should reference Sensor Package v1 metadata.`);
+    assert(sensor.nativeRenodeName && sensor.nativeRenodeName.startsWith('si7021Sensor__'), `${example.id} SI7021 should expose a native Renode peripheral name.`);
+    assert(
+      sensor.nativeRenodePath && sensor.nativeRenodePath.includes(`.${sensor.nativeRenodeName}`),
+      `${example.id} SI7021 should expose a native Renode monitor path.`
+    );
+    const transactions = createSi70xxMeasurementTransactions({
+      busId: sensorBus.id,
+      busLabel: sensorBus.label,
+      componentId: sensor.componentId,
+      address: sensor.address ?? 0x40,
+      temperatureC: 23.5,
+      humidityPercent: 51.5,
+      kind: 'temperature',
+    });
+    const sensorState = transactions.reduce(
+      (state, transaction, index) =>
+        applySi70xxTransaction(state, {
+          schemaVersion: 1,
+          id: `${example.id}:si7021:${index}`,
+          protocol: 'i2c',
+          kind: 'bus-transaction',
+          source: 'ui',
+          clock: { ...timelineClock, sequence: 10 + index, virtualTimeNs: 10000000 + index * 1000000, virtualTimeMs: 10 + index },
+          summary: 'validation si7021 transaction',
+          busId: transaction.busId,
+          busLabel: transaction.busLabel,
+          renodePeripheralName: transaction.peripheralName,
+          direction: transaction.direction,
+          status: transaction.status,
+          address: transaction.address,
+          payload: {
+            bytes: transaction.data,
+            text: null,
+            bitLength: transaction.data.length * 8,
+            truncated: false,
+          },
+        }),
+      createSi70xxState(sensor.address ?? 0x40)
+    );
+    assert(sensorState.lastReadTemperatureC !== null, `${example.id} SI7021 temperature transaction did not decode.`);
+    assert(Math.abs(sensorState.lastReadTemperatureC - 23.5) < 0.05, `${example.id} SI7021 temperature decode drifted.`);
+  }
+
+  const firstSignal = signalDefinitions[0];
   const timelineWithGpio = firstSignal
     ? (() => {
         const sampledState = recordSignalSample(signalState, {
@@ -228,6 +305,7 @@ function validateProjectExample(example) {
 
 function main() {
   validateComponentPackages();
+  validateSensorPackages();
   BOARD_SCHEMAS.forEach((board) => {
     const examples = getExamplesForBoard(board.id);
     assert(examples.length > 0, `${board.name} has no bundled examples.`);

@@ -38,6 +38,10 @@ type BoardExamplePins = {
     scl: string;
     sda: string;
   };
+  sensor: {
+    scl: string;
+    sda: string;
+  };
 };
 
 const BOARD_EXAMPLE_PINS: Record<string, BoardExamplePins> = {
@@ -55,6 +59,10 @@ const BOARD_EXAMPLE_PINS: Record<string, BoardExamplePins> = {
       colors: ['CN9-1', 'CN9-3', 'CN9-5'],
     },
     oled: {
+      scl: 'CN9-6',
+      sda: 'CN9-5',
+    },
+    sensor: {
       scl: 'CN9-6',
       sda: 'CN9-5',
     },
@@ -76,6 +84,10 @@ const BOARD_EXAMPLE_PINS: Record<string, BoardExamplePins> = {
       scl: 'F4D-3',
       sda: 'F4D-4',
     },
+    sensor: {
+      scl: 'F4D-3',
+      sda: 'F4D-4',
+    },
   },
   'stm32f103-gpio-lab': {
     buttonLed: {
@@ -91,6 +103,10 @@ const BOARD_EXAMPLE_PINS: Record<string, BoardExamplePins> = {
       colors: ['F1B-1', 'F1B-2', 'F1B-4'],
     },
     oled: {
+      scl: 'F1B-4',
+      sda: 'F1B-5',
+    },
+    sensor: {
       scl: 'F1B-4',
       sda: 'F1B-5',
     },
@@ -173,16 +189,18 @@ function createI2cEndpoint(options: {
   groupId: string;
   groupLabel: string;
   power: DemoPeripheralPowerBinding;
+  templateKind?: 'ssd1306-oled' | 'si7021-sensor';
 }): DemoPeripheral {
+  const templateKind = options.templateKind ?? 'ssd1306-oled';
   return {
     id: options.id,
     kind: 'i2c',
     label: options.label,
     padId: options.padId,
     sourcePeripheralId: null,
-    behavior: createDefaultPeripheralBehavior('ssd1306-oled'),
+    behavior: createDefaultPeripheralBehavior(templateKind),
     power: options.power,
-    templateKind: 'ssd1306-oled',
+    templateKind,
     groupId: options.groupId,
     groupLabel: options.groupLabel,
     endpointId: options.endpointId,
@@ -326,6 +344,35 @@ function buildBoardExamples(board: BoardSchema): ExampleProject[] {
     ],
   };
 
+  const sensorWiring: DemoWiring = {
+    peripherals: [
+      createI2cEndpoint({
+        id: 'si7021-sensor-1-scl',
+        label: 'SI7021 1',
+        padId: pins.sensor.scl,
+        endpointId: 'scl',
+        endpointLabel: 'SCL',
+        accentColor: '#34d399',
+        groupId: 'si7021-sensor-1',
+        groupLabel: 'SI7021 1',
+        power,
+        templateKind: 'si7021-sensor',
+      }),
+      createI2cEndpoint({
+        id: 'si7021-sensor-1-sda',
+        label: 'SI7021 1',
+        padId: pins.sensor.sda,
+        endpointId: 'sda',
+        endpointLabel: 'SDA',
+        accentColor: '#10b981',
+        groupId: 'si7021-sensor-1',
+        groupLabel: 'SI7021 1',
+        power,
+        templateKind: 'si7021-sensor',
+      }),
+    ],
+  };
+
   return [
     {
       id: `${board.id}-button-led`,
@@ -385,6 +432,20 @@ function buildBoardExamples(board: BoardSchema): ExampleProject[] {
         wiring: oledWiring,
         peripheralPositions: {
           'ssd1306-oled-1': { x: 96, y: 364 },
+        },
+      }),
+    },
+    {
+      id: `${board.id}-si7021-sensor`,
+      boardId: board.id,
+      title: `${board.name}: SI7021 sensor over I2C`,
+      summary: 'A reusable sensor demo that emits Renode SI70xx-compatible temperature and humidity transactions.',
+      difficulty: 'intermediate',
+      project: buildExampleProject({
+        board,
+        wiring: sensorWiring,
+        peripheralPositions: {
+          'si7021-sensor-1': { x: 252, y: 364 },
         },
       }),
     },

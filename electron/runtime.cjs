@@ -156,6 +156,8 @@ function createRuntimeService(options = {}) {
     transactionBrokerSockets: new Set(),
     transactionBrokerBuffers: new Map(),
     transactionBrokerPort: null,
+    monitorPort: null,
+    monitorCommandQueue: Promise.resolve(),
     simulationClock: createSimulationClockState(),
     clockSyncTimer: null,
     debugProcess: null,
@@ -169,6 +171,8 @@ function createRuntimeService(options = {}) {
       peripheralName: null,
       port: null,
       buffer: '',
+      lineBuffer: '',
+      lineFlushTimer: null,
     },
   };
 
@@ -616,6 +620,53 @@ function createRuntimeService(options = {}) {
     );
   }
 
+  function clearUartLineFlushTimer() {
+    if (state.uartCapture.lineFlushTimer) {
+      clearTimeout(state.uartCapture.lineFlushTimer);
+      state.uartCapture.lineFlushTimer = null;
+    }
+  }
+
+  function flushUartLineBuffer() {
+    clearUartLineFlushTimer();
+    const pending = state.uartCapture.lineBuffer || '';
+    if (!pending) {
+      return;
+    }
+    state.uartCapture.lineBuffer = '';
+    emitUart(pending, 'rx', 'data');
+  }
+
+  function scheduleUartLineFlush() {
+    clearUartLineFlushTimer();
+    state.uartCapture.lineFlushTimer = setTimeout(() => {
+      state.uartCapture.lineFlushTimer = null;
+      flushUartLineBuffer();
+    }, 120);
+  }
+
+  function emitUartLineBuffered(data) {
+    if (!state.uartCapture.enabled || !data) {
+      return;
+    }
+
+    clearUartLineFlushTimer();
+    let buffer = `${state.uartCapture.lineBuffer || ''}${data}`;
+    let newlineIndex = buffer.indexOf('\n');
+
+    while (newlineIndex >= 0) {
+      const line = buffer.slice(0, newlineIndex + 1);
+      emitUart(line, 'rx', 'data');
+      buffer = buffer.slice(newlineIndex + 1);
+      newlineIndex = buffer.indexOf('\n');
+    }
+
+    state.uartCapture.lineBuffer = buffer;
+    if (buffer) {
+      scheduleUartLineFlush();
+    }
+  }
+
   function emitUartStatus(status, data = '') {
     if (!state.uartCapture.enabled) {
       return;
@@ -951,6 +1002,8 @@ function createRuntimeService(options = {}) {
   }
 
   function closeUartTerminal() {
+    flushUartLineBuffer();
+
     if (state.uartSocket) {
       try {
         state.uartSocket.destroy();
@@ -970,6 +1023,8 @@ function createRuntimeService(options = {}) {
       peripheralName: null,
       port: null,
       buffer: '',
+      lineBuffer: '',
+      lineFlushTimer: null,
     };
   }
 
@@ -989,6 +1044,96 @@ function createRuntimeService(options = {}) {
     });
   }
 
+  function normalizeMonitorPath(value) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const normalized = value.trim();
+    return /^[a-zA-Z0-9_.]+$/.test(normalized) ? normalized : null;
+  }
+
+  function normalizeSensorNumber(value, min, max) {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) {
+      return null;
+    }
+    return Math.min(max, Math.max(min, numericValue));
+  }
+
+  function cleanMonitorOutput(output, command) {
+    const printable = String(output ?? '').replace(/[^\x09\x0a\x0d\x20-\x7e]/g, '');
+    return printable
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && line !== command && !line.startsWith('(machine') && !line.startsWith('Renode, version'))
+      .join('\n');
+  }
+
+  function parseMonitorNumber(output) {
+    const lines = String(output ?? '')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const value = Number(lines[index]);
+      if (Number.isFinite(value)) {
+        return value;
+      }
+    }
+    return null;
+  }
+
+  function runMonitorCommand(command, timeoutMs = 700) {
+    return new Promise((resolve, reject) => {
+      if (!state.monitorPort) {
+        reject(new Error('Renode monitor port is not available.'));
+        return;
+      }
+
+      let output = '';
+      let settled = false;
+      const socket = net.createConnection({ host: '127.0.0.1', port: state.monitorPort });
+      const finish = (error = null) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        try {
+          socket.destroy();
+        } catch {
+          // ignore monitor socket cleanup failures
+        }
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(cleanMonitorOutput(output, command));
+      };
+
+      const timer = setTimeout(() => finish(), timeoutMs);
+      socket.on('connect', () => {
+        setTimeout(() => {
+          try {
+            socket.write(`${command}\n`);
+          } catch (error) {
+            finish(error);
+          }
+        }, 60);
+      });
+      socket.on('data', (chunk) => {
+        output += chunk.toString('utf8');
+      });
+      socket.on('error', (error) => finish(error));
+    });
+  }
+
+  function enqueueMonitorCommand(task) {
+    const queued = state.monitorCommandQueue.then(task, task);
+    state.monitorCommandQueue = queued.catch(() => {});
+    return queued;
+  }
+
   async function connectUartTerminal(port, peripheralName) {
     if (!port || !peripheralName) {
       return false;
@@ -1000,6 +1145,8 @@ function createRuntimeService(options = {}) {
       peripheralName,
       port,
       buffer: '',
+      lineBuffer: '',
+      lineFlushTimer: null,
     };
     emitUartStatus('connecting', `Waiting for UART terminal ${peripheralName} on port ${port}...\n`);
 
@@ -1010,7 +1157,7 @@ function createRuntimeService(options = {}) {
         state.uartCapture.connected = true;
 
         socket.on('data', (chunk) => {
-          emitUart(chunk.toString('utf8'), 'rx', 'data');
+          emitUartLineBuffered(chunk.toString('utf8'));
         });
         socket.on('error', (error) => {
           log(`UART terminal socket error: ${String(error)}`, 'warn');
@@ -1018,6 +1165,7 @@ function createRuntimeService(options = {}) {
         });
         socket.on('close', () => {
           if (state.uartSocket === socket) {
+            flushUartLineBuffer();
             state.uartSocket = null;
             state.uartCapture.connected = false;
             emitUartStatus('disconnected', 'UART terminal socket closed.\n');
@@ -1065,6 +1213,7 @@ function createRuntimeService(options = {}) {
       closeUartTerminal();
       state.busManifest = new Map();
       state.busManifestEntries = [];
+      state.monitorPort = null;
       state.renodeProcess = null;
       state.simulationClock.paused = true;
       emitClock('stopped');
@@ -1086,6 +1235,7 @@ function createRuntimeService(options = {}) {
     closeUartTerminal();
     state.busManifest = new Map();
     state.busManifestEntries = [];
+    state.monitorPort = null;
 
     if (state.renodeProcess) {
       try {
@@ -1309,6 +1459,7 @@ function createRuntimeService(options = {}) {
 
       state.renodeProcess = child;
       state.activeWorkspaceDir = workspaceDir;
+      state.monitorPort = monitorPort;
       attachRenodeProcessHandlers(child);
       startClockSync();
 
@@ -1352,6 +1503,7 @@ function createRuntimeService(options = {}) {
       };
     } catch (error) {
       state.renodeProcess = null;
+      state.monitorPort = null;
       clearClockSync();
       clearI2cDemoFeed();
       stopTransactionBrokerServer();
@@ -1428,6 +1580,131 @@ function createRuntimeService(options = {}) {
         message: `Failed to write UART data: ${String(error)}`,
       };
     }
+  }
+
+  async function setNativeSensor(request) {
+    if (!state.renodeProcess || !state.monitorPort) {
+      return {
+        success: false,
+        message: 'Start the simulation before controlling a native Renode sensor.',
+      };
+    }
+
+    const sensorPath = normalizeMonitorPath(request?.path);
+    if (!sensorPath) {
+      return {
+        success: false,
+        message: 'Native sensor path is missing or unsafe.',
+      };
+    }
+
+    const temperatureC =
+      request && Object.prototype.hasOwnProperty.call(request, 'temperatureC')
+        ? normalizeSensorNumber(request.temperatureC, -40, 85)
+        : null;
+    const humidityPercent =
+      request && Object.prototype.hasOwnProperty.call(request, 'humidityPercent')
+        ? normalizeSensorNumber(request.humidityPercent, 0, 100)
+        : null;
+
+    if (temperatureC === null && humidityPercent === null) {
+      return {
+        success: false,
+        message: 'Provide at least one native sensor value to update.',
+      };
+    }
+
+    try {
+      const values = await enqueueMonitorCommand(async () => {
+        if (temperatureC !== null) {
+          await runMonitorCommand(`${sensorPath} Temperature ${temperatureC.toFixed(3)}`);
+        }
+        if (humidityPercent !== null) {
+          await runMonitorCommand(`${sensorPath} Humidity ${humidityPercent.toFixed(3)}`);
+        }
+
+        const temperatureOutput = await runMonitorCommand(`${sensorPath} Temperature`);
+        const humidityOutput = await runMonitorCommand(`${sensorPath} Humidity`);
+        return {
+          temperatureC: parseMonitorNumber(temperatureOutput),
+          humidityPercent: parseMonitorNumber(humidityOutput),
+        };
+      });
+
+      const clock = snapshotSimulationClock();
+      emit({
+        type: 'sensor',
+        status: 'updated',
+        path: sensorPath,
+        temperatureC: values.temperatureC,
+        humidityPercent: values.humidityPercent,
+        clock,
+        timestamp: new Date().toISOString(),
+      });
+      log(
+        `Native sensor ${sensorPath} updated: T=${values.temperatureC ?? temperatureC} C, RH=${values.humidityPercent ?? humidityPercent} %.`
+      );
+
+      return {
+        success: true,
+        values,
+      };
+    } catch (error) {
+      const message = `Failed to update native Renode sensor: ${String(error)}`;
+      emit({
+        type: 'sensor',
+        status: 'error',
+        path: sensorPath,
+        message,
+        timestamp: new Date().toISOString(),
+      });
+      return {
+        success: false,
+        message,
+      };
+    }
+  }
+
+  async function sendBusTransaction(request) {
+    const protocol = normalizeProtocol(request?.protocol);
+    if (!protocol) {
+      return {
+        success: false,
+        message: `Unsupported bus protocol: ${String(request?.protocol ?? 'missing')}`,
+      };
+    }
+
+    const direction = normalizeDirection(protocol, request?.direction);
+    if (!direction) {
+      return {
+        success: false,
+        message: `Unsupported ${protocol.toUpperCase()} bus direction: ${String(request?.direction ?? 'missing')}`,
+      };
+    }
+
+    if (!state.renodeProcess && state.busManifestEntries.length === 0) {
+      return {
+        success: false,
+        message: 'Start the simulation before sending bus transactions.',
+      };
+    }
+
+    const address = parseMaybeHexNumber(request?.address);
+    emitBusTransaction({
+      protocol,
+      busId: typeof request?.busId === 'string' ? request.busId : null,
+      busLabel: typeof request?.busLabel === 'string' ? request.busLabel : null,
+      peripheralName: typeof request?.peripheralName === 'string' ? request.peripheralName : null,
+      direction,
+      status: typeof request?.status === 'string' ? request.status : 'data',
+      address,
+      data: normalizeBrokerBytes(request),
+      source: typeof request?.source === 'string' ? request.source : 'ui',
+    });
+
+    return {
+      success: true,
+    };
   }
 
   function sendDebugCommand(command) {
@@ -1604,6 +1881,8 @@ function createRuntimeService(options = {}) {
     stopSimulation,
     sendPeripheralEvent,
     sendUartData,
+    setNativeSensor,
+    sendBusTransaction,
     startDebugging,
     stopDebugging,
     debugAction,

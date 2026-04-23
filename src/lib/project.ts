@@ -24,6 +24,11 @@ import {
   COMPONENT_PACKAGES,
 } from './component-packs';
 import {
+  SENSOR_PACKAGE_CATALOG_VERSION,
+  SENSOR_PACKAGE_SCHEMA_VERSION,
+  SENSOR_PACKAGES,
+} from './sensor-packages';
+import {
   CircuitNetlist,
   NETLIST_SCHEMA_VERSION,
   createNetlistFromWiring,
@@ -47,13 +52,18 @@ export type ProjectDocument = {
     name: string;
   };
   templates: {
-    catalogVersion: 2;
+    catalogVersion: 3;
     kinds: DemoPeripheralTemplateKind[];
   };
   componentPackages: {
     schemaVersion: 1;
-    catalogVersion: 2;
+    catalogVersion: 3;
     kinds: DemoPeripheralTemplateKind[];
+  };
+  sensorPackages: {
+    schemaVersion: 1;
+    catalogVersion: 1;
+    kinds: string[];
   };
   wiring: DemoWiring;
   pinMux: DemoPinFunctionMuxState;
@@ -75,7 +85,7 @@ export type ProjectLoadResult = {
 
 export const PROJECT_APP_ID = 'renode-local-visualizer';
 export const PROJECT_SCHEMA_VERSION = 2;
-export const PROJECT_TEMPLATE_CATALOG_VERSION = 2;
+export const PROJECT_TEMPLATE_CATALOG_VERSION = 3;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -128,7 +138,7 @@ function normalizePeripheralBehavior(
   return {
     schemaVersion: 2,
     role:
-      value.role === 'momentary-input' || value.role === 'gpio-output' || value.role === 'i2c-display'
+      value.role === 'momentary-input' || value.role === 'gpio-output' || value.role === 'i2c-display' || value.role === 'i2c-sensor'
         ? value.role
         : fallback.role,
     controller: normalizePeripheralController(value.controller) ?? fallback.controller,
@@ -373,6 +383,11 @@ export function createProjectDocument(options: {
       catalogVersion: COMPONENT_PACKAGE_CATALOG_VERSION,
       kinds: COMPONENT_PACKAGES.map((componentPackage) => componentPackage.kind),
     },
+    sensorPackages: {
+      schemaVersion: SENSOR_PACKAGE_SCHEMA_VERSION,
+      catalogVersion: SENSOR_PACKAGE_CATALOG_VERSION,
+      kinds: SENSOR_PACKAGES.map((sensorPackage) => sensorPackage.kind),
+    },
     wiring,
     pinMux: createPinFunctionMuxState(wiring, boardPads),
     netlist: createNetlistFromWiring(wiring, board),
@@ -442,6 +457,11 @@ export function normalizeLoadedProjectDocument(value: unknown): ProjectLoadResul
         schemaVersion: COMPONENT_PACKAGE_SCHEMA_VERSION,
         catalogVersion: COMPONENT_PACKAGE_CATALOG_VERSION,
         kinds: COMPONENT_PACKAGES.map((componentPackage) => componentPackage.kind),
+      },
+      sensorPackages: {
+        schemaVersion: SENSOR_PACKAGE_SCHEMA_VERSION,
+        catalogVersion: SENSOR_PACKAGE_CATALOG_VERSION,
+        kinds: SENSOR_PACKAGES.map((sensorPackage) => sensorPackage.kind),
       },
       wiring,
       pinMux,

@@ -1,7 +1,14 @@
 import type { BoardSchema } from './boards';
 import { getComponentPackage } from './component-packs';
+import type { DemoPeripheralTemplateKind } from './firmware';
 import type { CircuitNetlist } from './netlist';
 import type { SignalDirection, SignalLevel, SignalSampleSource } from './signal-broker';
+import {
+  buildRenodeSensorPath,
+  buildRenodeSensorPeripheralName,
+  findSensorPackage,
+} from './sensor-packages';
+import type { SensorPackageKind } from './sensor-packages';
 
 export const SIMULATION_CLOCK_SCHEMA_VERSION = 1;
 export const RUNTIME_TIMELINE_SCHEMA_VERSION = 1;
@@ -39,7 +46,10 @@ export type RuntimeBusDeviceManifestEntry = {
   componentKind: string;
   label: string;
   address: number | null;
-  model: 'ssd1306' | 'generic-i2c';
+  model: 'ssd1306' | 'si7021' | 'generic-i2c';
+  sensorPackage?: SensorPackageKind;
+  nativeRenodeName?: string | null;
+  nativeRenodePath?: string | null;
 };
 
 export type RuntimeBusManifestEntry = {
@@ -202,6 +212,15 @@ function inferI2cBusIdFromPad(board: BoardSchema, padId: string | null | undefin
   return busMatch ? normalizeBusId('i2c', `i2c${busMatch[1] || ''}`) : null;
 }
 
+function getRenodePeripheralNameFromBusId(protocol: 'i2c' | 'spi', busId: string): string | null {
+  const prefix = `${protocol}:`;
+  if (!busId.startsWith(prefix)) {
+    return null;
+  }
+  const candidate = busId.slice(prefix.length).trim().toLowerCase();
+  return /^[a-z][a-z0-9_]*$/.test(candidate) ? candidate : null;
+}
+
 function collectBusManifestEntries(
   board: BoardSchema,
   protocol: 'i2c' | 'spi'
@@ -268,10 +287,17 @@ function collectI2cDevicesFromNetlist(board: BoardSchema, netlist: CircuitNetlis
     return devicesByBusId;
   }
 
+  const supportedI2cModels = new Map<DemoPeripheralTemplateKind, RuntimeBusDeviceManifestEntry['model']>([
+    ['ssd1306-oled', 'ssd1306'],
+    ['si7021-sensor', 'si7021'],
+  ]);
+
   netlist.components
-    .filter((component) => component.kind === 'ssd1306-oled')
+    .filter((component) => component.kind !== 'board' && supportedI2cModels.has(component.kind as DemoPeripheralTemplateKind))
     .forEach((component) => {
-      const runtime = getComponentPackage('ssd1306-oled').runtime;
+      const templateKind = component.kind as DemoPeripheralTemplateKind;
+      const runtime = getComponentPackage(templateKind).runtime;
+      const model = supportedI2cModels.get(templateKind) ?? 'generic-i2c';
       const sclNet = netlist.nets.find(
         (net) => net.kind === 'i2c' && net.connections.some((connection) => connection.componentId === component.id && connection.pinId === 'scl')
       );
@@ -282,14 +308,23 @@ function collectI2cDevicesFromNetlist(board: BoardSchema, netlist: CircuitNetlis
         inferI2cBusIdFromPad(board, sclNet?.metadata?.padId) ??
         inferI2cBusIdFromPad(board, sdaNet?.metadata?.padId) ??
         normalizeBusId('i2c', 'visual');
+      const sensorPackage = findSensorPackage(templateKind);
+      const nativeRenodeName = sensorPackage ? buildRenodeSensorPeripheralName(sensorPackage.kind, component.id) : null;
+      const renodeBusName = getRenodePeripheralNameFromBusId('i2c', busId);
       const devices = devicesByBusId.get(busId) ?? [];
       devices.push({
-        id: `${component.id}:ssd1306`,
+        id: `${component.id}:${model}`,
         componentId: component.id,
         componentKind: component.kind,
         label: component.label,
-        address: runtime.type === 'renode-i2c-broker' ? runtime.address : null,
-        model: 'ssd1306',
+        address: sensorPackage ? sensorPackage.native.defaultAddress : runtime.type === 'renode-i2c-broker' ? runtime.address : null,
+        model,
+        sensorPackage: sensorPackage?.kind,
+        nativeRenodeName,
+        nativeRenodePath:
+          sensorPackage && renodeBusName && nativeRenodeName
+            ? buildRenodeSensorPath(sensorPackage.kind, renodeBusName, nativeRenodeName)
+            : null,
       });
       devicesByBusId.set(busId, devices);
     });

@@ -112,6 +112,13 @@ import {
   getSsd1306Pixel,
 } from './lib/ssd1306';
 import type { Ssd1306State } from './lib/ssd1306';
+import {
+  SI7021_DEFAULT_ADDRESS,
+  applySi70xxTransaction,
+  createSi70xxMeasurementTransactions,
+  createSi70xxState,
+} from './lib/si70xx';
+import type { Si70xxMeasurementKind, Si70xxState } from './lib/si70xx';
 import { ElectricalRuleIssue, evaluateElectricalRules } from './lib/electrical-rules';
 
 type ToolingStatus = {
@@ -213,6 +220,28 @@ function getCanvasHeightForPeripheralCount(count: number) {
 
 function parseLibraryTemplateKind(rawValue: string | null | undefined): DemoPeripheralTemplateKind | null {
   return isDemoPeripheralTemplateKind(rawValue) ? rawValue : null;
+}
+
+type RuntimeI2cDevice = NonNullable<RuntimeBusManifestEntry['devices']>[number] & {
+  busId: string;
+  busLabel: string;
+};
+
+function getRuntimeDevicesByModel(
+  busManifest: RuntimeBusManifestEntry[],
+  model: RuntimeI2cDevice['model']
+): RuntimeI2cDevice[] {
+  return busManifest.flatMap((entry) =>
+    entry.protocol === 'i2c' && Array.isArray(entry.devices)
+      ? entry.devices
+          .filter((device) => device.model === model)
+          .map((device) => ({
+            ...device,
+            busId: entry.id,
+            busLabel: entry.label,
+          }))
+      : []
+  );
 }
 
 function getBoardPads(board: BoardSchema): DemoBoardPad[] {
@@ -376,6 +405,16 @@ function getTemplatePalette(templateKind: DemoPeripheralTemplateKind) {
       accent: 'border-sky-500/40 bg-sky-500/10 text-sky-100 hover:bg-sky-500/20',
       ghost: 'border-sky-200 bg-sky-50 text-sky-700',
       icon: Terminal,
+    };
+  }
+
+  if (templateKind === 'si7021-sensor') {
+    return {
+      title: definition.title,
+      subtitle: definition.subtitle,
+      accent: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/20',
+      ghost: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+      icon: RefreshCcw,
     };
   }
 
@@ -889,6 +928,125 @@ function Ssd1306PreviewPanel({ state }: { state: Ssd1306State }) {
           <div className="mt-1 font-semibold text-white">
             {state.updatedAtVirtualTimeNs === null ? 'none' : `${(state.updatedAtVirtualTimeNs / 1000000).toFixed(2)} ms`}
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Si70xxSensorPanel({
+  state,
+  device,
+  simulationRunning,
+  onConfigure,
+  onApplyNative,
+  onRead,
+}: {
+  state: Si70xxState;
+  device: RuntimeI2cDevice | null;
+  simulationRunning: boolean;
+  onConfigure: (updates: Partial<Pick<Si70xxState, 'configuredTemperatureC' | 'configuredHumidityPercent'>>) => void;
+  onApplyNative: () => void;
+  onRead: (kind: Si70xxMeasurementKind) => void;
+}) {
+  const address = device?.address ?? state.address;
+  const canRead = simulationRunning && Boolean(device);
+  const canApplyNative = canRead && Boolean(device?.nativeRenodePath);
+
+  return (
+    <div className="mt-4 rounded-3xl border border-emerald-900/70 bg-emerald-950/30 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-[0.24em] text-emerald-300/70">SI7021 Sensor Demo</div>
+          <div className="mt-1 text-sm text-emerald-50/80">
+            Native Renode SI70xx is attached at 0x{address.toString(16).toUpperCase()}; Apply writes the real Renode sensor, Read emits timeline transactions.
+          </div>
+          {device?.nativeRenodePath ? (
+            <div className="mt-1 font-mono text-[10px] text-emerald-200/70">{device.nativeRenodePath}</div>
+          ) : null}
+        </div>
+        <div className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
+          canRead ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-100' : 'border-slate-700 bg-slate-950 text-slate-500'
+        }`}>
+          {canRead ? 'ready' : 'waiting'}
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-3">
+        <div className="rounded-2xl border border-emerald-500/20 bg-black/20 px-3 py-3">
+          <div className="flex items-center justify-between gap-3 text-sm">
+            <span className="font-semibold text-emerald-50">Temperature source</span>
+            <span className="font-mono text-emerald-200">{state.configuredTemperatureC.toFixed(1)} C</span>
+          </div>
+          <input
+            type="range"
+            min="-40"
+            max="85"
+            step="0.5"
+            value={state.configuredTemperatureC}
+            onChange={(event) => onConfigure({ configuredTemperatureC: Number(event.target.value) })}
+            className="mt-3 w-full accent-emerald-400"
+          />
+        </div>
+
+        <div className="rounded-2xl border border-emerald-500/20 bg-black/20 px-3 py-3">
+          <div className="flex items-center justify-between gap-3 text-sm">
+            <span className="font-semibold text-emerald-50">Humidity source</span>
+            <span className="font-mono text-emerald-200">{state.configuredHumidityPercent.toFixed(1)} %RH</span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="0.5"
+            value={state.configuredHumidityPercent}
+            onChange={(event) => onConfigure({ configuredHumidityPercent: Number(event.target.value) })}
+            className="mt-3 w-full accent-emerald-400"
+          />
+        </div>
+      </div>
+
+      <button
+        onClick={onApplyNative}
+        disabled={!canApplyNative}
+        className="mt-3 w-full rounded-2xl border border-emerald-300/40 bg-emerald-400/15 px-3 py-2 text-sm font-semibold text-emerald-50 transition hover:bg-emerald-400/25 disabled:cursor-not-allowed disabled:border-slate-700 disabled:bg-slate-900 disabled:text-slate-500"
+      >
+        Apply Values To Native Renode Sensor
+      </button>
+
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <button
+          onClick={() => onRead('temperature')}
+          disabled={!canRead}
+          className="rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:border-slate-700 disabled:bg-slate-900 disabled:text-slate-500"
+        >
+          Read Temperature
+        </button>
+        <button
+          onClick={() => onRead('humidity')}
+          disabled={!canRead}
+          className="rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:border-slate-700 disabled:bg-slate-900 disabled:text-slate-500"
+        >
+          Read Humidity
+        </button>
+      </div>
+
+      <div className="mt-3 grid grid-cols-3 gap-2 text-xs text-slate-300">
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Last Temp</div>
+          <div className="mt-1 font-semibold text-white">
+            {state.lastReadTemperatureC === null ? 'none' : `${state.lastReadTemperatureC.toFixed(2)} C`}
+          </div>
+        </div>
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Last RH</div>
+          <div className="mt-1 font-semibold text-white">
+            {state.lastReadHumidityPercent === null ? 'none' : `${state.lastReadHumidityPercent.toFixed(2)} %`}
+          </div>
+        </div>
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Transactions</div>
+          <div className="mt-1 font-semibold text-white">{state.transactionCount}</div>
         </div>
       </div>
     </div>
@@ -1816,7 +1974,7 @@ function BoardTopView({
           padId: power.vccPadId,
           color: '#22c55e',
           start: {
-            x: frame.x + PERIPHERAL_CARD_WIDTH + (device.templateKind === 'ssd1306-oled' ? 34 : 18),
+            x: frame.x + PERIPHERAL_CARD_WIDTH + (device.templateKind === 'ssd1306-oled' || device.templateKind === 'si7021-sensor' ? 34 : 18),
             y: frame.y + PERIPHERAL_CARD_HEIGHT - 30,
           },
         },
@@ -1826,7 +1984,7 @@ function BoardTopView({
           padId: power.gndPadId,
           color: '#64748b',
           start: {
-            x: frame.x + PERIPHERAL_CARD_WIDTH + (device.templateKind === 'ssd1306-oled' ? 34 : 18),
+            x: frame.x + PERIPHERAL_CARD_WIDTH + (device.templateKind === 'ssd1306-oled' || device.templateKind === 'si7021-sensor' ? 34 : 18),
             y: frame.y + PERIPHERAL_CARD_HEIGHT - 14,
           },
         },
@@ -2574,6 +2732,87 @@ function BoardTopView({
               );
             }
 
+            if (device.templateKind === 'si7021-sensor') {
+              return (
+                <div
+                  key={device.id}
+                  className="absolute rounded-[24px] border border-emerald-200 bg-emerald-50/95 px-4 py-3 text-slate-900 shadow-lg transition"
+                  style={{ left: frame.x, top: frame.y, width: PERIPHERAL_CARD_WIDTH + 42, minHeight: PERIPHERAL_CARD_HEIGHT + 48 }}
+                >
+                  {device.members.map((member, endpointIndex) => {
+                    const anchor = getDeviceEndpointAnchor(frame, endpointIndex, device.members.length);
+                    return (
+                      <button
+                        key={member.id}
+                        onPointerDown={(event) => beginWireDrag(member.id, event)}
+                        onPointerMove={updateWireDrag}
+                        onPointerUp={endWireDrag}
+                        onPointerCancel={endWireDrag}
+                        className={`absolute top-[-10px] flex h-5 w-5 -translate-x-1/2 items-center justify-center rounded-full border-2 border-white bg-slate-900 transition ${
+                          armedPeripheralId === member.id ? 'shadow-[0_0_0_6px_rgba(16,185,129,0.2)]' : ''
+                        }`}
+                        style={{ left: anchor.x - frame.x, touchAction: 'none' }}
+                        title={`Drag ${member.endpointLabel ?? member.label} wire`}
+                      >
+                        <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: member.accentColor ?? '#10b981' }} />
+                      </button>
+                    );
+                  })}
+
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="rounded-full border border-emerald-300 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
+                      I2C sensor
+                    </div>
+                    <div
+                      onPointerDown={(event) => beginPeripheralDrag(device.id, frame, event)}
+                      onPointerMove={updatePeripheralDrag}
+                      onPointerUp={endPeripheralDrag}
+                      onPointerCancel={endPeripheralDrag}
+                      className={`rounded-full border border-current/25 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
+                        simulationRunning ? 'cursor-not-allowed opacity-50' : 'cursor-grab active:cursor-grabbing'
+                      }`}
+                    >
+                      Drag
+                    </div>
+                  </div>
+
+                  <div className="mt-3 rounded-[18px] border border-emerald-300 bg-white p-3 shadow-inner">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="grid h-14 w-14 place-items-center rounded-2xl border border-emerald-200 bg-emerald-100 text-[11px] font-bold text-emerald-700">
+                        SI7021
+                      </div>
+                      <div className="flex-1">
+                        <div className="h-2 rounded-full bg-gradient-to-r from-emerald-300 via-teal-300 to-sky-300" />
+                        <div className="mt-2 grid grid-cols-2 gap-2 text-center text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                          <div className="rounded-full bg-emerald-100 px-2 py-1">Temp</div>
+                          <div className="rounded-full bg-teal-100 px-2 py-1">RH</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3">
+                    <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">{palette.title}</div>
+                    <div className="mt-1 text-sm font-semibold">{device.label}</div>
+                    <div className="mt-1 text-xs text-slate-600">Address 0x40, SI70xx-compatible temperature/humidity reads.</div>
+                  </div>
+
+                  <div className="mt-3 grid gap-2">
+                    {device.members.map((member) => (
+                      <div key={member.id} className="rounded-2xl border border-emerald-100 bg-white/80 px-3 py-2">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: member.accentColor ?? '#059669' }}>
+                          {member.endpointLabel}
+                        </div>
+                        <div className="mt-1 text-[11px] text-slate-600">
+                          {getPadDescription(member.padId, board, 'Wire this endpoint to a matching I2C pad')}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            }
+
             if (isMultiEndpoint) {
               const rgbGlow = getRgbDeviceGlow(device, ledStates);
 
@@ -2838,6 +3077,7 @@ function WiringWorkbench({
       buzzer: workbenchDevices.filter((device) => device.templateKind === 'buzzer').length,
       rgb: workbenchDevices.filter((device) => device.templateKind === 'rgb-led').length,
       oled: workbenchDevices.filter((device) => device.templateKind === 'ssd1306-oled').length,
+      sensor: workbenchDevices.filter((device) => device.templateKind === 'si7021-sensor').length,
     }),
     [workbenchDevices]
   );
@@ -2907,6 +3147,10 @@ function WiringWorkbench({
               <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
                 <div className="text-xs text-slate-500">OLEDs</div>
                 <div className="mt-1 text-lg font-semibold text-white">{deviceCounts.oled}</div>
+              </div>
+              <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                <div className="text-xs text-slate-500">Sensors</div>
+                <div className="mt-1 text-lg font-semibold text-white">{deviceCounts.sensor}</div>
               </div>
               <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
                 <div className="text-xs text-slate-500">Free Pads</div>
@@ -3096,6 +3340,88 @@ function WiringWorkbench({
                           </button>
                         </div>
                         <div className="mt-2 text-sm text-sky-50/90">
+                          {getPadDescription(member.padId, board, 'Not connected to an I2C-capable board pad')}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            }
+
+            if (device.templateKind === 'si7021-sensor') {
+              return (
+                <div key={device.id} className="rounded-[26px] border border-emerald-500/40 bg-emerald-500/10 p-4 text-emerald-50">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-xs uppercase tracking-[0.22em] text-emerald-100/80">SI7021 Sensor</div>
+                      <div className="mt-1 text-lg font-semibold">{device.label}</div>
+                    </div>
+                    <button
+                      onClick={() => onRemoveDevice(device.id)}
+                      className="rounded-full border border-current/25 p-2 text-current/80 transition hover:bg-white/10"
+                      title="Remove device"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+
+                  <div className="mt-3 rounded-2xl border border-emerald-200/20 bg-black/30 px-3 py-3 text-sm text-emerald-50/90">
+                    Wire SCL and SDA to matching I2C-capable pads. Generated board.repl attaches Renode SI70xx, and generated firmware reads it through MCU I2C at address 0x40.
+                  </div>
+
+                  <div className="mt-3 rounded-2xl border border-emerald-200/20 bg-black/20 p-3">
+                    <div className="text-xs uppercase tracking-[0.22em] text-emerald-100/70">Power Rails</div>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      <select
+                        value={getDevicePower(device).vccPadId ?? ''}
+                        onChange={(event) => {
+                          const pad = powerPads.find((candidate) => candidate.id === event.target.value) ?? null;
+                          onPowerChange(device.id, { vccPadId: pad?.id ?? null, voltage: inferPowerVoltage(pad) });
+                        }}
+                        className="rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
+                      >
+                        <option value="">VCC...</option>
+                        {powerPads.map((pad) => (
+                          <option key={pad.id} value={pad.id} className="text-slate-900">
+                            {pad.connectorTitle} {pad.pinLabel}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={getDevicePower(device).gndPadId ?? ''}
+                        onChange={(event) => onPowerChange(device.id, { gndPadId: event.target.value || null })}
+                        className="rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
+                      >
+                        <option value="">GND...</option>
+                        {groundPads.map((pad) => (
+                          <option key={pad.id} value={pad.id} className="text-slate-900">
+                            {pad.connectorTitle} {pad.pinLabel}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 space-y-3">
+                    {device.members.map((member) => (
+                      <div key={member.id} className="rounded-2xl border border-current/20 bg-black/10 px-3 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-xs font-semibold uppercase tracking-[0.22em]" style={{ color: member.accentColor ?? '#fff' }}>
+                            {member.endpointLabel}
+                          </div>
+                          <button
+                            onClick={() => onArmPeripheral(member.id)}
+                            className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
+                              armedPeripheralId === member.id
+                                ? 'border-emerald-300 bg-emerald-500/20 text-emerald-50'
+                                : 'border-current/25 bg-white/10 text-current/80'
+                            }`}
+                          >
+                            {armedPeripheralId === member.id ? 'Wiring' : 'Connect wire'}
+                          </button>
+                        </div>
+                        <div className="mt-2 text-sm text-emerald-50/90">
                           {getPadDescription(member.padId, board, 'Not connected to an I2C-capable board pad')}
                         </div>
                       </div>
@@ -3311,7 +3637,7 @@ function WiringWorkbench({
           <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Wokwi-like flow</div>
           <div className="mt-4 grid gap-3 text-sm text-slate-300">
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-              1. Drag a <span className="font-semibold text-white">Button</span>, <span className="font-semibold text-white">LED</span>, <span className="font-semibold text-white">Buzzer</span>, <span className="font-semibold text-white">RGB LED</span>, or <span className="font-semibold text-white">SSD1306 OLED</span> template into the workbench.
+              1. Drag a <span className="font-semibold text-white">Button</span>, <span className="font-semibold text-white">LED</span>, <span className="font-semibold text-white">Buzzer</span>, <span className="font-semibold text-white">RGB LED</span>, <span className="font-semibold text-white">SSD1306 OLED</span>, or <span className="font-semibold text-white">SI7021 Sensor</span> template into the workbench.
             </div>
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
               2. Pull the device&apos;s <span className="font-semibold text-white">wire stub</span> onto a cyan hotspot on the board.
@@ -3358,6 +3684,7 @@ export default function App() {
   const [signalBrokerState, setSignalBrokerState] = useState<SignalBrokerState>(() => createSignalBrokerState([]));
   const [runtimeTimelineState, setRuntimeTimelineState] = useState<RuntimeTimelineState>(() => createRuntimeTimelineState());
   const [ssd1306State, setSsd1306State] = useState<Ssd1306State>(() => createSsd1306State());
+  const [si70xxState, setSi70xxState] = useState<Si70xxState>(() => createSi70xxState());
   const [logicAnalyzerClock, setLogicAnalyzerClock] = useState(Date.now());
   const [codeMode, setCodeMode] = useState<CodeMode>('generated');
   const [code, setCode] = useState(DEFAULT_MAIN_SOURCE);
@@ -3413,10 +3740,21 @@ export default function App() {
   const signalDefinitions = useMemo(() => createSignalDefinitionsFromNetlist(circuitNetlist), [circuitNetlist]);
   const runtimeSignalManifest = useMemo(() => createRuntimeSignalManifest(signalDefinitions), [signalDefinitions]);
   const runtimeBusManifest = useMemo(() => createRuntimeBusManifest(selectedBoard, circuitNetlist), [circuitNetlist, selectedBoard]);
-  const hasSsd1306Device = useMemo(
-    () => runtimeBusManifest.some((entry) => entry.devices?.some((device) => device.model === 'ssd1306')),
+  const ssd1306Devices = useMemo(() => getRuntimeDevicesByModel(runtimeBusManifest, 'ssd1306'), [runtimeBusManifest]);
+  const si7021Devices = useMemo(() => getRuntimeDevicesByModel(runtimeBusManifest, 'si7021'), [runtimeBusManifest]);
+  const runtimeBusDeviceLabels = useMemo(
+    () => runtimeBusManifest.flatMap((entry) => entry.devices?.map((device) => `${device.label} (${entry.protocol.toUpperCase()})`) ?? []),
     [runtimeBusManifest]
   );
+  const hasSsd1306Device = useMemo(
+    () => ssd1306Devices.length > 0,
+    [ssd1306Devices.length]
+  );
+  const hasSi7021Device = useMemo(
+    () => si7021Devices.length > 0,
+    [si7021Devices.length]
+  );
+  const hasRuntimeBusDevice = hasSsd1306Device || hasSi7021Device;
   const renodeArtifacts = useMemo(
     () =>
       compileNetlistToRenodeArtifacts({
@@ -3530,6 +3868,7 @@ export default function App() {
     setSignalBrokerState(createSignalBrokerState(signalDefinitions, nowMs));
     setRuntimeTimelineState(createRuntimeTimelineState(nowMs));
     setSsd1306State(createSsd1306State());
+    setSi70xxState(createSi70xxState());
     setLogicAnalyzerClock(nowMs);
   }, [runtimeBusManifest, signalDefinitions]);
 
@@ -3634,6 +3973,7 @@ export default function App() {
         setRuntimeTimelineState((current) => recordRuntimeTimelineEvent(current, timelineEvent));
         if (timelineEvent.protocol === 'i2c' && timelineEvent.kind === 'bus-transaction') {
           setSsd1306State((current) => applySsd1306Transaction(current, timelineEvent as RuntimeBusTimelineEvent));
+          setSi70xxState((current) => applySi70xxTransaction(current, timelineEvent as RuntimeBusTimelineEvent));
         }
         return;
       }
@@ -3726,6 +4066,21 @@ export default function App() {
               ? `[tx] ${event.data ?? ''}`
               : event.data ?? '';
         setUartTranscript((current) => `${current}${data}`.slice(-24000));
+        return;
+      }
+
+      if (event.type === 'sensor') {
+        if (event.status === 'updated') {
+          setSi70xxState((current) => ({
+            ...current,
+            configuredTemperatureC: event.temperatureC ?? current.configuredTemperatureC,
+            configuredHumidityPercent: event.humidityPercent ?? current.configuredHumidityPercent,
+            lastReadTemperatureC: event.temperatureC ?? current.lastReadTemperatureC,
+            lastReadHumidityPercent: event.humidityPercent ?? current.lastReadHumidityPercent,
+          }));
+        } else if (event.status === 'error') {
+          appendLog(event.message ?? 'Native sensor control failed.', 'warn');
+        }
         return;
       }
 
@@ -4271,11 +4626,106 @@ export default function App() {
     [appendLog, simulation.running, simulation.uartConnected, uartInput]
   );
 
+  const updateSi70xxConfiguration = useCallback(
+    (updates: Partial<Pick<Si70xxState, 'configuredTemperatureC' | 'configuredHumidityPercent'>>) => {
+      setSi70xxState((current) => ({
+        ...current,
+        ...updates,
+      }));
+    },
+    []
+  );
+
+  const applyNativeSi70xxConfiguration = useCallback(async () => {
+    if (!window.localWokwi) {
+      appendLog('Electron preload API is unavailable.', 'warn');
+      return;
+    }
+    if (!simulation.running) {
+      appendLog('Start the simulation before applying SI7021 native sensor values.', 'warn');
+      return;
+    }
+
+    const device = si7021Devices[0] ?? null;
+    if (!device?.nativeRenodePath) {
+      appendLog('Connect an SI7021 Sensor to a native Renode I2C bus before applying sensor values.', 'warn');
+      return;
+    }
+
+    const result = await window.localWokwi.setNativeSensor({
+      path: device.nativeRenodePath,
+      temperatureC: si70xxState.configuredTemperatureC,
+      humidityPercent: si70xxState.configuredHumidityPercent,
+    });
+    if (!result.success) {
+      appendLog(result.message ?? 'Failed to apply SI7021 native sensor values.', 'error');
+      return;
+    }
+
+    setSi70xxState((current) => ({
+      ...current,
+      lastReadTemperatureC: result.values?.temperatureC ?? current.lastReadTemperatureC,
+      lastReadHumidityPercent: result.values?.humidityPercent ?? current.lastReadHumidityPercent,
+    }));
+    appendLog(
+      `Applied SI7021 native values to Renode: ${si70xxState.configuredTemperatureC.toFixed(1)} C, ${si70xxState.configuredHumidityPercent.toFixed(1)} %RH.`
+    );
+  }, [
+    appendLog,
+    si7021Devices,
+    si70xxState.configuredHumidityPercent,
+    si70xxState.configuredTemperatureC,
+    simulation.running,
+  ]);
+
+  const sendSi70xxMeasurement = useCallback(
+    async (kind: Si70xxMeasurementKind) => {
+      if (!window.localWokwi) {
+        appendLog('Electron preload API is unavailable.', 'warn');
+        return;
+      }
+      if (!simulation.running) {
+        appendLog('Start the simulation before reading the SI7021 sensor.', 'warn');
+        return;
+      }
+
+      const device = si7021Devices[0] ?? null;
+      if (!device) {
+        appendLog('Connect an SI7021 Sensor to an I2C bus before reading sensor transactions.', 'warn');
+        return;
+      }
+
+      const transactions = createSi70xxMeasurementTransactions({
+        busId: device.busId,
+        busLabel: device.busLabel,
+        componentId: device.componentId,
+        address: device.address ?? SI7021_DEFAULT_ADDRESS,
+        temperatureC: si70xxState.configuredTemperatureC,
+        humidityPercent: si70xxState.configuredHumidityPercent,
+        kind,
+      });
+
+      for (const transaction of transactions) {
+        const result = await window.localWokwi.sendBusTransaction(transaction);
+        if (!result.success) {
+          appendLog(result.message ?? 'Failed to emit SI7021 I2C transaction.', 'error');
+          return;
+        }
+      }
+
+      appendLog(
+        `SI7021 ${kind} timeline read emitted on ${device.busLabel} at 0x${(device.address ?? SI7021_DEFAULT_ADDRESS).toString(16).toUpperCase()}. Native firmware reads are printed by UART.`
+      );
+    },
+    [appendLog, si7021Devices, si70xxState.configuredHumidityPercent, si70xxState.configuredTemperatureC, simulation.running]
+  );
+
   const clearLogicAnalyzer = useCallback(() => {
     const nowMs = Date.now();
     setSignalBrokerState(createSignalBrokerState(signalDefinitions, nowMs));
     setRuntimeTimelineState(createRuntimeTimelineState(nowMs));
     setSsd1306State(createSsd1306State());
+    setSi70xxState(createSi70xxState());
     setLogicAnalyzerClock(nowMs);
   }, [signalDefinitions]);
 
@@ -4363,7 +4813,7 @@ export default function App() {
       return;
     }
 
-    if (peripheralManifest.length === 0 && !hasSsd1306Device) {
+    if (peripheralManifest.length === 0 && !hasRuntimeBusDevice) {
       appendLog('Connect at least one external peripheral before starting Renode.', 'warn');
       return;
     }
@@ -4383,7 +4833,9 @@ export default function App() {
       return;
     }
 
-    appendLog(`Starting Renode with ${peripheralManifest.length} GPIO endpoint(s), Transaction Broker Bridge, and ${hasSsd1306Device ? 'SSD1306 I2C broker demo' : 'no I2C display'}...`);
+    appendLog(
+      `Starting Renode with ${peripheralManifest.length} GPIO endpoint(s), Transaction Broker Bridge, ${hasSsd1306Device ? 'SSD1306 OLED' : 'no OLED'}, and ${hasSi7021Device ? 'SI7021 sensor' : 'no I2C sensor'}...`
+    );
 
     const result = await window.localWokwi.startSimulation({
       workspaceDir: compileResult.workspaceDir,
@@ -4421,6 +4873,7 @@ export default function App() {
     setSignalBrokerState(createSignalBrokerState(signalDefinitions, nowMs));
     setRuntimeTimelineState(createRuntimeTimelineState(nowMs));
     setSsd1306State(createSsd1306State());
+    setSi70xxState(createSi70xxState());
     setUartTranscript(
       `UART terminal starting for ${selectedBoard.runtime.uart?.displayName ?? uartPeripheralName ?? 'board UART'} (${uartPeripheralName ?? 'none'}).\n`
     );
@@ -4432,7 +4885,9 @@ export default function App() {
     codeDirty,
     compileFirmware,
     peripheralManifest,
+    hasRuntimeBusDevice,
     hasSsd1306Device,
+    hasSi7021Device,
     runtimeBusManifest,
     runtimeSignalManifest,
     selectedBoard.machineName,
@@ -4916,6 +5371,16 @@ export default function App() {
             />
 
             {hasSsd1306Device ? <Ssd1306PreviewPanel state={ssd1306State} /> : null}
+            {hasSi7021Device ? (
+              <Si70xxSensorPanel
+                state={si70xxState}
+                device={si7021Devices[0] ?? null}
+                simulationRunning={simulation.running}
+                onConfigure={updateSi70xxConfiguration}
+                onApplyNative={applyNativeSi70xxConfiguration}
+                onRead={sendSi70xxMeasurement}
+              />
+            ) : null}
 
             <div className="mt-4 grid gap-2 text-sm text-slate-300">
               <div className="rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2">
@@ -4925,9 +5390,9 @@ export default function App() {
               <div className="rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2">
                 <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Connected peripherals</div>
                 <div className="mt-1">
-                  {peripheralManifest.length === 0
+                  {[...peripheralManifest.map((item) => item.label), ...runtimeBusDeviceLabels].length === 0
                     ? 'No external peripherals connected'
-                    : peripheralManifest.map((item) => item.label).join(', ')}
+                    : [...peripheralManifest.map((item) => item.label), ...runtimeBusDeviceLabels].join(', ')}
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-2">

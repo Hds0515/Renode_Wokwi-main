@@ -1,3 +1,10 @@
+import {
+  buildRenodeSensorPath,
+  buildRenodeSensorPeripheralName,
+  findSensorPackage,
+} from './sensor-packages';
+import type { SensorPackage, SensorPackageKind } from './sensor-packages';
+
 export const DEFAULT_BRIDGE_PORT = 9001;
 export const DEFAULT_GDB_PORT = 3333;
 export const DEFAULT_TRANSACTION_BROKER_PORT = 9201;
@@ -28,7 +35,7 @@ export type DemoPadCapability =
   | 'adc';
 export type DemoEndpointDirection = 'input' | 'output' | 'bidirectional';
 export type DemoPeripheralControllerType = 'firmware' | 'mirror-input' | 'blink';
-export type DemoPeripheralBehaviorRole = 'momentary-input' | 'gpio-output' | 'i2c-display';
+export type DemoPeripheralBehaviorRole = 'momentary-input' | 'gpio-output' | 'i2c-display' | 'i2c-sensor';
 export type DemoPeripheralPowerVoltage = '3v3' | '5v' | 'vin' | 'external';
 export type DemoPinFunctionKind =
   | 'gpio-input'
@@ -134,6 +141,18 @@ export type DemoUartRuntime = {
   rxPinId?: string;
 };
 
+export type DemoI2cRuntime = {
+  peripheralName: string;
+  displayName: string;
+  registerModel: 'stm32f1-i2c' | 'stm32f7-i2c';
+  baseAddress: number;
+  sclPinId?: string;
+  sdaPinId?: string;
+  rccEnableRegisterOffset?: number;
+  rccEnableRegisterName?: string;
+  rccEnableBit?: number;
+};
+
 export type DemoBoardRuntime = {
   id: string;
   name: string;
@@ -154,6 +173,7 @@ export type DemoBoardRuntime = {
     rccEnableRegisterName: string;
   };
   uart?: DemoUartRuntime;
+  i2c?: readonly DemoI2cRuntime[];
 };
 
 const RESERVED_MCU_PINS = new Map<string, string>([
@@ -209,7 +229,7 @@ export type DemoBoardPin = {
 };
 
 export type DemoPeripheralKind = 'button' | 'led' | 'i2c';
-export type DemoPeripheralTemplateKind = 'button' | 'led' | 'buzzer' | 'rgb-led' | 'ssd1306-oled';
+export type DemoPeripheralTemplateKind = 'button' | 'led' | 'buzzer' | 'rgb-led' | 'ssd1306-oled' | 'si7021-sensor';
 
 export type DemoPeripheralTemplateEndpointDefinition = {
   id: string;
@@ -228,7 +248,7 @@ export type DemoPeripheralTemplateDefinition = {
   description: string;
   labelPrefix: string;
   accentColor: string;
-  category: 'input' | 'output' | 'grouped-output' | 'display';
+  category: 'input' | 'output' | 'grouped-output' | 'display' | 'sensor';
   behavior: DemoPeripheralTemplateBehaviorDefinition;
   endpoints: DemoPeripheralTemplateEndpointDefinition[];
 };
@@ -288,7 +308,7 @@ export type DemoWorkbenchDevice = {
 };
 
 export type DemoPeripheralCapabilitySchema = {
-  catalogVersion: 2;
+  catalogVersion: 3;
   templates: Array<{
     kind: DemoPeripheralTemplateKind;
     title: string;
@@ -486,10 +506,44 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
       },
     ],
   },
+  {
+    kind: 'si7021-sensor',
+    title: 'SI7021 Sensor',
+    subtitle: 'I2C temperature/humidity',
+    description: 'A Renode SI70xx-compatible I2C sensor endpoint with adjustable temperature and humidity readings.',
+    labelPrefix: 'SI7021',
+    accentColor: '#34d399',
+    category: 'sensor',
+    behavior: {
+      role: 'i2c-sensor',
+      powerRequired: true,
+      defaultController: null,
+    },
+    endpoints: [
+      {
+        id: 'scl',
+        label: 'SCL',
+        kind: 'i2c',
+        accentColor: '#34d399',
+        defaultSignalLabel: 'SCL',
+        direction: 'bidirectional',
+        requiredCapabilities: ['gpio', 'i2c-scl'],
+      },
+      {
+        id: 'sda',
+        label: 'SDA',
+        kind: 'i2c',
+        accentColor: '#10b981',
+        defaultSignalLabel: 'SDA',
+        direction: 'bidirectional',
+        requiredCapabilities: ['gpio', 'i2c-sda'],
+      },
+    ],
+  },
 ];
 
 export const DEMO_PERIPHERAL_CAPABILITY_SCHEMA: DemoPeripheralCapabilitySchema = {
-  catalogVersion: 2,
+  catalogVersion: 3,
   templates: DEMO_PERIPHERAL_TEMPLATES.map((template) => ({
     kind: template.kind,
     title: template.title,
@@ -2177,6 +2231,107 @@ function resolveLedDriver(led: DemoPeripheral, wiring: DemoWiring): DemoPeripher
   return preferredButton;
 }
 
+type NativeI2cDeviceKind = SensorPackageKind;
+
+type NativeI2cEndpointBinding = {
+  member: DemoPeripheral;
+  pad: DemoBoardPad;
+  pinFunction: DemoPinFunctionDefinition;
+};
+
+type NativeI2cDeviceBinding = {
+  kind: NativeI2cDeviceKind;
+  sensorPackage: SensorPackage;
+  deviceId: string;
+  label: string;
+  scl: NativeI2cEndpointBinding;
+  sda: NativeI2cEndpointBinding;
+  busName: string;
+  runtimeBus: DemoI2cRuntime | null;
+  firmwareAddress: number;
+  renodeAddress: number;
+  renodeName: string;
+  renodePath: string;
+};
+
+function normalizeRenodeI2cBusName(busId: string | null | undefined): string | null {
+  const match = String(busId ?? '').match(/I2C(\d*)/i);
+  if (!match) {
+    return null;
+  }
+  return `i2c${match[1] || ''}`.toLowerCase();
+}
+
+function findRuntimeI2cBus(runtime: DemoBoardRuntime, busName: string): DemoI2cRuntime | null {
+  return runtime.i2c?.find((bus) => bus.peripheralName.toLowerCase() === busName.toLowerCase()) ?? null;
+}
+
+function resolveNativeI2cEndpoint(
+  member: DemoPeripheral,
+  boardPads: readonly DemoBoardPad[]
+): NativeI2cEndpointBinding | null {
+  if (!member.padId) {
+    return null;
+  }
+  const pad = resolveConnectedPeripheralPad(member, boardPads);
+  const endpoint = getPeripheralEndpointDefinition(member);
+  const pinFunction = resolvePinFunctionForEndpoint(pad, endpoint);
+  if (!pinFunction || pinFunction.bus.protocol !== 'i2c') {
+    return null;
+  }
+  return { member, pad, pinFunction };
+}
+
+function collectNativeI2cDeviceBindings(
+  wiring: DemoWiring,
+  runtime: DemoBoardRuntime,
+  boardPads: readonly DemoBoardPad[] = DEMO_BOARD_PADS
+): NativeI2cDeviceBinding[] {
+  return buildWorkbenchDevices(wiring).flatMap((device): NativeI2cDeviceBinding[] => {
+    const sensorPackage = findSensorPackage(device.templateKind);
+    if (!sensorPackage) {
+      return [];
+    }
+
+    const sclMember = device.members.find((member) => member.endpointId === 'scl');
+    const sdaMember = device.members.find((member) => member.endpointId === 'sda');
+    if (!sclMember || !sdaMember) {
+      return [];
+    }
+
+    const scl = resolveNativeI2cEndpoint(sclMember, boardPads);
+    const sda = resolveNativeI2cEndpoint(sdaMember, boardPads);
+    if (!scl || !sda) {
+      return [];
+    }
+
+    const sclBusName = normalizeRenodeI2cBusName(scl.pinFunction.bus.id);
+    const sdaBusName = normalizeRenodeI2cBusName(sda.pinFunction.bus.id);
+    if (!sclBusName || sclBusName !== sdaBusName) {
+      return [];
+    }
+
+    const renodeName = buildRenodeSensorPeripheralName(sensorPackage.kind, device.id);
+
+    return [
+      {
+        kind: sensorPackage.kind,
+        sensorPackage,
+        deviceId: device.id,
+        label: device.label,
+        scl,
+        sda,
+        busName: sclBusName,
+        runtimeBus: findRuntimeI2cBus(runtime, sclBusName),
+        firmwareAddress: sensorPackage.firmware.address,
+        renodeAddress: sensorPackage.native.defaultAddress,
+        renodeName,
+        renodePath: buildRenodeSensorPath(sensorPackage.kind, sclBusName, renodeName),
+      },
+    ];
+  });
+}
+
 function createGpioRuntimeSource(runtime: DemoBoardRuntime): string {
   if (runtime.gpio.registerModel === 'stm32f1') {
     return `#define GPIO_CRL(base)      (*(volatile uint32_t *)((base) + 0x00u))
@@ -2312,6 +2467,236 @@ static int demo_uart_read_char(void) {
         return -1;
     }
     return (int)(DEMO_UART_DR & 0xFFu);
+}`;
+}
+
+function createI2cRuntimeSource(binding: NativeI2cDeviceBinding | null): string {
+  if (!binding) {
+    return `static void demo_i2c_init(void) {
+    // No native I2C demo device is wired.
+}
+
+static void demo_i2c_poll(uint32_t demo_tick) {
+    (void)demo_tick;
+}`;
+  }
+
+  const bus = binding.runtimeBus;
+  if (!bus) {
+    return `static void demo_i2c_init(void) {
+    demo_uart_write_string("SI7021 is wired, but this board profile has no native I2C runtime metadata for ${cString(binding.busName)}.\\r\\n");
+}
+
+static void demo_i2c_poll(uint32_t demo_tick) {
+    (void)demo_tick;
+}`;
+  }
+
+  const clockDefinitions =
+    typeof bus.rccEnableRegisterOffset === 'number' && typeof bus.rccEnableBit === 'number'
+      ? `#define DEMO_I2C_RCC_ENR          (*(volatile uint32_t *)(RCC_BASE + ${formatHex(bus.rccEnableRegisterOffset)}u))
+#define DEMO_I2C_RCC_ENABLE_MASK  (1u << ${bus.rccEnableBit}u)`
+      : '#define DEMO_I2C_RCC_ENABLE_MASK 0u';
+
+  const commonHeader = `#define DEMO_I2C_BASE             ${formatHex(bus.baseAddress)}u
+#define DEMO_I2C_ADDRESS          ${formatHex(binding.firmwareAddress)}u
+#define DEMO_I2C_POLL_PERIOD      60000u
+#define SI7021_CMD_TEMP_NOHOLD    ${formatHex(binding.sensorPackage.firmware.readCommands.temperature)}u
+#define SI7021_CMD_HUM_NOHOLD     ${formatHex(binding.sensorPackage.firmware.readCommands.humidity)}u
+${clockDefinitions}
+
+static void demo_i2c_enable_clock(void) {
+#if DEMO_I2C_RCC_ENABLE_MASK
+    DEMO_I2C_RCC_ENR |= DEMO_I2C_RCC_ENABLE_MASK;
+#endif
+}
+
+static int demo_i2c_wait_set(volatile uint32_t *reg, uint32_t mask) {
+    for(uint32_t guard = 0; guard < 200000u; guard++) {
+        if((*reg & mask) == mask) {
+            return 1;
+        }
+    }
+    return 0;
+}`;
+
+  const stm32f1Driver = `#define DEMO_I2C_CR1             (*(volatile uint32_t *)(DEMO_I2C_BASE + 0x00u))
+#define DEMO_I2C_CR2             (*(volatile uint32_t *)(DEMO_I2C_BASE + 0x04u))
+#define DEMO_I2C_DR              (*(volatile uint32_t *)(DEMO_I2C_BASE + 0x10u))
+#define DEMO_I2C_SR1             (*(volatile uint32_t *)(DEMO_I2C_BASE + 0x14u))
+#define DEMO_I2C_SR2             (*(volatile uint32_t *)(DEMO_I2C_BASE + 0x18u))
+#define DEMO_I2C_CCR             (*(volatile uint32_t *)(DEMO_I2C_BASE + 0x1Cu))
+#define DEMO_I2C_TRISE           (*(volatile uint32_t *)(DEMO_I2C_BASE + 0x20u))
+#define DEMO_I2C_CR1_PE          (1u << 0u)
+#define DEMO_I2C_CR1_START       (1u << 8u)
+#define DEMO_I2C_CR1_STOP        (1u << 9u)
+#define DEMO_I2C_CR1_ACK         (1u << 10u)
+#define DEMO_I2C_SR1_SB          (1u << 0u)
+#define DEMO_I2C_SR1_ADDR        (1u << 1u)
+#define DEMO_I2C_SR1_TXE         (1u << 7u)
+#define DEMO_I2C_SR1_RXNE        (1u << 6u)
+
+static void demo_i2c_init_controller(void) {
+    DEMO_I2C_CR1 = 0u;
+    DEMO_I2C_CR2 = 16u;
+    DEMO_I2C_CCR = 80u;
+    DEMO_I2C_TRISE = 17u;
+    DEMO_I2C_CR1 = DEMO_I2C_CR1_PE | DEMO_I2C_CR1_ACK;
+}
+
+static int si7021_read_raw(uint8_t command, uint16_t *raw) {
+    DEMO_I2C_CR1 |= DEMO_I2C_CR1_START;
+    if(!demo_i2c_wait_set(&DEMO_I2C_SR1, DEMO_I2C_SR1_SB)) {
+        return 0;
+    }
+
+    DEMO_I2C_DR = (DEMO_I2C_ADDRESS << 1u);
+    if(!demo_i2c_wait_set(&DEMO_I2C_SR1, DEMO_I2C_SR1_ADDR)) {
+        return 0;
+    }
+    (void)DEMO_I2C_SR1;
+    (void)DEMO_I2C_SR2;
+
+    DEMO_I2C_DR = (uint32_t)command;
+    if(!demo_i2c_wait_set(&DEMO_I2C_SR1, DEMO_I2C_SR1_TXE)) {
+        return 0;
+    }
+
+    DEMO_I2C_CR1 |= DEMO_I2C_CR1_START;
+    if(!demo_i2c_wait_set(&DEMO_I2C_SR1, DEMO_I2C_SR1_SB)) {
+        return 0;
+    }
+
+    DEMO_I2C_DR = (DEMO_I2C_ADDRESS << 1u) | 1u;
+    if(!demo_i2c_wait_set(&DEMO_I2C_SR1, DEMO_I2C_SR1_ADDR)) {
+        return 0;
+    }
+    DEMO_I2C_CR1 &= ~DEMO_I2C_CR1_ACK;
+    (void)DEMO_I2C_SR1;
+    (void)DEMO_I2C_SR2;
+    DEMO_I2C_CR1 |= DEMO_I2C_CR1_STOP;
+
+    if(!demo_i2c_wait_set(&DEMO_I2C_SR1, DEMO_I2C_SR1_RXNE)) {
+        return 0;
+    }
+    const uint8_t msb = (uint8_t)(DEMO_I2C_DR & 0xFFu);
+    if(!demo_i2c_wait_set(&DEMO_I2C_SR1, DEMO_I2C_SR1_RXNE)) {
+        return 0;
+    }
+    const uint8_t lsb = (uint8_t)(DEMO_I2C_DR & 0xFFu);
+    DEMO_I2C_CR1 |= DEMO_I2C_CR1_ACK;
+
+    *raw = (uint16_t)(((uint16_t)msb << 8u) | (uint16_t)lsb);
+    return 1;
+}`;
+
+  const stm32f7Driver = `#define DEMO_I2C_CR1             (*(volatile uint32_t *)(DEMO_I2C_BASE + 0x00u))
+#define DEMO_I2C_CR2             (*(volatile uint32_t *)(DEMO_I2C_BASE + 0x04u))
+#define DEMO_I2C_TIMINGR         (*(volatile uint32_t *)(DEMO_I2C_BASE + 0x10u))
+#define DEMO_I2C_ISR             (*(volatile uint32_t *)(DEMO_I2C_BASE + 0x18u))
+#define DEMO_I2C_ICR             (*(volatile uint32_t *)(DEMO_I2C_BASE + 0x1Cu))
+#define DEMO_I2C_RXDR            (*(volatile uint32_t *)(DEMO_I2C_BASE + 0x24u))
+#define DEMO_I2C_TXDR            (*(volatile uint32_t *)(DEMO_I2C_BASE + 0x28u))
+#define DEMO_I2C_CR1_PE          (1u << 0u)
+#define DEMO_I2C_CR2_RD_WRN      (1u << 10u)
+#define DEMO_I2C_CR2_START       (1u << 13u)
+#define DEMO_I2C_CR2_AUTOEND     (1u << 25u)
+#define DEMO_I2C_ISR_TXIS        (1u << 1u)
+#define DEMO_I2C_ISR_RXNE        (1u << 2u)
+#define DEMO_I2C_ISR_NACKF       (1u << 4u)
+#define DEMO_I2C_ISR_STOPF       (1u << 5u)
+#define DEMO_I2C_ISR_TC          (1u << 6u)
+#define DEMO_I2C_ICR_NACKCF      (1u << 4u)
+#define DEMO_I2C_ICR_STOPCF      (1u << 5u)
+
+static int demo_i2c_wait_isr(uint32_t mask) {
+    for(uint32_t guard = 0; guard < 200000u; guard++) {
+        if((DEMO_I2C_ISR & DEMO_I2C_ISR_NACKF) != 0u) {
+            DEMO_I2C_ICR = DEMO_I2C_ICR_NACKCF;
+            return 0;
+        }
+        if((DEMO_I2C_ISR & mask) == mask) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void demo_i2c_init_controller(void) {
+    DEMO_I2C_CR1 = 0u;
+    DEMO_I2C_TIMINGR = 0x00B03FDBu;
+    DEMO_I2C_ICR = DEMO_I2C_ICR_NACKCF | DEMO_I2C_ICR_STOPCF;
+    DEMO_I2C_CR1 = DEMO_I2C_CR1_PE;
+}
+
+static int si7021_read_raw(uint8_t command, uint16_t *raw) {
+    DEMO_I2C_ICR = DEMO_I2C_ICR_NACKCF | DEMO_I2C_ICR_STOPCF;
+    DEMO_I2C_CR2 = (DEMO_I2C_ADDRESS << 1u) | (1u << 16u) | DEMO_I2C_CR2_START;
+    if(!demo_i2c_wait_isr(DEMO_I2C_ISR_TXIS)) {
+        return 0;
+    }
+    DEMO_I2C_TXDR = (uint32_t)command;
+    if(!demo_i2c_wait_isr(DEMO_I2C_ISR_TC)) {
+        return 0;
+    }
+
+    DEMO_I2C_CR2 = (DEMO_I2C_ADDRESS << 1u) | (2u << 16u) | DEMO_I2C_CR2_RD_WRN | DEMO_I2C_CR2_AUTOEND | DEMO_I2C_CR2_START;
+    if(!demo_i2c_wait_isr(DEMO_I2C_ISR_RXNE)) {
+        return 0;
+    }
+    const uint8_t msb = (uint8_t)(DEMO_I2C_RXDR & 0xFFu);
+    if(!demo_i2c_wait_isr(DEMO_I2C_ISR_RXNE)) {
+        return 0;
+    }
+    const uint8_t lsb = (uint8_t)(DEMO_I2C_RXDR & 0xFFu);
+    if(!demo_i2c_wait_isr(DEMO_I2C_ISR_STOPF)) {
+        return 0;
+    }
+    DEMO_I2C_ICR = DEMO_I2C_ICR_STOPCF;
+
+    *raw = (uint16_t)(((uint16_t)msb << 8u) | (uint16_t)lsb);
+    return 1;
+}`;
+
+  const driver = bus.registerModel === 'stm32f7-i2c' ? stm32f7Driver : stm32f1Driver;
+
+  return `${commonHeader}
+
+${driver}
+
+static int32_t si7021_temperature_centi(uint16_t raw) {
+    return (int32_t)(((uint32_t)raw * 17572u + 32768u) / 65536u) - 4685;
+}
+
+static int32_t si7021_humidity_centi(uint16_t raw) {
+    return (int32_t)(((uint32_t)raw * 12500u + 32768u) / 65536u) - 600;
+}
+
+static void demo_i2c_init(void) {
+    demo_i2c_enable_clock();
+    demo_i2c_init_controller();
+    demo_uart_write_string("SI7021 native I2C enabled on ${cString(bus.displayName)} address ${cString(formatHex(binding.firmwareAddress))} via Renode ${cString(binding.sensorPackage.native.renodeType)}.\\r\\n");
+}
+
+static void demo_i2c_poll(uint32_t demo_tick) {
+    static uint32_t next_poll = 0u;
+    if(demo_tick < next_poll) {
+        return;
+    }
+    next_poll = demo_tick + DEMO_I2C_POLL_PERIOD;
+
+    uint16_t raw_temp = 0u;
+    uint16_t raw_hum = 0u;
+    if(!si7021_read_raw(SI7021_CMD_TEMP_NOHOLD, &raw_temp) || !si7021_read_raw(SI7021_CMD_HUM_NOHOLD, &raw_hum)) {
+        demo_uart_write_string("SI7021 native I2C read failed\\r\\n");
+        return;
+    }
+
+    demo_uart_write_string("SI7021 T=");
+    demo_uart_write_centi(si7021_temperature_centi(raw_temp));
+    demo_uart_write_string("C RH=");
+    demo_uart_write_centi(si7021_humidity_centi(raw_hum));
+    demo_uart_write_string("%\\r\\n");
 }`;
 }
 
@@ -2462,6 +2847,19 @@ export const DEFAULT_BOARD_RUNTIME: DemoBoardRuntime = {
     txPinId: 'PA2',
     rxPinId: 'PA3',
   },
+  i2c: [
+    {
+      peripheralName: 'i2c1',
+      displayName: 'I2C1',
+      registerModel: 'stm32f7-i2c',
+      baseAddress: 0x40005400,
+      sclPinId: 'PB8',
+      sdaPinId: 'PB9',
+      rccEnableRegisterOffset: 0xe8,
+      rccEnableRegisterName: 'RCC_APB1LENR',
+      rccEnableBit: 21,
+    },
+  ],
 };
 
 export const DEFAULT_MAIN_SOURCE = generateDemoMainSource(DEFAULT_DEMO_WIRING, DEFAULT_BOARD_RUNTIME);
@@ -2473,6 +2871,8 @@ export function generateDemoMainSource(
 ): string {
   const connectedButtons = getConnectedPeripherals(wiring, 'button');
   const connectedLeds = getConnectedPeripherals(wiring, 'led');
+  const nativeI2cDevices = collectNativeI2cDeviceBindings(wiring, runtime, boardPads);
+  const nativeI2cSensor = nativeI2cDevices[0] ?? null;
   const buttonPins = connectedButtons.map((button) => resolvePeripheralPin(button, runtime, boardPads));
   const ledPins = connectedLeds.map((led) => resolvePeripheralPin(led, runtime, boardPads));
   const portEnableExpression = buildPortEnableMaskExpression([...buttonPins, ...ledPins], runtime);
@@ -2571,6 +2971,10 @@ export function generateDemoMainSource(
             : ' <= firmware';
       return `// Output ${led.label}: ${describePeripheral(led, boardPads)}${behaviorSummary}`;
     }),
+    ...nativeI2cDevices.map(
+      (device) =>
+        `// I2C    ${device.label}: ${describePad(device.scl.pad)} + ${describePad(device.sda.pad)} @ ${device.busName.toUpperCase()} address ${formatHex(device.firmwareAddress)}`
+    ),
   ].join('\n');
 
   const noButtonsNotice =
@@ -2580,11 +2984,16 @@ export function generateDemoMainSource(
 
   const gpioRuntime = createGpioRuntimeSource(runtime);
   const uartRuntime = createUartRuntimeSource(runtime);
+  const i2cRuntime = createI2cRuntimeSource(nativeI2cSensor);
+  const hasDemoTicker = hasBlinkOutputs || nativeI2cSensor !== null;
 
   return `// Auto-generated demo firmware for the Renode ${runtime.name} workbench.
 ${wiringSummary || '// No peripherals are connected yet.'}
 
 typedef unsigned int uint32_t;
+typedef unsigned short uint16_t;
+typedef unsigned char uint8_t;
+typedef int int32_t;
 
 #define RCC_BASE            ${formatHex(runtime.gpio.rccBaseAddress)}u
 #define ${runtime.gpio.rccEnableRegisterName}         (*(volatile uint32_t *)(RCC_BASE + ${formatHex(runtime.gpio.rccEnableRegisterOffset)}u))
@@ -2609,6 +3018,37 @@ static void demo_uart_write_string(const char *value) {
     }
 }
 
+static void demo_uart_write_unsigned(uint32_t value) {
+    char buffer[10];
+    uint32_t index = 0u;
+    if(value == 0u) {
+        demo_uart_write_char('0');
+        return;
+    }
+    while(value > 0u && index < sizeof(buffer)) {
+        buffer[index++] = (char)('0' + (value % 10u));
+        value /= 10u;
+    }
+    while(index > 0u) {
+        demo_uart_write_char(buffer[--index]);
+    }
+}
+
+static void demo_uart_write_centi(int32_t centi) {
+    if(centi < 0) {
+        demo_uart_write_char('-');
+        centi = -centi;
+    }
+    const uint32_t integer = (uint32_t)centi / 100u;
+    const uint32_t fraction = (uint32_t)centi % 100u;
+    demo_uart_write_unsigned(integer);
+    demo_uart_write_char('.');
+    demo_uart_write_char((char)('0' + (fraction / 10u)));
+    demo_uart_write_char((char)('0' + (fraction % 10u)));
+}
+
+${i2cRuntime}
+
 static int read_input(uint32_t base, uint32_t pin) {
     return (GPIO_IDR(base) & (1u << pin)) != 0;
 }
@@ -2617,16 +3057,18 @@ int main(void) {
     enable_gpio_clocks();
     demo_uart_init();
     demo_uart_write_string("Renode Wokwi UART ready on ${cString(runtime.name)}\\r\\n");
+    demo_i2c_init();
 ${configureLeds || '    // No LED outputs connected.'}
 ${configureButtons || '    // No button inputs connected.'}
 ${ledStateDeclarations || '    // No output state history needed.'}
-${hasBlinkOutputs ? '    uint32_t demo_tick = 0u;' : '    // No generated blink outputs.'}
+${hasDemoTicker ? '    uint32_t demo_tick = 0u;' : '    // No generated periodic tasks.'}
 
     while(1) {
 ${noButtonsNotice}${noLedsNotice}
 ${buttonReads || '        // No button states to sample.'}
 ${ledWrites || '        // No LED states to update.'}
-${hasBlinkOutputs ? '        demo_tick++;' : ''}
+${hasDemoTicker ? '        demo_i2c_poll(demo_tick);' : '        demo_i2c_poll(0u);'}
+${hasDemoTicker ? '        demo_tick++;' : ''}
         const int uart_rx = demo_uart_read_char();
         if(uart_rx >= 0) {
             demo_uart_write_string("UART RX: ");
@@ -2645,6 +3087,7 @@ export function generateBoardRepl(
 ): string {
   const connectedButtons = getConnectedPeripherals(wiring, 'button');
   const connectedLeds = getConnectedPeripherals(wiring, 'led');
+  const nativeI2cDevices = collectNativeI2cDeviceBindings(wiring, runtime, boardPads);
 
   const buttonBlocks = connectedButtons.map((button) => {
     const pin = resolvePeripheralPin(button, runtime, boardPads);
@@ -2675,6 +3118,17 @@ export function generateBoardRepl(
     ([portLetter, mappings]) => [`gpioPort${portLetter}:`, ...mappings, ''].join('\n')
   );
 
+  const nativeI2cBlocks = nativeI2cDevices.map((device) => {
+    const native = device.sensorPackage.native;
+    const modelLine = native.modelProperty && native.modelValue ? [`    ${native.modelProperty}: ${native.modelValue}`] : [];
+    return [
+      `// ${device.label}: ${describePad(device.scl.pad)} + ${describePad(device.sda.pad)}`,
+      `${device.renodeName}: ${native.renodeType} @ ${device.busName} ${formatHex(device.renodeAddress)}`,
+      ...modelLine,
+      '',
+    ].join('\n');
+  });
+
   return [
     `using "${runtime.renodePlatformPath}"`,
     '',
@@ -2682,6 +3136,7 @@ export function generateBoardRepl(
     '',
     ...(buttonBlocks.length > 0 ? buttonBlocks : ['// No external buttons are connected.', '']),
     ...(ledBlocks.length > 0 ? ledBlocks : ['// No external LEDs are connected.', '']),
+    ...(nativeI2cBlocks.length > 0 ? nativeI2cBlocks : ['// No native Renode I2C sensors are connected.', '']),
     ...gpioBlocks,
   ].join('\n');
 }

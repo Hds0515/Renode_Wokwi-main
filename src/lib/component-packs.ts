@@ -8,9 +8,11 @@ import {
   DemoPeripheralTemplateDefinition,
   DemoPeripheralTemplateKind,
 } from './firmware';
+import { getSensorPackage } from './sensor-packages';
+import type { SensorPackageKind } from './sensor-packages';
 
 export const COMPONENT_PACKAGE_SCHEMA_VERSION = 1;
-export const COMPONENT_PACKAGE_CATALOG_VERSION = 2;
+export const COMPONENT_PACKAGE_CATALOG_VERSION = 3;
 
 export type ComponentPackagePinRole = 'gpio-signal' | 'i2c-scl' | 'i2c-sda';
 export type ComponentPackagePowerPinRole = 'power-vcc' | 'power-gnd';
@@ -32,7 +34,8 @@ export type ComponentPackageRuntimeBinding = {
 } | {
   type: 'renode-i2c-broker';
   address: number;
-  model: 'ssd1306';
+  model: 'ssd1306' | 'si7021';
+  sensorPackage?: SensorPackageKind;
 };
 
 export type ComponentPackagePowerPin = {
@@ -74,6 +77,16 @@ function createRuntimeBinding(template: DemoPeripheralTemplateDefinition): Compo
       type: 'renode-i2c-broker',
       address: 0x3c,
       model: 'ssd1306',
+    };
+  }
+
+  if (template.kind === 'si7021-sensor') {
+    const sensorPackage = getSensorPackage('si7021-sensor');
+    return {
+      type: 'renode-i2c-broker',
+      address: sensorPackage.native.defaultAddress,
+      model: 'si7021',
+      sensorPackage: sensorPackage.kind,
     };
   }
 
@@ -132,8 +145,8 @@ function createComponentPackage(template: DemoPeripheralTemplateDefinition): Com
     ],
     visual: {
       accentColor: template.accentColor,
-      defaultWidth: template.kind === 'rgb-led' || template.kind === 'ssd1306-oled' ? 168 : 138,
-      defaultHeight: template.kind === 'rgb-led' || template.kind === 'ssd1306-oled' ? 104 : 86,
+      defaultWidth: template.kind === 'rgb-led' || template.kind === 'ssd1306-oled' || template.kind === 'si7021-sensor' ? 168 : 138,
+      defaultHeight: template.kind === 'rgb-led' || template.kind === 'ssd1306-oled' || template.kind === 'si7021-sensor' ? 104 : 86,
     },
     runtime: createRuntimeBinding(template),
   };
