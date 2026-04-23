@@ -104,6 +104,31 @@
       }
     ]
   },
+  "pinMux": {
+    "schemaVersion": 1,
+    "selections": [
+      {
+        "schemaVersion": 1,
+        "padId": "CN10-3",
+        "peripheralId": "button-1",
+        "endpointId": "signal",
+        "functionId": "pg12-gpio-input",
+        "functionKind": "gpio-input",
+        "source": "auto",
+        "reason": "Button 1 SIG requires gpio+digital-input"
+      },
+      {
+        "schemaVersion": 1,
+        "padId": "CN7-10",
+        "peripheralId": "led-1",
+        "endpointId": "signal",
+        "functionId": "pa5-gpio-output",
+        "functionKind": "gpio-output",
+        "source": "auto",
+        "reason": "LED 1 SIG requires gpio+digital-output"
+      }
+    ]
+  },
   "netlist": {
     "schemaVersion": 1,
     "board": {
@@ -135,7 +160,36 @@
             "padId": "CN11-5",
             "mcuPinId": null,
             "selectable": false,
-            "accentColor": null
+            "accentColor": null,
+            "mux": {
+              "schemaVersion": 1,
+              "defaultFunctionId": "3v3-vcc",
+              "functions": [
+                {
+                  "id": "3v3-vcc",
+                  "label": "3V3 power rail",
+                  "kind": "power-vcc",
+                  "providedCapabilities": [
+                    "power-vcc",
+                    "power-3v3"
+                  ],
+                  "electrical": {
+                    "direction": "output",
+                    "drive": "power-source",
+                    "pull": "none",
+                    "logicLevel": "3v3",
+                    "openDrain": false,
+                    "requiresExternalPullup": false
+                  },
+                  "bus": {
+                    "protocol": "power",
+                    "id": "3v3",
+                    "role": "vcc",
+                    "alternateFunction": null
+                  }
+                }
+              ]
+            }
           },
           {
             "id": "CN11-8",
@@ -149,7 +203,35 @@
             "padId": "CN11-8",
             "mcuPinId": null,
             "selectable": false,
-            "accentColor": null
+            "accentColor": null,
+            "mux": {
+              "schemaVersion": 1,
+              "defaultFunctionId": "gnd-ground",
+              "functions": [
+                {
+                  "id": "gnd-ground",
+                  "label": "GND ground rail",
+                  "kind": "ground",
+                  "providedCapabilities": [
+                    "ground"
+                  ],
+                  "electrical": {
+                    "direction": "bidirectional",
+                    "drive": "ground",
+                    "pull": "none",
+                    "logicLevel": null,
+                    "openDrain": false,
+                    "requiresExternalPullup": false
+                  },
+                  "bus": {
+                    "protocol": "ground",
+                    "id": null,
+                    "role": "ground",
+                    "alternateFunction": null
+                  }
+                }
+              ]
+            }
           },
           {
             "id": "CN7-10",
@@ -166,7 +248,82 @@
             "padId": "CN7-10",
             "mcuPinId": "PA5",
             "selectable": true,
-            "accentColor": null
+            "accentColor": null,
+            "mux": {
+              "schemaVersion": 1,
+              "defaultFunctionId": "pa5-gpio-input",
+              "functions": [
+                {
+                  "id": "pa5-gpio-input",
+                  "label": "PA5 GPIO input",
+                  "kind": "gpio-input",
+                  "providedCapabilities": [
+                    "gpio",
+                    "digital-input"
+                  ],
+                  "electrical": {
+                    "direction": "input",
+                    "drive": "input",
+                    "pull": "none",
+                    "logicLevel": "3v3",
+                    "openDrain": false,
+                    "requiresExternalPullup": false
+                  },
+                  "bus": {
+                    "protocol": "gpio",
+                    "id": "PA5",
+                    "role": "input",
+                    "alternateFunction": null
+                  }
+                },
+                {
+                  "id": "pa5-gpio-output",
+                  "label": "PA5 GPIO output",
+                  "kind": "gpio-output",
+                  "providedCapabilities": [
+                    "gpio",
+                    "digital-output"
+                  ],
+                  "electrical": {
+                    "direction": "output",
+                    "drive": "push-pull",
+                    "pull": "none",
+                    "logicLevel": "3v3",
+                    "openDrain": false,
+                    "requiresExternalPullup": false
+                  },
+                  "bus": {
+                    "protocol": "gpio",
+                    "id": "PA5",
+                    "role": "output",
+                    "alternateFunction": null
+                  }
+                },
+                {
+                  "id": "pa5-spi-sck",
+                  "label": "PA5 SPI1 SCK",
+                  "kind": "spi-sck",
+                  "providedCapabilities": [
+                    "gpio",
+                    "spi-sck"
+                  ],
+                  "electrical": {
+                    "direction": "output",
+                    "drive": "push-pull",
+                    "pull": "none",
+                    "logicLevel": "3v3",
+                    "openDrain": false,
+                    "requiresExternalPullup": false
+                  },
+                  "bus": {
+                    "protocol": "spi",
+                    "id": "SPI1",
+                    "role": "sck",
+                    "alternateFunction": null
+                  }
+                }
+              ]
+            }
           },
           {
             "id": "CN10-3",
@@ -182,7 +339,59 @@
             "padId": "CN10-3",
             "mcuPinId": "PG12",
             "selectable": true,
-            "accentColor": null
+            "accentColor": null,
+            "mux": {
+              "schemaVersion": 1,
+              "defaultFunctionId": "pg12-gpio-input",
+              "functions": [
+                {
+                  "id": "pg12-gpio-input",
+                  "label": "PG12 GPIO input",
+                  "kind": "gpio-input",
+                  "providedCapabilities": [
+                    "gpio",
+                    "digital-input"
+                  ],
+                  "electrical": {
+                    "direction": "input",
+                    "drive": "input",
+                    "pull": "none",
+                    "logicLevel": "3v3",
+                    "openDrain": false,
+                    "requiresExternalPullup": false
+                  },
+                  "bus": {
+                    "protocol": "gpio",
+                    "id": "PG12",
+                    "role": "input",
+                    "alternateFunction": null
+                  }
+                },
+                {
+                  "id": "pg12-gpio-output",
+                  "label": "PG12 GPIO output",
+                  "kind": "gpio-output",
+                  "providedCapabilities": [
+                    "gpio",
+                    "digital-output"
+                  ],
+                  "electrical": {
+                    "direction": "output",
+                    "drive": "push-pull",
+                    "pull": "none",
+                    "logicLevel": "3v3",
+                    "openDrain": false,
+                    "requiresExternalPullup": false
+                  },
+                  "bus": {
+                    "protocol": "gpio",
+                    "id": "PG12",
+                    "role": "output",
+                    "alternateFunction": null
+                  }
+                }
+              ]
+            }
           }
         ],
         "properties": {
@@ -393,7 +602,9 @@
             "componentId": "board:nucleo-h753zi",
             "pinId": "CN10-3",
             "role": "board-pad",
-            "padId": "CN10-3"
+            "padId": "CN10-3",
+            "pinFunctionId": "pg12-gpio-input",
+            "pinFunctionKind": "gpio-input"
           }
         ],
         "metadata": {
@@ -401,7 +612,10 @@
           "peripheralId": "button-1",
           "endpointId": "signal",
           "padId": "CN10-3",
-          "mcuPinId": "PG12"
+          "mcuPinId": "PG12",
+          "pinFunctionId": "pg12-gpio-input",
+          "pinFunctionKind": "gpio-input",
+          "busId": "PG12"
         }
       },
       {
@@ -420,7 +634,9 @@
             "componentId": "board:nucleo-h753zi",
             "pinId": "CN7-10",
             "role": "board-pad",
-            "padId": "CN7-10"
+            "padId": "CN7-10",
+            "pinFunctionId": "pa5-gpio-output",
+            "pinFunctionKind": "gpio-output"
           }
         ],
         "metadata": {
@@ -428,7 +644,10 @@
           "peripheralId": "led-1",
           "endpointId": "signal",
           "padId": "CN7-10",
-          "mcuPinId": "PA5"
+          "mcuPinId": "PA5",
+          "pinFunctionId": "pa5-gpio-output",
+          "pinFunctionKind": "gpio-output",
+          "busId": "PA5"
         }
       },
       {
@@ -483,7 +702,7 @@
       }
     ],
     "metadata": {
-      "generatedAt": "2026-04-22T12:40:39.991Z",
+      "generatedAt": "2026-04-22T13:06:57.809Z",
       "generator": "demo-wiring-v1",
       "sourceSchema": "DemoWiring"
     }

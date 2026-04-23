@@ -11,6 +11,8 @@ import {
   DEFAULT_GDB_PORT,
   DemoBoardPad,
   DemoPadCapability,
+  DemoPinFunctionKind,
+  DemoPinFunctionMux,
   DemoPeripheral,
   DemoPeripheralManifestEntry,
   DemoPeripheralTemplateKind,
@@ -23,10 +25,12 @@ import {
   generateDemoMainSource,
   generateRescPreview,
   getPadCapabilities,
+  getPeripheralEndpointDefinition,
   getPeripheralPowerBinding,
   getPeripheralTemplateKind,
   getWorkbenchDeviceId,
   isDemoPeripheralTemplateKind,
+  resolvePinFunctionForEndpoint,
   synchronizeWiringWires,
   validateWiringRules,
 } from './firmware';
@@ -57,6 +61,7 @@ export type CircuitComponentPin = {
   mcuPinId?: string | null;
   selectable?: boolean;
   accentColor?: string | null;
+  mux?: DemoPinFunctionMux;
 };
 
 export type CircuitComponentInstance = {
@@ -79,6 +84,8 @@ export type CircuitPinReference = {
   peripheralId?: string;
   endpointId?: string | null;
   padId?: string | null;
+  pinFunctionId?: string | null;
+  pinFunctionKind?: DemoPinFunctionKind | null;
 };
 
 export type CircuitNet = {
@@ -92,6 +99,9 @@ export type CircuitNet = {
     endpointId: string | null;
     padId: string;
     mcuPinId: string | null;
+    pinFunctionId?: string | null;
+    pinFunctionKind?: DemoPinFunctionKind | null;
+    busId?: string | null;
   };
 };
 
@@ -185,6 +195,7 @@ function createBoardComponent(board: BoardSchema, exposedPadIds: ReadonlySet<str
         mcuPinId: pad.mcuPinId,
         selectable: pad.selectable,
         accentColor: null,
+        mux: pad.mux,
       })),
     properties: {
       renodePlatformPath: board.renodePlatformPath,
@@ -280,6 +291,8 @@ export function createNetlistFromWiring(wiring: DemoWiring, board: BoardSchema):
       const padId = peripheral.padId!;
       const pad = padById.get(padId) ?? null;
       const componentId = getWorkbenchDeviceId(peripheral);
+      const endpoint = getPeripheralEndpointDefinition(peripheral);
+      const pinFunction = pad ? resolvePinFunctionForEndpoint(pad, endpoint) : null;
 
       return {
         id: `net:${peripheral.id}:${endpointId}`,
@@ -298,6 +311,8 @@ export function createNetlistFromWiring(wiring: DemoWiring, board: BoardSchema):
             pinId: padId,
             role: 'board-pad',
             padId,
+            pinFunctionId: pinFunction?.id ?? null,
+            pinFunctionKind: pinFunction?.kind ?? null,
           },
         ],
         metadata: {
@@ -306,6 +321,9 @@ export function createNetlistFromWiring(wiring: DemoWiring, board: BoardSchema):
           endpointId,
           padId,
           mcuPinId: pad?.mcuPinId ?? null,
+          pinFunctionId: pinFunction?.id ?? null,
+          pinFunctionKind: pinFunction?.kind ?? null,
+          busId: pinFunction?.bus.id ?? null,
         },
       };
     });

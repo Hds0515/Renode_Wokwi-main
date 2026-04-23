@@ -228,14 +228,42 @@ type LocalProjectDocument = {
     }>;
     wires?: Array<{
       id: string;
-      kind: 'gpio';
+      kind: 'gpio' | 'i2c';
       peripheralId: string;
       padId: string;
       endpointId: string | null;
       label: string;
       color: string | null;
     }>;
+    pinMux?: {
+      schemaVersion: 1;
+      selections: Array<{
+        schemaVersion: 1;
+        padId: string;
+        peripheralId: string;
+        endpointId: string | null;
+        functionId: string;
+        functionKind:
+          | 'gpio-input'
+          | 'gpio-output'
+          | 'uart-tx'
+          | 'uart-rx'
+          | 'i2c-scl'
+          | 'i2c-sda'
+          | 'spi-sck'
+          | 'spi-miso'
+          | 'spi-mosi'
+          | 'pwm'
+          | 'adc'
+          | 'power-vcc'
+          | 'ground'
+          | 'control';
+        source: 'auto' | 'user';
+        reason: string;
+      }>;
+    };
   };
+  pinMux?: unknown;
   netlist?: unknown;
   layout: {
     showFullPinout: boolean;

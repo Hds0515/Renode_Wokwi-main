@@ -3,11 +3,13 @@ import {
   DemoPeripheral,
   DemoPeripheralBehavior,
   DemoPeripheralController,
+  DemoPinFunctionMuxState,
   DemoPeripheralPowerBinding,
   DemoPeripheralTemplateKind,
   DemoWiring,
   buildWorkbenchDevices,
   createDefaultPeripheralBehavior,
+  createPinFunctionMuxState,
   createDefaultPowerBinding,
   generateDemoMainSource,
   getPeripheralTemplateKind,
@@ -54,6 +56,7 @@ export type ProjectDocument = {
     kinds: DemoPeripheralTemplateKind[];
   };
   wiring: DemoWiring;
+  pinMux: DemoPinFunctionMuxState;
   netlist: CircuitNetlist;
   layout: {
     showFullPinout: boolean;
@@ -352,6 +355,7 @@ export function createProjectDocument(options: {
 }): ProjectDocument {
   const board = options.board ?? ACTIVE_BOARD_SCHEMA;
   const wiring = synchronizeWiringWires(options.wiring);
+  const boardPads = board.connectors.all.flatMap((connector) => connector.pins);
   return {
     app: PROJECT_APP_ID,
     schemaVersion: PROJECT_SCHEMA_VERSION,
@@ -370,6 +374,7 @@ export function createProjectDocument(options: {
       kinds: COMPONENT_PACKAGES.map((componentPackage) => componentPackage.kind),
     },
     wiring,
+    pinMux: createPinFunctionMuxState(wiring, boardPads),
     netlist: createNetlistFromWiring(wiring, board),
     layout: {
       showFullPinout: options.showFullPinout,
@@ -412,6 +417,7 @@ export function normalizeLoadedProjectDocument(value: unknown): ProjectLoadResul
     return null;
   }
   const netlist = createNetlistFromWiring(wiring, board);
+  const pinMux = createPinFunctionMuxState(wiring, board.connectors.all.flatMap((connector) => connector.pins));
 
   const layout = isRecord(value.layout) ? value.layout : {};
   const code = isRecord(value.code) ? value.code : {};
@@ -438,6 +444,7 @@ export function normalizeLoadedProjectDocument(value: unknown): ProjectLoadResul
         kinds: COMPONENT_PACKAGES.map((componentPackage) => componentPackage.kind),
       },
       wiring,
+      pinMux,
       netlist,
       layout: {
         showFullPinout: layout.showFullPinout === true,

@@ -14,6 +14,7 @@ import {
   DemoBoardConnector,
   DemoBoardPad,
   inferPadCapabilities,
+  inferPinFunctionMux,
 } from './firmware';
 
 export type BoardConnectorFrame = {
@@ -104,6 +105,13 @@ function createSimpleConnector(options: {
               : 'control';
       const selectable = Boolean(mcuPinId && !pin.blockedReason);
       const signalName = pin.signalName ?? pin.pinLabel;
+      const capabilities = inferPadCapabilities({
+        pinLabel: pin.pinLabel,
+        signalName,
+        mcuPinId: pin.mcuPinId,
+        role,
+        selectable,
+      });
 
       return {
         id: `${options.id}-${pin.pinNumber}`,
@@ -120,12 +128,14 @@ function createSimpleConnector(options: {
         column: 'single',
         selectable,
         blockedReason: pin.blockedReason ?? null,
-        capabilities: inferPadCapabilities({
+        capabilities,
+        mux: inferPinFunctionMux({
           pinLabel: pin.pinLabel,
           signalName,
           mcuPinId: pin.mcuPinId,
           role,
           selectable,
+          capabilities,
         }),
       };
     }),

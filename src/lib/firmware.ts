@@ -30,6 +30,67 @@ export type DemoEndpointDirection = 'input' | 'output' | 'bidirectional';
 export type DemoPeripheralControllerType = 'firmware' | 'mirror-input' | 'blink';
 export type DemoPeripheralBehaviorRole = 'momentary-input' | 'gpio-output' | 'i2c-display';
 export type DemoPeripheralPowerVoltage = '3v3' | '5v' | 'vin' | 'external';
+export type DemoPinFunctionKind =
+  | 'gpio-input'
+  | 'gpio-output'
+  | 'uart-tx'
+  | 'uart-rx'
+  | 'i2c-scl'
+  | 'i2c-sda'
+  | 'spi-sck'
+  | 'spi-miso'
+  | 'spi-mosi'
+  | 'pwm'
+  | 'adc'
+  | 'power-vcc'
+  | 'ground'
+  | 'control';
+export type DemoPinElectricalDrive = 'input' | 'push-pull' | 'open-drain' | 'analog' | 'power-source' | 'ground' | 'passive';
+export type DemoPinPullMode = 'none' | 'pull-up' | 'pull-down' | 'external-required';
+export type DemoPinBusProtocol = 'gpio' | 'uart' | 'i2c' | 'spi' | 'timer' | 'adc' | 'power' | 'ground' | 'control';
+
+export type DemoPinFunctionDefinition = {
+  id: string;
+  label: string;
+  kind: DemoPinFunctionKind;
+  providedCapabilities: readonly DemoPadCapability[];
+  electrical: {
+    direction: DemoEndpointDirection;
+    drive: DemoPinElectricalDrive;
+    pull: DemoPinPullMode;
+    logicLevel: DemoPeripheralPowerVoltage | null;
+    openDrain: boolean;
+    requiresExternalPullup: boolean;
+  };
+  bus: {
+    protocol: DemoPinBusProtocol;
+    id: string | null;
+    role: string;
+    alternateFunction: string | null;
+  };
+};
+
+export type DemoPinFunctionMux = {
+  schemaVersion: 1;
+  defaultFunctionId: string | null;
+  functions: readonly DemoPinFunctionDefinition[];
+};
+
+export type DemoPinFunctionSelection = {
+  schemaVersion: 1;
+  padId: string;
+  peripheralId: string;
+  endpointId: string | null;
+  functionId: string;
+  functionKind: DemoPinFunctionKind;
+  source: 'auto' | 'user';
+  reason: string;
+};
+
+export type DemoPinFunctionMuxState = {
+  schemaVersion: 1;
+  selections: DemoPinFunctionSelection[];
+};
 
 export type DemoPeripheralController =
   | {
@@ -127,6 +188,7 @@ export type DemoBoardPad = {
   selectable: boolean;
   blockedReason: string | null;
   capabilities: readonly DemoPadCapability[];
+  mux: DemoPinFunctionMux;
 };
 
 export type DemoBoardConnector = {
@@ -215,6 +277,7 @@ export type DemoPeripheralManifestEntry = {
 export type DemoWiring = {
   peripherals: DemoPeripheral[];
   wires?: DemoWire[];
+  pinMux?: DemoPinFunctionMuxState;
 };
 
 export type DemoWorkbenchDevice = {
@@ -711,6 +774,345 @@ export function inferPadCapabilities(options: {
   return Array.from(capabilities);
 }
 
+function normalizeFunctionId(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function detectBusId(descriptor: string, protocol: DemoPinBusProtocol): string | null {
+  if (protocol === 'i2c') {
+    return descriptor.match(/\bI2C\d+\b/)?.[0] ?? null;
+  }
+  if (protocol === 'spi') {
+    return descriptor.match(/\bSPI\d+\b/)?.[0] ?? null;
+  }
+  if (protocol === 'uart') {
+    return descriptor.match(/\b(?:USART|UART|LPUART)\d+\b/)?.[0] ?? null;
+  }
+  if (protocol === 'timer') {
+    return descriptor.match(/\bTIM\d+\b/)?.[0] ?? null;
+  }
+  if (protocol === 'adc') {
+    return descriptor.match(/\bADC\d*\b/)?.[0] ?? 'ADC';
+  }
+  return null;
+}
+
+function inferLogicLevelFromDescriptor(descriptor: string): DemoPeripheralPowerVoltage | null {
+  if (/\b3V3\b|\b3\.3V\b|\bVDD\b|\bVDDA\b|\bIOREF\b/.test(descriptor)) {
+    return '3v3';
+  }
+  if (/\b5V\b/.test(descriptor)) {
+    return '5v';
+  }
+  if (/\bVIN\b/.test(descriptor)) {
+    return 'vin';
+  }
+  return null;
+}
+
+function createPinFunction(options: {
+  id: string;
+  label: string;
+  kind: DemoPinFunctionKind;
+  providedCapabilities: readonly DemoPadCapability[];
+  direction: DemoEndpointDirection;
+  drive: DemoPinElectricalDrive;
+  pull?: DemoPinPullMode;
+  logicLevel?: DemoPeripheralPowerVoltage | null;
+  openDrain?: boolean;
+  requiresExternalPullup?: boolean;
+  protocol: DemoPinBusProtocol;
+  busId?: string | null;
+  role: string;
+  alternateFunction?: string | null;
+}): DemoPinFunctionDefinition {
+  return {
+    id: normalizeFunctionId(options.id),
+    label: options.label,
+    kind: options.kind,
+    providedCapabilities: options.providedCapabilities,
+    electrical: {
+      direction: options.direction,
+      drive: options.drive,
+      pull: options.pull ?? 'none',
+      logicLevel: options.logicLevel ?? null,
+      openDrain: options.openDrain ?? false,
+      requiresExternalPullup: options.requiresExternalPullup ?? false,
+    },
+    bus: {
+      protocol: options.protocol,
+      id: options.busId ?? null,
+      role: options.role,
+      alternateFunction: options.alternateFunction ?? null,
+    },
+  };
+}
+
+export function inferPinFunctionMux(options: {
+  pinLabel: string;
+  signalName?: string | null;
+  mcuPinId?: string | null;
+  role?: PadRole;
+  selectable?: boolean;
+  capabilities?: readonly DemoPadCapability[];
+}): DemoPinFunctionMux {
+  const capabilities = options.capabilities ?? inferPadCapabilities(options);
+  const capabilitySet = new Set(capabilities);
+  const descriptor = `${options.pinLabel} ${options.signalName ?? ''}`.toUpperCase();
+  const functions: DemoPinFunctionDefinition[] = [];
+  const selectable = options.selectable ?? Boolean(options.mcuPinId && options.role !== 'reserved');
+  const mcuPinId = options.mcuPinId?.toUpperCase() ?? null;
+
+  if (options.role === 'power' || capabilitySet.has('power-vcc')) {
+    const logicLevel = inferLogicLevelFromDescriptor(descriptor);
+    functions.push(
+      createPinFunction({
+        id: `${options.pinLabel}-vcc`,
+        label: `${options.pinLabel} power rail`,
+        kind: 'power-vcc',
+        providedCapabilities: capabilities,
+        direction: 'output',
+        drive: 'power-source',
+        logicLevel,
+        protocol: 'power',
+        busId: logicLevel,
+        role: 'vcc',
+      })
+    );
+  }
+
+  if (options.role === 'ground' || capabilitySet.has('ground')) {
+    functions.push(
+      createPinFunction({
+        id: `${options.pinLabel}-ground`,
+        label: `${options.pinLabel} ground rail`,
+        kind: 'ground',
+        providedCapabilities: capabilities,
+        direction: 'bidirectional',
+        drive: 'ground',
+        logicLevel: null,
+        protocol: 'ground',
+        role: 'ground',
+      })
+    );
+  }
+
+  if (!selectable || !mcuPinId) {
+    if (functions.length === 0) {
+      functions.push(
+        createPinFunction({
+          id: `${options.pinLabel}-passive`,
+          label: `${options.pinLabel} passive/control`,
+          kind: 'control',
+          providedCapabilities: capabilities,
+          direction: 'bidirectional',
+          drive: 'passive',
+          protocol: 'control',
+          role: options.role ?? 'control',
+        })
+      );
+    }
+    return {
+      schemaVersion: 1,
+      defaultFunctionId: functions[0]?.id ?? null,
+      functions,
+    };
+  }
+
+  if (capabilitySet.has('digital-input')) {
+    functions.push(
+      createPinFunction({
+        id: `${mcuPinId}-gpio-input`,
+        label: `${mcuPinId} GPIO input`,
+        kind: 'gpio-input',
+        providedCapabilities: ['gpio', 'digital-input'],
+        direction: 'input',
+        drive: 'input',
+        logicLevel: '3v3',
+        protocol: 'gpio',
+        busId: mcuPinId,
+        role: 'input',
+      })
+    );
+  }
+  if (capabilitySet.has('digital-output')) {
+    functions.push(
+      createPinFunction({
+        id: `${mcuPinId}-gpio-output`,
+        label: `${mcuPinId} GPIO output`,
+        kind: 'gpio-output',
+        providedCapabilities: ['gpio', 'digital-output'],
+        direction: 'output',
+        drive: 'push-pull',
+        logicLevel: '3v3',
+        protocol: 'gpio',
+        busId: mcuPinId,
+        role: 'output',
+      })
+    );
+  }
+  if (capabilitySet.has('uart-tx')) {
+    functions.push(
+      createPinFunction({
+        id: `${mcuPinId}-uart-tx`,
+        label: `${mcuPinId} ${detectBusId(descriptor, 'uart') ?? 'UART'} TX`,
+        kind: 'uart-tx',
+        providedCapabilities: ['gpio', 'uart-tx'],
+        direction: 'output',
+        drive: 'push-pull',
+        logicLevel: '3v3',
+        protocol: 'uart',
+        busId: detectBusId(descriptor, 'uart'),
+        role: 'tx',
+      })
+    );
+  }
+  if (capabilitySet.has('uart-rx')) {
+    functions.push(
+      createPinFunction({
+        id: `${mcuPinId}-uart-rx`,
+        label: `${mcuPinId} ${detectBusId(descriptor, 'uart') ?? 'UART'} RX`,
+        kind: 'uart-rx',
+        providedCapabilities: ['gpio', 'uart-rx'],
+        direction: 'input',
+        drive: 'input',
+        logicLevel: '3v3',
+        protocol: 'uart',
+        busId: detectBusId(descriptor, 'uart'),
+        role: 'rx',
+      })
+    );
+  }
+  if (capabilitySet.has('i2c-scl')) {
+    functions.push(
+      createPinFunction({
+        id: `${mcuPinId}-i2c-scl`,
+        label: `${mcuPinId} ${detectBusId(descriptor, 'i2c') ?? 'I2C'} SCL`,
+        kind: 'i2c-scl',
+        providedCapabilities: ['gpio', 'i2c-scl'],
+        direction: 'bidirectional',
+        drive: 'open-drain',
+        pull: 'external-required',
+        logicLevel: '3v3',
+        openDrain: true,
+        requiresExternalPullup: true,
+        protocol: 'i2c',
+        busId: detectBusId(descriptor, 'i2c'),
+        role: 'scl',
+      })
+    );
+  }
+  if (capabilitySet.has('i2c-sda')) {
+    functions.push(
+      createPinFunction({
+        id: `${mcuPinId}-i2c-sda`,
+        label: `${mcuPinId} ${detectBusId(descriptor, 'i2c') ?? 'I2C'} SDA`,
+        kind: 'i2c-sda',
+        providedCapabilities: ['gpio', 'i2c-sda'],
+        direction: 'bidirectional',
+        drive: 'open-drain',
+        pull: 'external-required',
+        logicLevel: '3v3',
+        openDrain: true,
+        requiresExternalPullup: true,
+        protocol: 'i2c',
+        busId: detectBusId(descriptor, 'i2c'),
+        role: 'sda',
+      })
+    );
+  }
+  if (capabilitySet.has('spi-sck')) {
+    functions.push(
+      createPinFunction({
+        id: `${mcuPinId}-spi-sck`,
+        label: `${mcuPinId} ${detectBusId(descriptor, 'spi') ?? 'SPI'} SCK`,
+        kind: 'spi-sck',
+        providedCapabilities: ['gpio', 'spi-sck'],
+        direction: 'output',
+        drive: 'push-pull',
+        logicLevel: '3v3',
+        protocol: 'spi',
+        busId: detectBusId(descriptor, 'spi'),
+        role: 'sck',
+      })
+    );
+  }
+  if (capabilitySet.has('spi-miso')) {
+    functions.push(
+      createPinFunction({
+        id: `${mcuPinId}-spi-miso`,
+        label: `${mcuPinId} ${detectBusId(descriptor, 'spi') ?? 'SPI'} MISO`,
+        kind: 'spi-miso',
+        providedCapabilities: ['gpio', 'spi-miso'],
+        direction: 'input',
+        drive: 'input',
+        logicLevel: '3v3',
+        protocol: 'spi',
+        busId: detectBusId(descriptor, 'spi'),
+        role: 'miso',
+      })
+    );
+  }
+  if (capabilitySet.has('spi-mosi')) {
+    functions.push(
+      createPinFunction({
+        id: `${mcuPinId}-spi-mosi`,
+        label: `${mcuPinId} ${detectBusId(descriptor, 'spi') ?? 'SPI'} MOSI`,
+        kind: 'spi-mosi',
+        providedCapabilities: ['gpio', 'spi-mosi'],
+        direction: 'output',
+        drive: 'push-pull',
+        logicLevel: '3v3',
+        protocol: 'spi',
+        busId: detectBusId(descriptor, 'spi'),
+        role: 'mosi',
+      })
+    );
+  }
+  if (capabilitySet.has('pwm')) {
+    functions.push(
+      createPinFunction({
+        id: `${mcuPinId}-pwm`,
+        label: `${mcuPinId} ${detectBusId(descriptor, 'timer') ?? 'timer'} PWM`,
+        kind: 'pwm',
+        providedCapabilities: ['gpio', 'digital-output', 'pwm'],
+        direction: 'output',
+        drive: 'push-pull',
+        logicLevel: '3v3',
+        protocol: 'timer',
+        busId: detectBusId(descriptor, 'timer'),
+        role: 'pwm',
+      })
+    );
+  }
+  if (capabilitySet.has('adc')) {
+    functions.push(
+      createPinFunction({
+        id: `${mcuPinId}-adc`,
+        label: `${mcuPinId} ${detectBusId(descriptor, 'adc') ?? 'ADC'} analog input`,
+        kind: 'adc',
+        providedCapabilities: ['adc'],
+        direction: 'input',
+        drive: 'analog',
+        logicLevel: '3v3',
+        protocol: 'adc',
+        busId: detectBusId(descriptor, 'adc'),
+        role: 'analog-input',
+      })
+    );
+  }
+
+  return {
+    schemaVersion: 1,
+    defaultFunctionId: functions.find((fn) => fn.kind === 'gpio-input')?.id ?? functions[0]?.id ?? null,
+    functions,
+  };
+}
+
 function createPad(
   connector: Pick<DemoBoardConnector, 'id' | 'title' | 'placement'> & { layout: ConnectorLayout },
   definition: SingleConnectorPinDefinition,
@@ -721,6 +1123,13 @@ function createPad(
   const role = detectRole(definition.pinLabel, mcuPinId);
   const selectable = Boolean(mcuPinId && !blockedReason);
   const signalName = definition.signalName ?? definition.pinLabel;
+  const capabilities = inferPadCapabilities({
+    pinLabel: definition.pinLabel,
+    signalName,
+    mcuPinId,
+    role,
+    selectable,
+  });
 
   return {
     id: `${connector.id}-${definition.pinNumber}`,
@@ -737,12 +1146,14 @@ function createPad(
     column,
     selectable,
     blockedReason,
-    capabilities: inferPadCapabilities({
+    capabilities,
+    mux: inferPinFunctionMux({
       pinLabel: definition.pinLabel,
       signalName,
       mcuPinId,
       role,
       selectable,
+      capabilities,
     }),
   };
 }
@@ -1197,6 +1608,85 @@ export function getPeripheralEndpointDefinition(peripheral: DemoPeripheral): Dem
     template.endpoints.find((endpoint) => endpoint.kind === peripheral.kind) ??
     template.endpoints[0]
   );
+}
+
+export function getPadPinFunctions(pad: DemoBoardPad): readonly DemoPinFunctionDefinition[] {
+  return pad.mux?.schemaVersion === 1 ? pad.mux.functions : inferPinFunctionMux({
+    pinLabel: pad.pinLabel,
+    signalName: pad.signalName,
+    mcuPinId: pad.mcuPinId,
+    role: pad.role,
+    selectable: pad.selectable,
+    capabilities: getPadCapabilities(pad),
+  }).functions;
+}
+
+export function resolvePinFunctionForEndpoint(
+  pad: DemoBoardPad,
+  endpoint: DemoPeripheralTemplateEndpointDefinition
+): DemoPinFunctionDefinition | null {
+  const requiredCapabilities = endpoint.requiredCapabilities;
+  const functions = getPadPinFunctions(pad);
+  const matchesRequiredCapabilities = (pinFunction: DemoPinFunctionDefinition) =>
+    requiredCapabilities.every((capability) => pinFunction.providedCapabilities.includes(capability));
+
+  const exactKind =
+    endpoint.requiredCapabilities.includes('i2c-scl') ? 'i2c-scl' :
+    endpoint.requiredCapabilities.includes('i2c-sda') ? 'i2c-sda' :
+    endpoint.requiredCapabilities.includes('uart-tx') ? 'uart-tx' :
+    endpoint.requiredCapabilities.includes('uart-rx') ? 'uart-rx' :
+    endpoint.requiredCapabilities.includes('spi-sck') ? 'spi-sck' :
+    endpoint.requiredCapabilities.includes('spi-miso') ? 'spi-miso' :
+    endpoint.requiredCapabilities.includes('spi-mosi') ? 'spi-mosi' :
+    endpoint.requiredCapabilities.includes('adc') ? 'adc' :
+    endpoint.requiredCapabilities.includes('pwm') ? 'pwm' :
+    endpoint.requiredCapabilities.includes('digital-output') ? 'gpio-output' :
+    endpoint.requiredCapabilities.includes('digital-input') ? 'gpio-input' :
+    null;
+
+  return (
+    (exactKind ? functions.find((pinFunction) => pinFunction.kind === exactKind && matchesRequiredCapabilities(pinFunction)) : null) ??
+    functions.find(matchesRequiredCapabilities) ??
+    null
+  );
+}
+
+export function createPinFunctionMuxState(
+  wiring: DemoWiring,
+  boardPads: readonly DemoBoardPad[] = DEMO_BOARD_PADS
+): DemoPinFunctionMuxState {
+  const padById = new Map(boardPads.map((pad) => [pad.id, pad]));
+  const selections = wiring.peripherals.flatMap((peripheral): DemoPinFunctionSelection[] => {
+    if (!peripheral.padId) {
+      return [];
+    }
+    const pad = padById.get(peripheral.padId);
+    if (!pad) {
+      return [];
+    }
+    const endpoint = getPeripheralEndpointDefinition(peripheral);
+    const pinFunction = resolvePinFunctionForEndpoint(pad, endpoint);
+    if (!pinFunction) {
+      return [];
+    }
+    return [
+      {
+        schemaVersion: 1,
+        padId: pad.id,
+        peripheralId: peripheral.id,
+        endpointId: endpoint.id,
+        functionId: pinFunction.id,
+        functionKind: pinFunction.kind,
+        source: 'auto',
+        reason: `${peripheral.label} ${endpoint.label} requires ${endpoint.requiredCapabilities.join('+')}`,
+      },
+    ];
+  });
+
+  return {
+    schemaVersion: 1,
+    selections,
+  };
 }
 
 export function getWorkbenchDeviceId(peripheral: DemoPeripheral): string {

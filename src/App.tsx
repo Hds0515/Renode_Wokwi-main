@@ -112,6 +112,7 @@ import {
   getSsd1306Pixel,
 } from './lib/ssd1306';
 import type { Ssd1306State } from './lib/ssd1306';
+import { ElectricalRuleIssue, evaluateElectricalRules } from './lib/electrical-rules';
 
 type ToolingStatus = {
   found: boolean;
@@ -453,7 +454,7 @@ function findPeripheralForPad(wiring: DemoWiring, padId: string): DemoPeripheral
   return wiring.peripherals.find((peripheral) => peripheral.padId === padId) ?? null;
 }
 
-function getRuleIssueTone(issue: Pick<DemoWiringRuleIssue | CircuitNetlistIssue, 'severity'>): string {
+function getRuleIssueTone(issue: Pick<DemoWiringRuleIssue | CircuitNetlistIssue | ElectricalRuleIssue, 'severity'>): string {
   return issue.severity === 'error'
     ? 'border-rose-500/35 bg-rose-500/10 text-rose-200'
     : 'border-amber-500/35 bg-amber-500/10 text-amber-200';
@@ -3434,12 +3435,17 @@ export default function App() {
   const wiringRuleIssues = useMemo(() => validateWiringRules(wiring, selectedBoardPads), [selectedBoardPads, wiring]);
   const wiringRuleErrors = useMemo(() => wiringRuleIssues.filter((issue) => issue.severity === 'error'), [wiringRuleIssues]);
   const wiringRuleWarnings = useMemo(() => wiringRuleIssues.filter((issue) => issue.severity === 'warning'), [wiringRuleIssues]);
+  const electricalRuleReport = useMemo(() => evaluateElectricalRules(wiring, selectedBoard), [selectedBoard, wiring]);
+  const electricalRuleIssues = electricalRuleReport.issues;
+  const electricalRuleErrors = useMemo(() => electricalRuleIssues.filter((issue) => issue.severity === 'error'), [electricalRuleIssues]);
+  const electricalRuleWarnings = useMemo(() => electricalRuleIssues.filter((issue) => issue.severity === 'warning'), [electricalRuleIssues]);
+  const pinMuxSelections = electricalRuleReport.pinMux.selections;
   const netlistIssues = useMemo(() => validateNetlist(circuitNetlist, selectedBoard), [circuitNetlist, selectedBoard]);
   const netlistErrors = useMemo(() => netlistIssues.filter((issue) => issue.severity === 'error'), [netlistIssues]);
   const netlistWarnings = useMemo(() => netlistIssues.filter((issue) => issue.severity === 'warning'), [netlistIssues]);
   const blockingValidationErrors = useMemo(
-    () => [...wiringRuleErrors, ...netlistErrors],
-    [netlistErrors, wiringRuleErrors]
+    () => [...wiringRuleErrors, ...electricalRuleErrors, ...netlistErrors],
+    [electricalRuleErrors, netlistErrors, wiringRuleErrors]
   );
   const uartPeripheralName = selectedBoard.runtime.uart?.peripheralName ?? null;
   const rescPreview = renodeArtifacts.rescPreview;
@@ -4528,6 +4534,8 @@ export default function App() {
               <StatusPill active={simulation.uartConnected} label="UART online" />
               <StatusPill active={debugState.connected} label="Debugger attached" />
               <StatusPill active={wiringRuleErrors.length === 0} label="Pin rules OK" />
+              <StatusPill active={electricalRuleErrors.length === 0} label="Electrical OK" />
+              <StatusPill active={pinMuxSelections.length > 0} label="Pin mux v1" />
               <StatusPill active={netlistErrors.length === 0} label="Netlist OK" />
               <StatusPill active={signalDefinitions.length > 0} label="Signal broker" />
             </div>
@@ -4758,6 +4766,89 @@ export default function App() {
                   wiringRuleIssues.slice(0, 4).map((issue) => (
                     <div key={issue.id} className={`rounded-2xl border px-3 py-2 text-xs ${getRuleIssueTone(issue)}`}>
                       {issue.message}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-3xl border border-slate-800 bg-slate-900/70 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Electrical Rule Engine</div>
+                  <div className="mt-1 text-sm text-slate-300">
+                    {electricalRuleErrors.length === 0
+                      ? 'Power rails, voltage domains, bus pairing, and pin mux selections are electrically consistent.'
+                      : `${electricalRuleErrors.length} electrical issue(s) block compile/start.`}
+                  </div>
+                </div>
+                <div className="flex shrink-0 gap-2 text-[10px] font-semibold uppercase tracking-[0.18em]">
+                  <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-rose-200">
+                    {electricalRuleErrors.length} errors
+                  </span>
+                  <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">
+                    {electricalRuleWarnings.length} warnings
+                  </span>
+                </div>
+              </div>
+
+              <div className="mt-3 grid grid-cols-3 gap-2 text-xs text-slate-300">
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Devices</div>
+                  <div className="mt-1 font-semibold text-white">{electricalRuleReport.summary.checkedDeviceCount}</div>
+                </div>
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Signals</div>
+                  <div className="mt-1 font-semibold text-white">{electricalRuleReport.summary.checkedSignalCount}</div>
+                </div>
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Mux Funcs</div>
+                  <div className="mt-1 font-semibold text-white">{electricalRuleReport.summary.selectedFunctionCount}</div>
+                </div>
+              </div>
+
+              <div className="mt-3 grid gap-2">
+                {electricalRuleIssues.length === 0 ? (
+                  <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+                    ERC passed: no unsafe 5V pull-ups, bus mismatches, missing rail errors, or output contention were detected.
+                  </div>
+                ) : (
+                  electricalRuleIssues.slice(0, 4).map((issue) => (
+                    <div key={issue.id} className={`rounded-2xl border px-3 py-2 text-xs ${getRuleIssueTone(issue)}`}>
+                      {issue.message}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-3xl border border-slate-800 bg-slate-900/70 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Pin Function Mux v1</div>
+                  <div className="mt-1 text-sm text-slate-300">
+                    {pinMuxSelections.length === 0
+                      ? 'No routed signal has selected an alternate function yet.'
+                      : 'Each routed endpoint selects a board-pin function automatically from the pad mux schema.'}
+                  </div>
+                </div>
+                <span className="shrink-0 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-200">
+                  {pinMuxSelections.length} selected
+                </span>
+              </div>
+              <div className="mt-3 grid gap-2">
+                {pinMuxSelections.length === 0 ? (
+                  <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-400">
+                    Add and wire a GPIO, UART, I2C, SPI, PWM, or ADC endpoint to see its selected pad function here.
+                  </div>
+                ) : (
+                  pinMuxSelections.slice(0, 5).map((selection) => (
+                    <div key={`${selection.peripheralId}:${selection.padId}:${selection.functionId}`} className="rounded-2xl border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100">
+                      <span className="font-semibold text-white">{selection.padId}</span>
+                      <span className="mx-2 text-cyan-300/60">{'->'}</span>
+                      <span>{selection.functionKind}</span>
+                      <span className="mx-2 text-cyan-300/60">/</span>
+                      <span className="text-cyan-100/75">{selection.reason}</span>
                     </div>
                   ))
                 )}

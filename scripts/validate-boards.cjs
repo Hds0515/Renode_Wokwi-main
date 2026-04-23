@@ -21,6 +21,7 @@ require.extensions['.ts'] = (module, filename) => {
 };
 
 const { BOARD_SCHEMAS } = require('../src/lib/boards.ts');
+const { evaluateElectricalRules } = require('../src/lib/electrical-rules.ts');
 const {
   DEFAULT_STARTUP_SOURCE,
   synchronizeWiringWires,
@@ -162,8 +163,12 @@ async function validateBoard(board, index) {
   const signalManifest = createRuntimeSignalManifest(createSignalDefinitionsFromNetlist(netlist));
   const busManifest = createRuntimeBusManifest(board);
   const ruleErrors = validateWiringRules(wiring, pads).filter((issue) => issue.severity === 'error');
+  const electricalErrors = evaluateElectricalRules(wiring, board).issues.filter((issue) => issue.severity === 'error');
   if (ruleErrors.length > 0) {
     throw new Error(`${board.name} remapped wiring failed rule validation: ${ruleErrors[0].message}`);
+  }
+  if (electricalErrors.length > 0) {
+    throw new Error(`${board.name} remapped wiring failed electrical validation: ${electricalErrors[0].message}`);
   }
   if (netlistErrors.length > 0) {
     throw new Error(`${board.name} remapped netlist failed validation: ${netlistErrors[0].message}`);

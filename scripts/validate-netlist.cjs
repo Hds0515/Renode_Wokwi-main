@@ -17,6 +17,7 @@ require.extensions['.ts'] = (module, filename) => {
 const { BOARD_SCHEMAS } = require('../src/lib/boards.ts');
 const { COMPONENT_PACKAGES } = require('../src/lib/component-packs.ts');
 const { EXAMPLE_PROJECTS, getExamplesForBoard } = require('../src/lib/examples.ts');
+const { ELECTRICAL_RULE_SCHEMA_VERSION, evaluateElectricalRules } = require('../src/lib/electrical-rules.ts');
 const { normalizeLoadedProjectDocument } = require('../src/lib/project.ts');
 const {
   compileNetlistToRenodeArtifacts,
@@ -93,6 +94,16 @@ function validateProjectExample(example) {
   const boardPads = board.connectors.all.flatMap((connector) => connector.pins);
   const wiringErrors = validateWiringRules(roundTrip, boardPads).filter((issue) => issue.severity === 'error');
   assert(wiringErrors.length === 0, `${example.id} failed wiring validation after round trip: ${wiringErrors[0]?.message}`);
+  const electricalReport = evaluateElectricalRules(roundTrip, board);
+  const electricalErrors = electricalReport.issues.filter((issue) => issue.severity === 'error');
+  assert(ELECTRICAL_RULE_SCHEMA_VERSION === 1, `${example.id} should compile against Electrical Rule schema v1.`);
+  assert(electricalReport.schemaVersion === 1, `${example.id} electrical report should use schema v1.`);
+  assert(project.pinMux?.schemaVersion === 1, `${example.id} should save Pin Function Mux schema v1.`);
+  assert(electricalErrors.length === 0, `${example.id} failed electrical rule validation: ${electricalErrors[0]?.message}`);
+  assert(
+    electricalReport.pinMux.selections.length === roundTrip.peripherals.filter((peripheral) => peripheral.padId).length,
+    `${example.id} pin mux selection count should match routed endpoints.`
+  );
 
   const artifacts = compileNetlistToRenodeArtifacts({ netlist: project.netlist, board });
   assert(artifacts.mainSource.includes('Renode Wokwi UART ready'), `${example.id} main.c missing UART boot text.`);
