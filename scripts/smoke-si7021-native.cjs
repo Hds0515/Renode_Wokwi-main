@@ -20,6 +20,12 @@ const { DEFAULT_STARTUP_SOURCE } = require('../src/lib/firmware.ts');
 const { compileNetlistToRenodeArtifacts } = require('../src/lib/netlist.ts');
 const { createRuntimeBusManifest } = require('../src/lib/runtime-timeline.ts');
 const {
+  createBusSensorRuntimeState,
+  createNativeSensorControlRequest,
+  getBusSensorRuntimeDevices,
+  updateBusSensorChannelConfiguration,
+} = require('../src/lib/bus-sensor-runtime.ts');
+const {
   createRuntimeSignalManifest,
   createSignalDefinitionsFromNetlist,
 } = require('../src/lib/signal-broker.ts');
@@ -51,6 +57,7 @@ async function main() {
       gdbPort,
     });
     const busManifest = createRuntimeBusManifest(board, example.project.netlist);
+    const busSensorDevices = getBusSensorRuntimeDevices(busManifest);
     const sensorBus = busManifest.find(
       (entry) => entry.protocol === 'i2c' && Array.isArray(entry.devices) && entry.devices.some((device) => device.model === 'si7021')
     );
@@ -63,6 +70,20 @@ async function main() {
     }
     if (!artifacts.mainSource.includes('si7021_read_raw')) {
       throw new Error(`${boardId} generated firmware did not include the native SI7021 I2C read path.`);
+    }
+    const runtimeSensorDevice = busSensorDevices.find((device) => device.componentId === sensorDevice.componentId);
+    if (!runtimeSensorDevice) {
+      throw new Error(`${boardId} Bus Sensor Runtime did not discover the SI7021 device.`);
+    }
+    let busSensorState = createBusSensorRuntimeState(busSensorDevices);
+    busSensorState = updateBusSensorChannelConfiguration(busSensorState, runtimeSensorDevice.id, 'temperature', 23.5);
+    busSensorState = updateBusSensorChannelConfiguration(busSensorState, runtimeSensorDevice.id, 'humidity', 51.5);
+    const nativeControlRequest = createNativeSensorControlRequest(
+      runtimeSensorDevice,
+      busSensorState.devices[runtimeSensorDevice.id]
+    );
+    if (!nativeControlRequest) {
+      throw new Error(`${boardId} Bus Sensor Runtime did not create a native control request.`);
     }
 
     const runtime = createRuntimeService();
@@ -111,11 +132,7 @@ async function main() {
       }
       started = true;
 
-      const controlResult = await runtime.setNativeSensor({
-        path: sensorDevice.nativeRenodePath,
-        temperatureC: 23.5,
-        humidityPercent: 51.5,
-      });
+      const controlResult = await runtime.setNativeSensor(nativeControlRequest);
       if (!controlResult.success) {
         throw new Error(`${boardId} native sensor control failed: ${controlResult.message}`);
       }

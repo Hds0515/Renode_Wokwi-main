@@ -15,7 +15,13 @@ require.extensions['.ts'] = (module, filename) => {
 };
 
 const { BOARD_SCHEMAS } = require('../src/lib/boards.ts');
-const { COMPONENT_PACKAGES } = require('../src/lib/component-packs.ts');
+const {
+  COMPONENT_PACKAGES,
+  COMPONENT_PACKAGE_SDK_SCHEMA_VERSION,
+  COMPONENT_PACKAGE_SDK_CATALOG_VERSION,
+  COMPONENT_PACKAGE_SDKS,
+  getComponentPackageSdk,
+} = require('../src/lib/component-packs.ts');
 const { EXAMPLE_PROJECTS, getExamplesForBoard } = require('../src/lib/examples.ts');
 const { ELECTRICAL_RULE_SCHEMA_VERSION, evaluateElectricalRules } = require('../src/lib/electrical-rules.ts');
 const { normalizeLoadedProjectDocument } = require('../src/lib/project.ts');
@@ -43,6 +49,14 @@ const {
   summarizeRuntimeTimeline,
 } = require('../src/lib/runtime-timeline.ts');
 const {
+  BUS_SENSOR_RUNTIME_SCHEMA_VERSION,
+  applyBusSensorRuntimeEvent,
+  createBusSensorReadTransactions,
+  createBusSensorRuntimeState,
+  getBusSensorRuntimeDevices,
+  updateBusSensorChannelConfiguration,
+} = require('../src/lib/bus-sensor-runtime.ts');
+const {
   createSi70xxMeasurementTransactions,
   createSi70xxState,
   applySi70xxTransaction,
@@ -50,8 +64,12 @@ const {
 const {
   SENSOR_PACKAGE_SCHEMA_VERSION,
   SENSOR_PACKAGE_CATALOG_VERSION,
+  SENSOR_PACKAGE_SDK_SCHEMA_VERSION,
+  SENSOR_PACKAGE_SDK_CATALOG_VERSION,
+  SENSOR_PACKAGE_SDKS,
   SENSOR_PACKAGES,
   getSensorPackage,
+  getSensorPackageSdk,
 } = require('../src/lib/sensor-packages.ts');
 const { validateWiringRules } = require('../src/lib/firmware.ts');
 
@@ -70,11 +88,33 @@ function assert(condition, message) {
 
 function validateComponentPackages() {
   assert(COMPONENT_PACKAGES.length >= 4, 'Expected the component package catalog to expose the current demo devices.');
+  assert(COMPONENT_PACKAGE_SDK_SCHEMA_VERSION === 2, 'Expected Component Package SDK schema v2.');
+  assert(COMPONENT_PACKAGE_SDK_CATALOG_VERSION === 1, 'Expected Component Package SDK catalog v1.');
+  assert(COMPONENT_PACKAGE_SDKS.length === COMPONENT_PACKAGES.length, 'Component Package SDK should mirror the v1 package catalog.');
   COMPONENT_PACKAGES.forEach((componentPackage) => {
     assert(componentPackage.schemaVersion === 1, `${componentPackage.kind} has an unsupported package schema.`);
     assert(componentPackage.pins.length > 0, `${componentPackage.kind} must expose at least one pin.`);
     componentPackage.pins.forEach((pin) => {
       assert(pin.requiredPadCapabilities.includes('gpio'), `${componentPackage.kind}.${pin.id} must require GPIO capability.`);
+    });
+
+    const sdk = getComponentPackageSdk(componentPackage.kind);
+    assert(sdk.schemaVersion === 2, `${componentPackage.kind} SDK should use schema v2.`);
+    assert(sdk.compatibility.componentPackageSchemaVersion === 1, `${componentPackage.kind} SDK should declare v1 compatibility.`);
+    assert(sdk.pins.length === componentPackage.pins.length, `${componentPackage.kind} SDK endpoint count should mirror v1 pins.`);
+    assert(sdk.visual.terminalLayout === 'explicit-endpoints', `${componentPackage.kind} SDK should expose explicit endpoint terminals.`);
+    const handleIds = new Set();
+    sdk.pins.forEach((pin) => {
+      assert(pin.schemaVersion === 2, `${componentPackage.kind}.${pin.id} SDK pin should use schema v2.`);
+      assert(pin.terminal.connectable === true, `${componentPackage.kind}.${pin.id} SDK pin should be connectable.`);
+      assert(pin.terminal.dragGesture === 'terminal-to-board-pad', `${componentPackage.kind}.${pin.id} should declare the canvas drag gesture.`);
+      assert(!handleIds.has(pin.terminal.handleId), `${componentPackage.kind}.${pin.id} SDK handle id is duplicated.`);
+      handleIds.add(pin.terminal.handleId);
+      if (pin.role === 'i2c-scl' || pin.role === 'i2c-sda') {
+        assert(pin.netKind === 'i2c' && pin.protocols.includes('i2c'), `${componentPackage.kind}.${pin.id} should be an I2C endpoint.`);
+      } else {
+        assert(pin.netKind === 'gpio' && pin.protocols.includes('gpio'), `${componentPackage.kind}.${pin.id} should be a GPIO endpoint.`);
+      }
     });
   });
 }
@@ -82,10 +122,19 @@ function validateComponentPackages() {
 function validateSensorPackages() {
   assert(SENSOR_PACKAGE_SCHEMA_VERSION === 1, 'Expected Sensor Package schema v1.');
   assert(SENSOR_PACKAGE_CATALOG_VERSION === 1, 'Expected Sensor Package catalog v1.');
+  assert(SENSOR_PACKAGE_SDK_SCHEMA_VERSION === 2, 'Expected Sensor Package SDK schema v2.');
+  assert(SENSOR_PACKAGE_SDK_CATALOG_VERSION === 1, 'Expected Sensor Package SDK catalog v1.');
+  assert(SENSOR_PACKAGE_SDKS.length === SENSOR_PACKAGES.length, 'Sensor Package SDK should mirror the v1 package catalog.');
   assert(SENSOR_PACKAGES.length >= 1, 'Expected at least one reusable sensor package.');
   const si7021 = getSensorPackage('si7021-sensor');
+  const si7021Sdk = getSensorPackageSdk('si7021-sensor');
   assert(si7021.native.renodeType === 'Sensors.SI70xx', 'SI7021 package should map to Renode Sensors.SI70xx.');
   assert(si7021.native.defaultAddress === 0x40, 'SI7021 package should use I2C address 0x40.');
+  assert(si7021Sdk.schemaVersion === 2, 'SI7021 SDK should use schema v2.');
+  assert(si7021Sdk.protocol.bus === 'i2c', 'SI7021 SDK should expose I2C as its bus protocol.');
+  assert(si7021Sdk.protocol.transactionModel === 'mcu-initiated-reads', 'SI7021 SDK should document MCU-initiated reads.');
+  assert(si7021Sdk.runtime.controlPlane === 'native-sensor-control', 'SI7021 SDK should expose native sensor control.');
+  assert(si7021Sdk.channels.length === si7021.native.control.channels.length, 'SI7021 SDK should mirror sensor channels.');
   assert(
     si7021.native.control.channels.some((channel) => channel.renodeProperty === 'Temperature') &&
       si7021.native.control.channels.some((channel) => channel.renodeProperty === 'Humidity'),
@@ -104,6 +153,8 @@ function validateProjectExample(example) {
   assert(project.schemaVersion === 2, `${example.id} did not normalize to project schema v2.`);
   assert(project.netlist, `${example.id} does not contain a netlist.`);
   assert(project.sensorPackages?.schemaVersion === 1, `${example.id} should save Sensor Package schema v1.`);
+  assert(project.componentPackageSdk?.schemaVersion === 2, `${example.id} should save Component Package SDK schema v2.`);
+  assert(project.sensorPackageSdk?.schemaVersion === 2, `${example.id} should save Sensor Package SDK schema v2.`);
 
   const regeneratedNetlist = createNetlistFromWiring(project.wiring, board);
   const netlistIssues = validateNetlist(project.netlist, board);
@@ -151,7 +202,10 @@ function validateProjectExample(example) {
   const signalSummary = summarizeSignalBroker(signalState);
   const busManifest = createRuntimeBusManifest(board, project.netlist);
   const timelineState = createRuntimeTimelineState(1000);
+  const busSensorDevices = getBusSensorRuntimeDevices(busManifest);
+  const busSensorState = createBusSensorRuntimeState(busSensorDevices);
   assert(signalState.schemaVersion === 2, `${example.id} signal broker state should use schema v2.`);
+  assert(busSensorState.schemaVersion === BUS_SENSOR_RUNTIME_SCHEMA_VERSION, `${example.id} bus sensor runtime should use schema v1.`);
   assert(SIGNAL_BROKER_SCHEMA_VERSION === 2, `${example.id} should compile against Signal Broker schema v2.`);
   assert(RUNTIME_TIMELINE_SCHEMA_VERSION === 1, `${example.id} should compile against runtime timeline schema v1.`);
   assert(signalManifest.length === signalDefinitions.length, `${example.id} runtime signal manifest size mismatch.`);
@@ -193,6 +247,8 @@ function validateProjectExample(example) {
     const sensor = sensorBus.devices.find((device) => device.model === 'si7021');
     assert(sensor, `${example.id} SI7021 runtime device metadata is missing.`);
     assert(sensor.sensorPackage === 'si7021-sensor', `${example.id} SI7021 should reference Sensor Package v1 metadata.`);
+    assert(sensor.sensorPackageSdkSchemaVersion === 2, `${example.id} SI7021 should expose Sensor Package SDK v2 metadata.`);
+    assert(Array.isArray(sensor.controlChannels) && sensor.controlChannels.length >= 2, `${example.id} SI7021 should expose reusable control channels.`);
     assert(sensor.nativeRenodeName && sensor.nativeRenodeName.startsWith('si7021Sensor__'), `${example.id} SI7021 should expose a native Renode peripheral name.`);
     assert(
       sensor.nativeRenodePath && sensor.nativeRenodePath.includes(`.${sensor.nativeRenodeName}`),
@@ -234,6 +290,55 @@ function validateProjectExample(example) {
     );
     assert(sensorState.lastReadTemperatureC !== null, `${example.id} SI7021 temperature transaction did not decode.`);
     assert(Math.abs(sensorState.lastReadTemperatureC - 23.5) < 0.05, `${example.id} SI7021 temperature decode drifted.`);
+
+    const runtimeSensorDevice = busSensorDevices.find((device) => device.componentId === sensor.componentId);
+    assert(runtimeSensorDevice, `${example.id} SI7021 should be discoverable by Bus Sensor Runtime.`);
+    assert(runtimeSensorDevice.channels.some((channel) => channel.id === 'temperature'), `${example.id} Bus Sensor Runtime should expose temperature channel.`);
+    const configuredSensorState = updateBusSensorChannelConfiguration(
+      busSensorState,
+      runtimeSensorDevice.id,
+      'temperature',
+      23.5
+    );
+    const runtimeTransactions = createBusSensorReadTransactions(
+      runtimeSensorDevice,
+      configuredSensorState.devices[runtimeSensorDevice.id],
+      'temperature'
+    );
+    assert(runtimeTransactions.length === 2, `${example.id} Bus Sensor Runtime should create SI70xx read/write transactions.`);
+    const runtimeDecoded = runtimeTransactions.reduce(
+      (state, transaction, index) =>
+        applyBusSensorRuntimeEvent(
+          state,
+          {
+            schemaVersion: 1,
+            id: `${example.id}:runtime-si7021:${index}`,
+            protocol: 'i2c',
+            kind: 'bus-transaction',
+            source: 'ui',
+            clock: { ...timelineClock, sequence: 20 + index, virtualTimeNs: 20000000 + index * 1000000, virtualTimeMs: 20 + index },
+            summary: 'validation generic bus sensor transaction',
+            busId: transaction.busId,
+            busLabel: transaction.busLabel,
+            renodePeripheralName: transaction.peripheralName,
+            direction: transaction.direction,
+            status: transaction.status,
+            address: transaction.address,
+            payload: {
+              bytes: transaction.data,
+              text: null,
+              bitLength: transaction.data.length * 8,
+              truncated: false,
+            },
+          },
+          busSensorDevices
+        ),
+      configuredSensorState
+    );
+    assert(
+      Math.abs(runtimeDecoded.devices[runtimeSensorDevice.id].channels.temperature.lastReadValue - 23.5) < 0.05,
+      `${example.id} Bus Sensor Runtime did not decode the SI7021 temperature transaction.`
+    );
   }
 
   const firstSignal = signalDefinitions[0];

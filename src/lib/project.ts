@@ -20,11 +20,17 @@ import {
 import { ACTIVE_BOARD_SCHEMA, BoardSchema, getBoardSchema } from './boards';
 import {
   COMPONENT_PACKAGE_CATALOG_VERSION,
+  COMPONENT_PACKAGE_SDK_CATALOG_VERSION,
+  COMPONENT_PACKAGE_SDK_SCHEMA_VERSION,
+  COMPONENT_PACKAGE_SDKS,
   COMPONENT_PACKAGE_SCHEMA_VERSION,
   COMPONENT_PACKAGES,
 } from './component-packs';
 import {
   SENSOR_PACKAGE_CATALOG_VERSION,
+  SENSOR_PACKAGE_SDK_CATALOG_VERSION,
+  SENSOR_PACKAGE_SDK_SCHEMA_VERSION,
+  SENSOR_PACKAGE_SDKS,
   SENSOR_PACKAGE_SCHEMA_VERSION,
   SENSOR_PACKAGES,
 } from './sensor-packages';
@@ -60,8 +66,18 @@ export type ProjectDocument = {
     catalogVersion: 3;
     kinds: DemoPeripheralTemplateKind[];
   };
+  componentPackageSdk: {
+    schemaVersion: 2;
+    catalogVersion: 1;
+    kinds: DemoPeripheralTemplateKind[];
+  };
   sensorPackages: {
     schemaVersion: 1;
+    catalogVersion: 1;
+    kinds: string[];
+  };
+  sensorPackageSdk: {
+    schemaVersion: 2;
     catalogVersion: 1;
     kinds: string[];
   };
@@ -383,10 +399,20 @@ export function createProjectDocument(options: {
       catalogVersion: COMPONENT_PACKAGE_CATALOG_VERSION,
       kinds: COMPONENT_PACKAGES.map((componentPackage) => componentPackage.kind),
     },
+    componentPackageSdk: {
+      schemaVersion: COMPONENT_PACKAGE_SDK_SCHEMA_VERSION,
+      catalogVersion: COMPONENT_PACKAGE_SDK_CATALOG_VERSION,
+      kinds: COMPONENT_PACKAGE_SDKS.map((componentPackage) => componentPackage.kind),
+    },
     sensorPackages: {
       schemaVersion: SENSOR_PACKAGE_SCHEMA_VERSION,
       catalogVersion: SENSOR_PACKAGE_CATALOG_VERSION,
       kinds: SENSOR_PACKAGES.map((sensorPackage) => sensorPackage.kind),
+    },
+    sensorPackageSdk: {
+      schemaVersion: SENSOR_PACKAGE_SDK_SCHEMA_VERSION,
+      catalogVersion: SENSOR_PACKAGE_SDK_CATALOG_VERSION,
+      kinds: SENSOR_PACKAGE_SDKS.map((sensorPackage) => sensorPackage.kind),
     },
     wiring,
     pinMux: createPinFunctionMuxState(wiring, boardPads),
@@ -458,10 +484,20 @@ export function normalizeLoadedProjectDocument(value: unknown): ProjectLoadResul
         catalogVersion: COMPONENT_PACKAGE_CATALOG_VERSION,
         kinds: COMPONENT_PACKAGES.map((componentPackage) => componentPackage.kind),
       },
+      componentPackageSdk: {
+        schemaVersion: COMPONENT_PACKAGE_SDK_SCHEMA_VERSION,
+        catalogVersion: COMPONENT_PACKAGE_SDK_CATALOG_VERSION,
+        kinds: COMPONENT_PACKAGE_SDKS.map((componentPackage) => componentPackage.kind),
+      },
       sensorPackages: {
         schemaVersion: SENSOR_PACKAGE_SCHEMA_VERSION,
         catalogVersion: SENSOR_PACKAGE_CATALOG_VERSION,
         kinds: SENSOR_PACKAGES.map((sensorPackage) => sensorPackage.kind),
+      },
+      sensorPackageSdk: {
+        schemaVersion: SENSOR_PACKAGE_SDK_SCHEMA_VERSION,
+        catalogVersion: SENSOR_PACKAGE_SDK_CATALOG_VERSION,
+        kinds: SENSOR_PACKAGE_SDKS.map((sensorPackage) => sensorPackage.kind),
       },
       wiring,
       pinMux,

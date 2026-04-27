@@ -1,11 +1,14 @@
 export const SENSOR_PACKAGE_SCHEMA_VERSION = 1;
 export const SENSOR_PACKAGE_CATALOG_VERSION = 1;
+export const SENSOR_PACKAGE_SDK_SCHEMA_VERSION = 2;
+export const SENSOR_PACKAGE_SDK_CATALOG_VERSION = 1;
 
 export type SensorPackageKind = 'si7021-sensor';
 export type SensorBusProtocol = 'i2c';
-export type SensorChannelKind = 'temperature' | 'humidity';
+export type SensorChannelKind = string;
 export type SensorChannelUnit = 'celsius' | 'percent-rh';
 export type SensorControlTransport = 'renode-monitor-property';
+export type SensorTransactionCodec = 'si70xx-compatible';
 
 export type SensorPackageChannel = {
   id: SensorChannelKind;
@@ -48,6 +51,71 @@ export type SensorPackage = {
     address: number;
     readCommands: Record<SensorChannelKind, number>;
   };
+};
+
+export type SensorPackageSdkChannel = SensorPackageChannel & {
+  schemaVersion: typeof SENSOR_PACKAGE_SDK_SCHEMA_VERSION;
+  ui: {
+    control: 'slider';
+    visualizers: readonly ['numeric-readout', 'timeline'];
+    precision: number;
+  };
+  dataFlow: {
+    configuredBy: 'user';
+    appliedThrough: SensorControlTransport;
+    readByFirmware: true;
+  };
+};
+
+export type SensorPackageSdk = {
+  schemaVersion: typeof SENSOR_PACKAGE_SDK_SCHEMA_VERSION;
+  kind: SensorPackageKind;
+  title: string;
+  subtitle: string;
+  description: string;
+  version: '1.0.0';
+  compatibility: {
+    sensorPackageSchemaVersion: typeof SENSOR_PACKAGE_SCHEMA_VERSION;
+    sensorPackageCatalogVersion: typeof SENSOR_PACKAGE_CATALOG_VERSION;
+  };
+  protocol: {
+    bus: SensorBusProtocol;
+    addressMode: 'seven-bit';
+    defaultAddress: number;
+    transactionModel: 'mcu-initiated-reads';
+  };
+  native: NativeRenodeSensorBinding & {
+    sdkControl: {
+      transport: SensorControlTransport;
+      target: 'renode-monitor-property';
+      requiresSimulation: true;
+    };
+  };
+  firmware: SensorPackage['firmware'] & {
+    driver: 'generated-i2c-read-driver';
+  };
+  channels: readonly SensorPackageSdkChannel[];
+  runtime: {
+    controlPlane: 'native-sensor-control';
+    dataPlane: 'bus-transaction-broker';
+    manifest: 'runtime-bus-manifest';
+  };
+  busRuntime: {
+    transactionCodec: SensorTransactionCodec;
+    readCommands: Record<SensorChannelKind, number>;
+    responseByteLength: number;
+  };
+  ui: {
+    packageIcon: 'temperature-humidity';
+    controlPanel: 'sensor-control';
+    resultPanels: readonly ['bus-transactions', 'uart-terminal'];
+  };
+};
+
+export type SensorPackageSdkCatalog = {
+  schemaVersion: typeof SENSOR_PACKAGE_SDK_SCHEMA_VERSION;
+  catalogVersion: typeof SENSOR_PACKAGE_SDK_CATALOG_VERSION;
+  packages: readonly SensorPackageSdk[];
 };
 
 function sanitizeRenodeIdentifier(value: string): string {
@@ -125,8 +193,81 @@ export const SENSOR_PACKAGE_CATALOG: SensorPackageCatalog = {
   packages: SENSOR_PACKAGES,
 };
 
+function createSensorPackageSdk(sensorPackage: SensorPackage): SensorPackageSdk {
+  return {
+    schemaVersion: SENSOR_PACKAGE_SDK_SCHEMA_VERSION,
+    kind: sensorPackage.kind,
+    title: sensorPackage.title,
+    subtitle: sensorPackage.subtitle,
+    description: sensorPackage.description,
+    version: '1.0.0',
+    compatibility: {
+      sensorPackageSchemaVersion: SENSOR_PACKAGE_SCHEMA_VERSION,
+      sensorPackageCatalogVersion: SENSOR_PACKAGE_CATALOG_VERSION,
+    },
+    protocol: {
+      bus: sensorPackage.native.busProtocol,
+      addressMode: sensorPackage.native.addressMode,
+      defaultAddress: sensorPackage.native.defaultAddress,
+      transactionModel: 'mcu-initiated-reads',
+    },
+    native: {
+      ...sensorPackage.native,
+      sdkControl: {
+        transport: sensorPackage.native.control.transport,
+        target: 'renode-monitor-property',
+        requiresSimulation: true,
+      },
+    },
+    firmware: {
+      ...sensorPackage.firmware,
+      driver: 'generated-i2c-read-driver',
+    },
+    channels: sensorPackage.native.control.channels.map((channel) => ({
+      ...channel,
+      schemaVersion: SENSOR_PACKAGE_SDK_SCHEMA_VERSION,
+      ui: {
+        control: 'slider',
+        visualizers: ['numeric-readout', 'timeline'],
+        precision: channel.step < 1 ? 1 : 0,
+      },
+      dataFlow: {
+        configuredBy: 'user',
+        appliedThrough: sensorPackage.native.control.transport,
+        readByFirmware: true,
+      },
+    })),
+    runtime: {
+      controlPlane: 'native-sensor-control',
+      dataPlane: 'bus-transaction-broker',
+      manifest: 'runtime-bus-manifest',
+    },
+    busRuntime: {
+      transactionCodec: 'si70xx-compatible',
+      readCommands: sensorPackage.firmware.readCommands,
+      responseByteLength: 2,
+    },
+    ui: {
+      packageIcon: 'temperature-humidity',
+      controlPanel: 'sensor-control',
+      resultPanels: ['bus-transactions', 'uart-terminal'],
+    },
+  };
+}
+
+export const SENSOR_PACKAGE_SDK_CATALOG: SensorPackageSdkCatalog = {
+  schemaVersion: SENSOR_PACKAGE_SDK_SCHEMA_VERSION,
+  catalogVersion: SENSOR_PACKAGE_SDK_CATALOG_VERSION,
+  packages: SENSOR_PACKAGES.map((sensorPackage) => createSensorPackageSdk(sensorPackage)),
+};
+
+export const SENSOR_PACKAGE_SDKS = SENSOR_PACKAGE_SDK_CATALOG.packages;
+
 const SENSOR_PACKAGE_MAP = new Map<SensorPackageKind, SensorPackage>(
   SENSOR_PACKAGES.map((sensorPackage) => [sensorPackage.kind, sensorPackage])
+);
+const SENSOR_PACKAGE_SDK_MAP = new Map<SensorPackageKind, SensorPackageSdk>(
+  SENSOR_PACKAGE_SDKS.map((sensorPackage) => [sensorPackage.kind, sensorPackage])
 );
 
 export function isSensorPackageKind(value: unknown): value is SensorPackageKind {
@@ -137,6 +278,14 @@ export function getSensorPackage(kind: SensorPackageKind): SensorPackage {
   const sensorPackage = SENSOR_PACKAGE_MAP.get(kind);
   if (!sensorPackage) {
     throw new Error(`Unknown sensor package kind: ${kind}`);
+  }
+  return sensorPackage;
+}
+
+export function getSensorPackageSdk(kind: SensorPackageKind): SensorPackageSdk {
+  const sensorPackage = SENSOR_PACKAGE_SDK_MAP.get(kind);
+  if (!sensorPackage) {
+    throw new Error(`Unknown sensor package SDK kind: ${kind}`);
   }
   return sensorPackage;
 }

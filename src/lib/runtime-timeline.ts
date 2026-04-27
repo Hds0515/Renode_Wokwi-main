@@ -7,6 +7,7 @@ import {
   buildRenodeSensorPath,
   buildRenodeSensorPeripheralName,
   findSensorPackage,
+  getSensorPackageSdk,
 } from './sensor-packages';
 import type { SensorPackageKind } from './sensor-packages';
 
@@ -46,8 +47,20 @@ export type RuntimeBusDeviceManifestEntry = {
   componentKind: string;
   label: string;
   address: number | null;
-  model: 'ssd1306' | 'si7021' | 'generic-i2c';
+  model: string;
   sensorPackage?: SensorPackageKind;
+  sensorPackageTitle?: string;
+  sensorPackageSdkSchemaVersion?: number;
+  nativeControlTransport?: string | null;
+  controlChannels?: Array<{
+    id: string;
+    label: string;
+    unit: string;
+    renodeProperty: string;
+    minimum: number;
+    maximum: number;
+    step: number;
+  }>;
   nativeRenodeName?: string | null;
   nativeRenodePath?: string | null;
 };
@@ -287,17 +300,24 @@ function collectI2cDevicesFromNetlist(board: BoardSchema, netlist: CircuitNetlis
     return devicesByBusId;
   }
 
-  const supportedI2cModels = new Map<DemoPeripheralTemplateKind, RuntimeBusDeviceManifestEntry['model']>([
-    ['ssd1306-oled', 'ssd1306'],
-    ['si7021-sensor', 'si7021'],
-  ]);
-
   netlist.components
-    .filter((component) => component.kind !== 'board' && supportedI2cModels.has(component.kind as DemoPeripheralTemplateKind))
+    .filter((component) => {
+      if (component.kind === 'board') {
+        return false;
+      }
+      const templateKind = component.kind as DemoPeripheralTemplateKind;
+      const runtime = getComponentPackage(templateKind).runtime;
+      return runtime.type === 'renode-i2c-broker';
+    })
     .forEach((component) => {
       const templateKind = component.kind as DemoPeripheralTemplateKind;
       const runtime = getComponentPackage(templateKind).runtime;
-      const model = supportedI2cModels.get(templateKind) ?? 'generic-i2c';
+      if (runtime.type !== 'renode-i2c-broker') {
+        return;
+      }
+      const sensorPackage = findSensorPackage(templateKind);
+      const sensorPackageSdk = sensorPackage ? getSensorPackageSdk(sensorPackage.kind) : null;
+      const model = runtime.model ?? 'generic-i2c';
       const sclNet = netlist.nets.find(
         (net) => net.kind === 'i2c' && net.connections.some((connection) => connection.componentId === component.id && connection.pinId === 'scl')
       );
@@ -308,7 +328,6 @@ function collectI2cDevicesFromNetlist(board: BoardSchema, netlist: CircuitNetlis
         inferI2cBusIdFromPad(board, sclNet?.metadata?.padId) ??
         inferI2cBusIdFromPad(board, sdaNet?.metadata?.padId) ??
         normalizeBusId('i2c', 'visual');
-      const sensorPackage = findSensorPackage(templateKind);
       const nativeRenodeName = sensorPackage ? buildRenodeSensorPeripheralName(sensorPackage.kind, component.id) : null;
       const renodeBusName = getRenodePeripheralNameFromBusId('i2c', busId);
       const devices = devicesByBusId.get(busId) ?? [];
@@ -320,6 +339,18 @@ function collectI2cDevicesFromNetlist(board: BoardSchema, netlist: CircuitNetlis
         address: sensorPackage ? sensorPackage.native.defaultAddress : runtime.type === 'renode-i2c-broker' ? runtime.address : null,
         model,
         sensorPackage: sensorPackage?.kind,
+        sensorPackageTitle: sensorPackageSdk?.title,
+        sensorPackageSdkSchemaVersion: sensorPackageSdk?.schemaVersion,
+        nativeControlTransport: sensorPackageSdk?.native.sdkControl.transport ?? null,
+        controlChannels: sensorPackageSdk?.channels.map((channel) => ({
+          id: channel.id,
+          label: channel.label,
+          unit: channel.unit,
+          renodeProperty: channel.renodeProperty,
+          minimum: channel.minimum,
+          maximum: channel.maximum,
+          step: channel.step,
+        })),
         nativeRenodeName,
         nativeRenodePath:
           sensorPackage && renodeBusName && nativeRenodeName

@@ -1060,6 +1060,51 @@ function createRuntimeService(options = {}) {
     return Math.min(max, Math.max(min, numericValue));
   }
 
+  function normalizeMonitorPropertyName(value) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const normalized = value.trim();
+    return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(normalized) ? normalized : null;
+  }
+
+  function normalizeNativeSensorChannels(request) {
+    const channels = [];
+    if (Array.isArray(request?.channels)) {
+      request.channels.forEach((channel) => {
+        const id = typeof channel?.id === 'string' && channel.id.trim() ? channel.id.trim() : null;
+        const renodeProperty = normalizeMonitorPropertyName(channel?.renodeProperty);
+        const minimum = Number.isFinite(Number(channel?.minimum)) ? Number(channel.minimum) : -1000000;
+        const maximum = Number.isFinite(Number(channel?.maximum)) ? Number(channel.maximum) : 1000000;
+        const value = normalizeSensorNumber(channel?.value, minimum, maximum);
+        if (!id || !renodeProperty || value === null) {
+          return;
+        }
+        channels.push({
+          id,
+          renodeProperty,
+          value,
+        });
+      });
+    }
+
+    if (request && Object.prototype.hasOwnProperty.call(request, 'temperatureC')) {
+      const value = normalizeSensorNumber(request.temperatureC, -40, 85);
+      if (value !== null && !channels.some((channel) => channel.id === 'temperature')) {
+        channels.push({ id: 'temperature', renodeProperty: 'Temperature', value });
+      }
+    }
+
+    if (request && Object.prototype.hasOwnProperty.call(request, 'humidityPercent')) {
+      const value = normalizeSensorNumber(request.humidityPercent, 0, 100);
+      if (value !== null && !channels.some((channel) => channel.id === 'humidity')) {
+        channels.push({ id: 'humidity', renodeProperty: 'Humidity', value });
+      }
+    }
+
+    return channels;
+  }
+
   function cleanMonitorOutput(output, command) {
     const printable = String(output ?? '').replace(/[^\x09\x0a\x0d\x20-\x7e]/g, '');
     return printable
@@ -1598,37 +1643,33 @@ function createRuntimeService(options = {}) {
       };
     }
 
-    const temperatureC =
-      request && Object.prototype.hasOwnProperty.call(request, 'temperatureC')
-        ? normalizeSensorNumber(request.temperatureC, -40, 85)
-        : null;
-    const humidityPercent =
-      request && Object.prototype.hasOwnProperty.call(request, 'humidityPercent')
-        ? normalizeSensorNumber(request.humidityPercent, 0, 100)
-        : null;
-
-    if (temperatureC === null && humidityPercent === null) {
+    const channels = normalizeNativeSensorChannels(request);
+    if (channels.length === 0) {
       return {
         success: false,
-        message: 'Provide at least one native sensor value to update.',
+        message: 'Provide at least one native sensor channel value to update.',
       };
     }
 
     try {
       const values = await enqueueMonitorCommand(async () => {
-        if (temperatureC !== null) {
-          await runMonitorCommand(`${sensorPath} Temperature ${temperatureC.toFixed(3)}`);
-        }
-        if (humidityPercent !== null) {
-          await runMonitorCommand(`${sensorPath} Humidity ${humidityPercent.toFixed(3)}`);
+        for (const channel of channels) {
+          await runMonitorCommand(`${sensorPath} ${channel.renodeProperty} ${channel.value.toFixed(3)}`);
         }
 
-        const temperatureOutput = await runMonitorCommand(`${sensorPath} Temperature`);
-        const humidityOutput = await runMonitorCommand(`${sensorPath} Humidity`);
-        return {
-          temperatureC: parseMonitorNumber(temperatureOutput),
-          humidityPercent: parseMonitorNumber(humidityOutput),
-        };
+        const nextValues = {};
+        for (const channel of channels) {
+          const output = await runMonitorCommand(`${sensorPath} ${channel.renodeProperty}`);
+          nextValues[channel.id] = parseMonitorNumber(output);
+        }
+
+        if (Object.prototype.hasOwnProperty.call(nextValues, 'temperature')) {
+          nextValues.temperatureC = nextValues.temperature;
+        }
+        if (Object.prototype.hasOwnProperty.call(nextValues, 'humidity')) {
+          nextValues.humidityPercent = nextValues.humidity;
+        }
+        return nextValues;
       });
 
       const clock = snapshotSimulationClock();
@@ -1636,14 +1677,14 @@ function createRuntimeService(options = {}) {
         type: 'sensor',
         status: 'updated',
         path: sensorPath,
+        sensorPackage: typeof request?.sensorPackage === 'string' ? request.sensorPackage : undefined,
+        values,
         temperatureC: values.temperatureC,
         humidityPercent: values.humidityPercent,
         clock,
         timestamp: new Date().toISOString(),
       });
-      log(
-        `Native sensor ${sensorPath} updated: T=${values.temperatureC ?? temperatureC} C, RH=${values.humidityPercent ?? humidityPercent} %.`
-      );
+      log(`Native sensor ${sensorPath} updated: ${channels.map((channel) => `${channel.id}=${values[channel.id] ?? channel.value}`).join(', ')}.`);
 
       return {
         success: true,

@@ -32,8 +32,20 @@ type RuntimeBusManifestEntry = {
     componentKind: string;
     label: string;
     address: number | null;
-    model: 'ssd1306' | 'si7021' | 'generic-i2c';
-    sensorPackage?: 'si7021-sensor';
+    model: string;
+    sensorPackage?: string;
+    sensorPackageTitle?: string;
+    sensorPackageSdkSchemaVersion?: number;
+    nativeControlTransport?: string | null;
+    controlChannels?: Array<{
+      id: string;
+      label: string;
+      unit: string;
+      renodeProperty: string;
+      minimum: number;
+      maximum: number;
+      step: number;
+    }>;
     nativeRenodeName?: string | null;
     nativeRenodePath?: string | null;
   }>;
@@ -185,6 +197,14 @@ type BusTransactionResult = {
 
 type NativeSensorControlRequest = {
   path: string;
+  sensorPackage?: string;
+  channels?: Array<{
+    id: string;
+    renodeProperty: string;
+    value: number;
+    minimum: number;
+    maximum: number;
+  }>;
   temperatureC?: number;
   humidityPercent?: number;
 };
@@ -193,6 +213,7 @@ type NativeSensorControlResult = {
   success: boolean;
   message?: string;
   values?: {
+    [channelId: string]: number | null | undefined;
     temperatureC?: number | null;
     humidityPercent?: number | null;
   };
@@ -232,7 +253,17 @@ type LocalProjectDocument = {
     catalogVersion: number;
     kinds: string[];
   };
+  componentPackageSdk?: {
+    schemaVersion: number;
+    catalogVersion: number;
+    kinds: string[];
+  };
   sensorPackages?: {
+    schemaVersion: number;
+    catalogVersion: number;
+    kinds: string[];
+  };
+  sensorPackageSdk?: {
     schemaVersion: number;
     catalogVersion: number;
     kinds: string[];
@@ -437,6 +468,12 @@ type RuntimeEvent =
       type: 'sensor';
       status?: 'updated' | 'error';
       path?: string;
+      sensorPackage?: string;
+      values?: {
+        [channelId: string]: number | null | undefined;
+        temperatureC?: number | null;
+        humidityPercent?: number | null;
+      };
       temperatureC?: number | null;
       humidityPercent?: number | null;
       message?: string;
