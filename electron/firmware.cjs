@@ -1,3 +1,10 @@
+/**
+ * CommonJS firmware helper mirror for Electron/runtime scripts.
+ *
+ * The renderer-side generators live in TypeScript. Runtime and smoke scripts
+ * sometimes need the same default startup/linker/build metadata from Node, so
+ * this file provides the CommonJS-compatible pieces.
+ */
 const PORT_BASE_ADDRESS = 0x58020000;
 const PORT_STRIDE = 0x400;
 const GPIO_PORT_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K'];

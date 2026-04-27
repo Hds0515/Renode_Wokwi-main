@@ -1,3 +1,10 @@
+/**
+ * Digital electrical rule checker.
+ *
+ * Renode is not a SPICE simulator, so these rules model teaching-friendly
+ * digital constraints: VCC/GND presence, compatible pin roles, and common
+ * wiring mistakes.
+ */
 import { BoardSchema } from './boards';
 import {
   DemoBoardPad,

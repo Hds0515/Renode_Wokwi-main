@@ -1,3 +1,10 @@
+/**
+ * Board schema catalog.
+ *
+ * Board schemas keep board-specific decisions in one place: visible pads,
+ * teaching-friendly pinout, Renode platform path, compiler/linker settings,
+ * UART/I2C/SPI metadata, and board-top visual layout.
+ */
 import {
   DEFAULT_BOARD_RUNTIME,
   DEFAULT_GCC_ARGS,

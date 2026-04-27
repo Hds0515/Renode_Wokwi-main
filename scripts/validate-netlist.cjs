@@ -1,3 +1,8 @@
+/**
+ * Static validation for the Netlist/IR, package schemas, examples, and runtime
+ * sensor helpers. Run this after changing board schemas, component packages,
+ * sensor packages, or the visual wiring compiler.
+ */
 const fs = require('fs');
 const ts = require('typescript');
 

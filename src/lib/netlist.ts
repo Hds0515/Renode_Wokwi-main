@@ -1,3 +1,11 @@
+/**
+ * Circuit Netlist / IR compiler.
+ *
+ * The UI stores a wiring model that is convenient for dragging parts around.
+ * This module converts that visual wiring into a schema-versioned netlist,
+ * validates it, round-trips it for saved projects, and compiles it into Renode
+ * artifacts such as C source, board.repl, run.resc preview, and manifests.
+ */
 import { BoardSchema } from './boards';
 import {
   COMPONENT_PACKAGE_CATALOG_VERSION,
@@ -270,6 +278,13 @@ function createComponentInstanceFromDevice(device: ReturnType<typeof buildWorkbe
   };
 }
 
+/**
+ * Converts the drag-and-drop wiring model into the canonical project IR.
+ *
+ * Read this first when studying how visual operations become something Renode
+ * can consume. The function creates board/component nodes, GPIO/I2C/power nets,
+ * and metadata that later generators use for .repl, firmware, and manifests.
+ */
 export function createNetlistFromWiring(wiring: DemoWiring, board: BoardSchema): CircuitNetlist {
   const normalizedWiring = synchronizeWiringWires(wiring);
   const padById = new Map(getBoardPads(board).map((pad) => [pad.id, pad]));
@@ -715,6 +730,13 @@ export function summarizeNetlist(netlist: CircuitNetlist): NetlistSummary {
   };
 }
 
+/**
+ * Compiles the canonical Netlist/IR into all generated runtime artifacts.
+ *
+ * This is the boundary between editor data and simulation data: generated C
+ * source, board.repl, peripheral manifest, and run.resc preview all originate
+ * here. Electron later writes these strings to a temporary workspace.
+ */
 export function compileNetlistToRenodeArtifacts(options: {
   netlist: CircuitNetlist;
   board: BoardSchema;

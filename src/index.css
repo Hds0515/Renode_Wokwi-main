@@ -1,3 +1,9 @@
+/*
+ * Global renderer styles.
+ *
+ * Most UI styling is expressed as Tailwind classes in App.tsx. This file keeps
+ * only global base rules that should apply across the entire Electron renderer.
+ */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

@@ -1,3 +1,10 @@
+/**
+ * Main Electron renderer for the local Renode visualizer.
+ *
+ * This file owns the user workflow: board selection, visual wiring, generated
+ * or manual firmware, compilation, Renode launch, runtime events, and result
+ * visualization. Lower-level conversion and runtime helpers live in src/lib.
+ */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckCircle2,
@@ -939,6 +946,13 @@ function Ssd1306PreviewPanel({ state }: { state: Ssd1306State }) {
   );
 }
 
+/**
+ * Generic sensor control/read panel driven by Sensor Package SDK metadata.
+ *
+ * New bus sensors should normally add package/runtime metadata instead of
+ * creating a one-off React panel. This component reads channel definitions and
+ * renders controls for any compatible bus sensor device.
+ */
 function BusSensorRuntimePanel({
   devices,
   state,
@@ -3070,6 +3084,13 @@ function BoardTopView({
   );
 }
 
+/**
+ * Visual board workbench.
+ *
+ * This component renders the board, draggable components, endpoint handles, and
+ * connection affordances. It translates user gestures into wiring mutations but
+ * does not generate Renode files itself; the Netlist/IR layer handles that.
+ */
 function WiringWorkbench({
   board,
   wiring,
@@ -3717,6 +3738,13 @@ function WiringWorkbench({
   );
 }
 
+/**
+ * Top-level workflow coordinator for the desktop app.
+ *
+ * App.tsx owns UI state and calls window.localWokwi for trusted local actions:
+ * project save/load, firmware compilation, Renode launch, GPIO/UART/bus/sensor
+ * interactions, and debugger commands.
+ */
 export default function App() {
   const [activeTab, setActiveTab] = useState<EditorTab>('code');
   const [selectedBoardId, setSelectedBoardId] = useState(DEFAULT_BOARD.id);
@@ -4776,6 +4804,13 @@ export default function App() {
     appendLog(`Regenerated demo firmware from ${connectedButtons.length} button(s) and ${connectedLeds.length} output endpoint(s).`);
   }, [appendLog, connectedButtons.length, connectedLeds.length, generatedCode]);
 
+  /**
+   * Compiles the current code editor contents into firmware.elf.
+   *
+   * In generated mode the editor mirrors the auto-generated demo firmware. In
+   * manual mode the user's code is compiled with the selected board toolchain
+   * settings, matching the future Proteus-like "load your firmware" workflow.
+   */
   const compileFirmware = useCallback(async () => {
     if (!window.localWokwi) {
       appendLog('Electron preload API is unavailable.', 'warn');
@@ -4847,6 +4882,12 @@ export default function App() {
     blockingValidationErrors,
   ]);
 
+  /**
+   * Launches Renode for the current visual circuit.
+   *
+   * If no ELF is ready, compilation runs first. The generated Renode artifacts,
+   * manifests, and board profile are then passed to Electron's runtime service.
+   */
   const startSimulation = useCallback(async () => {
     if (!window.localWokwi) {
       appendLog('Electron preload API is unavailable.', 'warn');

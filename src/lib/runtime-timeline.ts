@@ -1,3 +1,10 @@
+/**
+ * Unified runtime event timeline.
+ *
+ * Electron emits GPIO, UART, I2C/SPI, sensor, and clock events in slightly
+ * different shapes. This module normalizes them for timeline panels, logic
+ * analysis, bus transaction views, OLED previews, and sensor controls.
+ */
 import type { BoardSchema } from './boards';
 import { getComponentPackage } from './component-packs';
 import type { DemoPeripheralTemplateKind } from './firmware';

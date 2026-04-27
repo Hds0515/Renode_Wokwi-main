@@ -1,3 +1,10 @@
+/**
+ * Example project catalog.
+ *
+ * Examples are saved-project snapshots generated from board schemas and
+ * peripheral templates. They give the control area quick starting points while
+ * exercising the same Netlist/IR path as user-created projects.
+ */
 import { BoardSchema, BOARD_SCHEMAS } from './boards';
 import {
   DemoPeripheral,

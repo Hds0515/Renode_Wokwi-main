@@ -1,3 +1,8 @@
+// Renode-side I2C transaction broker skeleton.
+//
+// The current app primarily uses Electron-side runtime bridges, but this plugin
+// shows the intended native-extension direction: capture bus transactions close
+// to Renode peripherals, normalize them, and stream them to the visualizer.
 using System;
 using System.Collections.Generic;
 using System.Linq;

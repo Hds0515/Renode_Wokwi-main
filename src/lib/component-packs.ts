@@ -1,3 +1,10 @@
+/**
+ * Component package schema.
+ *
+ * Component packages describe reusable visual parts: pins, endpoint roles,
+ * runtime adapters, firmware expectations, and result panels. This keeps common
+ * parts data-driven instead of hard-coded directly in App.tsx.
+ */
 import {
   DEMO_PERIPHERAL_TEMPLATES,
   DemoPeripheralBehavior,

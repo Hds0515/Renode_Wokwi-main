@@ -1,3 +1,8 @@
+// Local Wokwi Broker plugin transport helpers.
+//
+// This skeleton is intentionally small so it can be adapted to the exact Renode
+// plugin API version in use. It emits JSON lines that mirror the runtime event
+// stream consumed by the Electron/React visualizer.
 using System;
 using System.IO;
 using System.Linq;

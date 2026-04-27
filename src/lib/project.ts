@@ -26,6 +26,13 @@ import {
   COMPONENT_PACKAGE_SCHEMA_VERSION,
   COMPONENT_PACKAGES,
 } from './component-packs';
+/**
+ * Project save/load serializer.
+ *
+ * Saved projects preserve visual wiring, generated/manual code mode, board
+ * identity, package catalog versions, and layout state. Keeping the disk format
+ * here makes future schema migrations easier to reason about.
+ */
 import {
   SENSOR_PACKAGE_CATALOG_VERSION,
   SENSOR_PACKAGE_SDK_CATALOG_VERSION,

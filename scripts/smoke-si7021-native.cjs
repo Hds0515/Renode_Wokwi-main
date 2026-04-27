@@ -1,3 +1,9 @@
+/**
+ * End-to-end SI7021 native Renode sensor smoke test.
+ *
+ * It compiles generated firmware, launches Renode, updates the native sensor
+ * through the runtime bridge, and verifies the MCU can read it via I2C/UART.
+ */
 const fs = require('fs');
 const ts = require('typescript');
 

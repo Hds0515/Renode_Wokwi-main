@@ -18,6 +18,12 @@ require.extensions['.ts'] = (module, filename) => {
 
 const { ACTIVE_BOARD_SCHEMA } = require('../src/lib/boards.ts');
 const { DEFAULT_STARTUP_SOURCE } = require('../src/lib/firmware.ts');
+/**
+ * Signal Broker bridge smoke test.
+ *
+ * Use this after changing GPIO bridge or signal manifest code to verify that
+ * visual endpoint state can flow through the runtime event stream.
+ */
 const {
   compileNetlistToRenodeArtifacts,
   validateNetlist,

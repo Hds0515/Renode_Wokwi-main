@@ -17,6 +17,12 @@ require.extensions['.ts'] = (module, filename) => {
 
 const { ACTIVE_BOARD_SCHEMA } = require('../src/lib/boards.ts');
 const { DEFAULT_STARTUP_SOURCE } = require('../src/lib/firmware.ts');
+/**
+ * I2C demo smoke test.
+ *
+ * This validates the generated I2C demo path and bus transaction visualization
+ * helpers before adding more complex bus-connected components.
+ */
 const {
   compileNetlistToRenodeArtifacts,
   validateNetlist,

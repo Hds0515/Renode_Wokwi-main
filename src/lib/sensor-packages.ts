@@ -1,3 +1,10 @@
+/**
+ * Sensor package schema.
+ *
+ * A sensor package maps one visual component to firmware-facing protocol
+ * metadata, Renode-native peripheral metadata, and UI/runtime control channels.
+ * SI7021/SI70xx is the first concrete package and the pattern for new sensors.
+ */
 export const SENSOR_PACKAGE_SCHEMA_VERSION = 1;
 export const SENSOR_PACKAGE_CATALOG_VERSION = 1;
 export const SENSOR_PACKAGE_SDK_SCHEMA_VERSION = 2;

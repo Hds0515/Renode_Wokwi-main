@@ -1,3 +1,10 @@
+/**
+ * Board, peripheral, and firmware generation primitives.
+ *
+ * This is the "teaching compiler" for the demo workbench. It defines selectable
+ * pads, reusable peripheral templates, generated C firmware, generated Renode
+ * .repl snippets, and .resc launch previews.
+ */
 import {
   buildRenodeSensorPath,
   buildRenodeSensorPeripheralName,
@@ -1805,6 +1812,13 @@ export function buildWiresFromPeripherals(wiring: DemoWiring): DemoWire[] {
     .filter((wire): wire is DemoWire => Boolean(wire));
 }
 
+/**
+ * Rebuilds wire records from peripheral endpoint bindings.
+ *
+ * The UI stores per-peripheral endpoint selections as the source of truth; wire
+ * rows are synchronized views of that data so saved projects and validation do
+ * not drift apart.
+ */
 export function synchronizeWiringWires(wiring: DemoWiring): DemoWiring {
   return {
     ...wiring,
@@ -1899,6 +1913,11 @@ function resolvePeripheralPin(
   return resolveMcuPin(pad.mcuPinId!, runtime);
 }
 
+/**
+ * Builds the runtime manifest that tells Electron/Renode which visual endpoints
+ * exist and which MCU pads they map to. GPIO bridge and monitor panels rely on
+ * this manifest rather than re-reading React-only state.
+ */
 export function buildPeripheralManifest(
   wiring: DemoWiring,
   runtime: DemoBoardRuntime = DEFAULT_BOARD_RUNTIME,
@@ -2864,6 +2883,13 @@ export const DEFAULT_BOARD_RUNTIME: DemoBoardRuntime = {
 
 export const DEFAULT_MAIN_SOURCE = generateDemoMainSource(DEFAULT_DEMO_WIRING, DEFAULT_BOARD_RUNTIME);
 
+/**
+ * Generates the default demo firmware used when the editor is in generated mode.
+ *
+ * This firmware configures GPIO, optional I2C sensor reads, UART logging, blink
+ * behavior, and mirror-input behavior from the visual wiring. User-supplied
+ * ELF/HEX support should bypass this path.
+ */
 export function generateDemoMainSource(
   wiring: DemoWiring,
   runtime: DemoBoardRuntime = DEFAULT_BOARD_RUNTIME,
@@ -3080,6 +3106,13 @@ ${hasDemoTicker ? '        demo_tick++;' : ''}
 `;
 }
 
+/**
+ * Generates the Renode platform overlay for user-wired peripherals.
+ *
+ * Board schemas point to Renode's real board/platform file. This overlay adds
+ * the visual workbench peripherals, GPIO connections, and native I2C sensors
+ * that the user created on the canvas.
+ */
 export function generateBoardRepl(
   wiring: DemoWiring,
   runtime: DemoBoardRuntime = DEFAULT_BOARD_RUNTIME,
@@ -3141,6 +3174,13 @@ export function generateBoardRepl(
   ].join('\n');
 }
 
+/**
+ * Creates the Renode script preview for the selected board and compiled ELF.
+ *
+ * runtime.cjs writes the concrete run.resc when launching so it can inject
+ * dynamic ports, but this preview keeps the UI transparent about what Renode
+ * will roughly execute.
+ */
 export function generateRescPreview(options: {
   elfPath: string | null;
   gdbPort: number;

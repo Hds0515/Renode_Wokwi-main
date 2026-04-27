@@ -1,3 +1,10 @@
+/**
+ * Reusable runtime adapter for bus-connected sensors.
+ *
+ * Runtime bus manifests describe which sensor packages are connected to which
+ * bus. This module turns that manifest into UI state, native Renode control
+ * requests, and transaction read/parse helpers. SI70xx is the first codec.
+ */
 import type { RuntimeBusManifestEntry, RuntimeBusTimelineEvent } from './runtime-timeline';
 import {
   getSensorPackageSdk,

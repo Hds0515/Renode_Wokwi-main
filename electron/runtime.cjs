@@ -1,3 +1,11 @@
+/**
+ * Electron main-process runtime facade around local toolchains and Renode.
+ *
+ * The renderer never spawns compilers or Renode directly. IPC calls land here:
+ * this file writes build workspaces, invokes arm-none-eabi-gcc, starts Renode,
+ * opens UART / external-control / transaction broker bridges, and emits
+ * normalized runtime events back to the React UI.
+ */
 const { EventEmitter } = require('events');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -1320,6 +1328,13 @@ function createRuntimeService(options = {}) {
     }
   }
 
+  /**
+   * Writes generated/manual C sources to a temporary workspace and invokes GCC.
+   *
+   * This is where the project gets its real MCU firmware artifact. Renode later
+   * loads the resulting firmware.elf, so generated demo code and future
+   * user-authored code both converge on this step.
+   */
   async function compileFirmware(request) {
     const tooling = await getTooling();
     if (!tooling.gcc.found || !tooling.gcc.path) {
@@ -1398,6 +1413,12 @@ function createRuntimeService(options = {}) {
     }
   }
 
+  /**
+   * Starts Renode with the generated board.repl, run.resc, and compiled ELF.
+   *
+   * The method also creates the local bridge endpoints used by the UI: external
+   * control for GPIO, UART socket terminal, GDB server, and transaction broker.
+   */
   async function startSimulation(request) {
     if (state.renodeProcess) {
       return {
@@ -1561,6 +1582,12 @@ function createRuntimeService(options = {}) {
     }
   }
 
+  /**
+   * Sends a user interaction, such as pressing a visual button, into Renode.
+   *
+   * The UI identifies the visual peripheral; the manifest resolves that to the
+   * MCU pad or signal exposed by Renode's external control bridge.
+   */
   async function sendPeripheralEvent(request) {
     if (!state.bridgeClient) {
       return {
@@ -1627,6 +1654,12 @@ function createRuntimeService(options = {}) {
     }
   }
 
+  /**
+   * Updates a Renode-native sensor peripheral through the monitor interface.
+   *
+   * This keeps sensor data inside the Renode model while letting the UI expose
+   * friendly sliders/inputs for values such as temperature and humidity.
+   */
   async function setNativeSensor(request) {
     if (!state.renodeProcess || !state.monitorPort) {
       return {
@@ -1706,6 +1739,13 @@ function createRuntimeService(options = {}) {
     }
   }
 
+  /**
+   * Emits a normalized bus transaction into the runtime event stream.
+   *
+   * The current transaction broker is intentionally lightweight: it visualizes
+   * and decodes bus activity for panels, while native Renode peripherals still
+   * perform the actual MCU-facing device behavior.
+   */
   async function sendBusTransaction(request) {
     const protocol = normalizeProtocol(request?.protocol);
     if (!protocol) {

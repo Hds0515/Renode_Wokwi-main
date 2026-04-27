@@ -1,3 +1,10 @@
+/**
+ * Signal Broker schema helpers.
+ *
+ * The signal broker manifest is the UI/runtime contract for GPIO-level state:
+ * which visual endpoint maps to which MCU pad, what direction it uses, and how
+ * events should be named for monitors and analyzers.
+ */
 import { CircuitNetlist } from './netlist';
 import type { SimulationClockSnapshot } from './runtime-timeline';
 

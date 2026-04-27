@@ -1,3 +1,10 @@
+/**
+ * SSD1306 OLED frame helpers.
+ *
+ * The runtime receives byte-oriented I2C transaction data, but the UI wants a
+ * pixel grid preview. This module decodes SSD1306 commands/data into compact
+ * display state for the OLED panel.
+ */
 import type { RuntimeBusTimelineEvent } from './runtime-timeline';
 
 export const SSD1306_WIDTH = 128;

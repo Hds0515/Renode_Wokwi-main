@@ -1,3 +1,9 @@
+/**
+ * Electron application entry point.
+ *
+ * This file creates the browser window, wires IPC channels to runtime.cjs, and
+ * keeps file-dialog based project save/load in the trusted main process.
+ */
 const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');

@@ -1,3 +1,10 @@
+/**
+ * Shared renderer/main-process type declarations.
+ *
+ * Electron's preload bridge exposes window.localWokwi to React. This file keeps
+ * that API typed from the renderer side so IPC request/response shapes remain
+ * discoverable while reading App.tsx.
+ */
 export {};
 
 type SimulationClockSnapshot = {

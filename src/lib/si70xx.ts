@@ -22,6 +22,13 @@ export type Si70xxState = {
   transactionCount: number;
 };
 
+/**
+ * SI70xx protocol helpers.
+ *
+ * These helpers encode and decode SI7021/SI70xx-style temperature/humidity
+ * values. Validation scripts and the reusable Bus Sensor Runtime share this
+ * protocol behavior.
+ */
 export type Si70xxMeasurementKind = 'temperature' | 'humidity';
 
 export type Si70xxBrokerTransaction = {

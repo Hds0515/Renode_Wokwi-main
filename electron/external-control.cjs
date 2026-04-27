@@ -1,3 +1,10 @@
+/**
+ * Minimal Renode External Control client.
+ *
+ * Renode's external control server is used as the GPIO/signal bridge. This
+ * client wraps the socket protocol enough for the runtime to subscribe to
+ * changes and push input states without leaking protocol details into App.tsx.
+ */
 const net = require('net');
 
 const RETURN_CODE = {

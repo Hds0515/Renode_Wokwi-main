@@ -1,3 +1,10 @@
+/**
+ * Safe IPC bridge exposed to the React renderer.
+ *
+ * contextIsolation is enabled, so the renderer cannot import Electron APIs
+ * directly. This whitelist is the only surface App.tsx uses to compile, launch
+ * Renode, control peripherals, exchange UART/bus data, and save/load projects.
+ */
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('localWokwi', {

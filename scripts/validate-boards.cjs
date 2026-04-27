@@ -1,3 +1,9 @@
+/**
+ * Board-level smoke validator.
+ *
+ * This script checks that each board schema can generate valid wiring,
+ * firmware, Renode artifacts, and runtime manifests without opening the UI.
+ */
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');

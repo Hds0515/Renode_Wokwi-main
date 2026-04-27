@@ -2,6 +2,8 @@
 
 `Renode Local Visualizer` is a local-only desktop MVP for MCU simulation.
 
+If you are studying the implementation, start with [docs/source-code-guide.md](docs/source-code-guide.md).
+
 It keeps the visual workflow from the original prototype, but moves execution into a local Electron shell:
 
 - Wokwi-like wiring UX: common pads first, full pinout on demand

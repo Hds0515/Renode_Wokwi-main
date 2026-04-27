@@ -22,6 +22,12 @@ const {
   DEFAULT_STARTUP_SOURCE,
   DEFAULT_DEMO_WIRING,
 } = require('../src/lib/firmware.ts');
+/**
+ * General local runtime smoke test.
+ *
+ * This exercises the generated firmware, Renode launch path, GPIO bridge, and
+ * UART/event plumbing without requiring the full Electron renderer.
+ */
 const {
   compileNetlistToRenodeArtifacts,
   createNetlistFromWiring,
