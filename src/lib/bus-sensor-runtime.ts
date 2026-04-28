@@ -1,9 +1,10 @@
 /**
  * Reusable runtime adapter for bus-connected sensors.
  *
- * Runtime bus manifests describe which sensor packages are connected to which
- * bus. This module turns that manifest into UI state, native Renode control
- * requests, and transaction read/parse helpers. SI70xx is the first codec.
+ * Protocol Runtime Registry v1 now owns protocol-level discovery. This module
+ * remains the sensor-specific runtime layer: it consumes registry sensor
+ * devices, manages channel state, creates native Renode control requests, and
+ * decodes sensor transactions. SI70xx is the first codec.
  */
 import type { RuntimeBusManifestEntry, RuntimeBusTimelineEvent } from './runtime-timeline';
 import {
@@ -11,6 +12,11 @@ import {
   isSensorPackageKind,
 } from './sensor-packages';
 import type { SensorChannelKind, SensorPackageKind, SensorPackageSdk, SensorPackageSdkChannel } from './sensor-packages';
+import {
+  createProtocolRuntimeRegistry,
+  getProtocolRuntimeSensorDevices,
+} from './protocol-runtime-registry';
+import type { ProtocolRuntimeDevice, ProtocolRuntimeRegistry } from './protocol-runtime-registry';
 import {
   SI7021_DEFAULT_ADDRESS,
   applySi70xxTransaction,
@@ -21,10 +27,24 @@ import type { Si70xxMeasurementKind, Si70xxState } from './si70xx';
 
 export const BUS_SENSOR_RUNTIME_SCHEMA_VERSION = 1;
 
-export type RuntimeBusSensorDevice = NonNullable<RuntimeBusManifestEntry['devices']>[number] & {
+export type RuntimeBusSensorDevice = {
+  id: string;
+  componentId: string;
+  componentKind: string | null;
+  devicePackageKind?: string | null;
+  devicePackageSchemaVersion?: number | null;
+  label: string;
+  address: number | null;
+  model: string;
+  sensorPackage: SensorPackageKind;
+  sensorPackageTitle?: string;
+  sensorPackageSdkSchemaVersion?: number;
+  nativeControlTransport?: string | null;
+  controlChannels?: ProtocolRuntimeDevice['controlChannels'];
+  nativeRenodeName?: string | null;
+  nativeRenodePath?: string | null;
   busId: string;
   busLabel: string;
-  sensorPackage: SensorPackageKind;
   package: SensorPackageSdk;
   channels: readonly SensorPackageSdkChannel[];
 };
@@ -89,6 +109,42 @@ export type BusSensorBrokerTransaction = {
   data: number[];
 };
 
+/**
+ * Narrows the generic protocol runtime device into a sensor runtime device.
+ * Sensor panels need SDK channels and codec metadata, so this adapter is the
+ * bridge from "I2C device discovered" to "render sliders and decode reads".
+ */
+function createRuntimeSensorDevice(device: ProtocolRuntimeDevice): RuntimeBusSensorDevice[] {
+  if (device.protocol !== 'i2c' || !isSensorPackageKind(device.sensorPackage)) {
+    return [];
+  }
+
+  const sensorPackage = getSensorPackageSdk(device.sensorPackage);
+  return [
+    {
+      id: device.id,
+      componentId: device.componentId ?? device.id,
+      componentKind: device.componentKind,
+      devicePackageKind: device.devicePackageKind,
+      devicePackageSchemaVersion: device.devicePackageSchemaVersion,
+      label: device.label,
+      address: device.address,
+      model: device.model,
+      sensorPackage: device.sensorPackage,
+      sensorPackageTitle: device.sensorPackageTitle,
+      sensorPackageSdkSchemaVersion: device.sensorPackageSdkSchemaVersion,
+      nativeControlTransport: device.nativeControlTransport,
+      controlChannels: device.controlChannels,
+      nativeRenodeName: device.nativeRenodeName,
+      nativeRenodePath: device.nativeRenodePath,
+      busId: device.busId ?? 'i2c:visual',
+      busLabel: device.busLabel ?? 'I2C Visual Bus',
+      package: sensorPackage,
+      channels: sensorPackage.channels,
+    },
+  ];
+}
+
 function clamp(value: number, min: number, max: number): number {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue)) {
@@ -113,6 +169,8 @@ function createChannelState(channel: SensorPackageSdkChannel): BusSensorRuntimeC
 }
 
 function createProtocolState(device: RuntimeBusSensorDevice): Si70xxState | null {
+  // Each sensor codec owns protocol-specific rolling state. More codecs can add
+  // their own state objects here without changing the React panel contract.
   if (device.package.busRuntime.transactionCodec !== 'si70xx-compatible') {
     return null;
   }
@@ -138,28 +196,19 @@ function createDeviceState(device: RuntimeBusSensorDevice): BusSensorRuntimeDevi
 }
 
 export function getBusSensorRuntimeDevices(busManifest: readonly RuntimeBusManifestEntry[]): RuntimeBusSensorDevice[] {
-  return busManifest.flatMap((entry) => {
-    if (entry.protocol !== 'i2c' || !Array.isArray(entry.devices)) {
-      return [];
-    }
+  // Backward-compatible API for existing scripts/tests. New code should usually
+  // build ProtocolRuntimeRegistry once and call getBusSensorRuntimeDevicesFromProtocolRegistry.
+  return getBusSensorRuntimeDevicesFromProtocolRegistry(
+    createProtocolRuntimeRegistry({
+      busManifest,
+    })
+  );
+}
 
-    return entry.devices.flatMap((device): RuntimeBusSensorDevice[] => {
-      if (!isSensorPackageKind(device.sensorPackage)) {
-        return [];
-      }
-      const sensorPackage = getSensorPackageSdk(device.sensorPackage);
-      return [
-        {
-          ...device,
-          busId: entry.id,
-          busLabel: entry.label,
-          sensorPackage: device.sensorPackage,
-          package: sensorPackage,
-          channels: sensorPackage.channels,
-        },
-      ];
-    });
-  });
+export function getBusSensorRuntimeDevicesFromProtocolRegistry(
+  registry: ProtocolRuntimeRegistry
+): RuntimeBusSensorDevice[] {
+  return getProtocolRuntimeSensorDevices(registry).flatMap((device) => createRuntimeSensorDevice(device));
 }
 
 export function createBusSensorRuntimeState(devices: readonly RuntimeBusSensorDevice[] = []): BusSensorRuntimeState {
@@ -173,6 +222,8 @@ export function syncBusSensorRuntimeDevices(
   state: BusSensorRuntimeState,
   devices: readonly RuntimeBusSensorDevice[]
 ): BusSensorRuntimeState {
+  // Preserve user-configured channel values when the wiring changes but the
+  // same sensor device still exists in the regenerated manifest.
   const nextDevices = Object.fromEntries(
     devices.map((device) => {
       const fresh = createDeviceState(device);
@@ -250,6 +301,9 @@ export function createNativeSensorControlRequest(
   device: RuntimeBusSensorDevice,
   state: BusSensorRuntimeDeviceState
 ): NativeSensorControlRequestPayload | null {
+  // Native Renode sensors are controlled through monitor properties. Devices
+  // without a native path can still emit timeline transactions, but cannot push
+  // values into Renode's C# model.
   if (!device.nativeRenodePath) {
     return null;
   }
@@ -340,6 +394,9 @@ export function applyBusSensorRuntimeEvent(
   event: RuntimeBusTimelineEvent,
   devices: readonly RuntimeBusSensorDevice[]
 ): BusSensorRuntimeState {
+  // This is the runtime decode point. A bus transaction arrives from Electron,
+  // the registry tells us which sensor it belongs to, and the codec updates the
+  // visual channel readouts.
   if (event.protocol !== 'i2c' || event.kind !== 'bus-transaction') {
     return state;
   }
@@ -372,6 +429,8 @@ export function createBusSensorReadTransactions(
   state: BusSensorRuntimeDeviceState,
   channelId: string
 ): BusSensorBrokerTransaction[] {
+  // UI-triggered reads are timeline/demo helpers. Real MCU reads still happen
+  // inside Renode through the generated/user firmware and native sensor model.
   if (device.package.busRuntime.transactionCodec !== 'si70xx-compatible') {
     return [];
   }

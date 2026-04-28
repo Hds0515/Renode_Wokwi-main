@@ -75,6 +75,11 @@ export type RuntimeBusDeviceManifestEntry = {
   nativeRenodePath?: string | null;
 };
 
+/**
+ * Runtime bus manifest is the bridge between generated Renode topology and UI
+ * protocol tooling. It says which UART/I2C/SPI buses exist, which endpoints are
+ * visible, and which package-backed devices are attached to each bus.
+ */
 export type RuntimeBusManifestEntry = {
   schemaVersion: typeof RUNTIME_TIMELINE_SCHEMA_VERSION;
   id: string;
@@ -305,6 +310,9 @@ function collectBusManifestEntries(
 }
 
 function collectI2cDevicesFromNetlist(board: BoardSchema, netlist: CircuitNetlist | null | undefined): Map<string, RuntimeBusDeviceManifestEntry[]> {
+  // Device Package metadata tells us "what" the component is; the Netlist tells
+  // us "where" it is wired. This pass combines both to place I2C devices onto
+  // the correct runtime bus and expose Renode/native sensor metadata to panels.
   const devicesByBusId = new Map<string, RuntimeBusDeviceManifestEntry[]>();
   if (!netlist) {
     return devicesByBusId;
@@ -377,6 +385,9 @@ function collectI2cDevicesFromNetlist(board: BoardSchema, netlist: CircuitNetlis
 }
 
 export function createRuntimeBusManifest(board: BoardSchema, netlist?: CircuitNetlist | null): RuntimeBusManifestEntry[] {
+  // The manifest includes active board services like UART and planned protocol
+  // buses discovered from teaching pins. Package-backed devices are then
+  // attached to the matching bus entry.
   const devicesByBusId = collectI2cDevicesFromNetlist(board, netlist);
   const entries = [
     createUartManifestEntry(board),
@@ -433,6 +444,8 @@ export function recordRuntimeTimelineEvent(
   event: RuntimeTimelineEvent,
   limit = DEFAULT_RUNTIME_TIMELINE_EVENT_LIMIT
 ): RuntimeTimelineState {
+  // Timeline reducers are append-only and bounded so high-frequency protocol
+  // traffic remains visible without letting the renderer memory grow forever.
   const protocolCounts = {
     ...state.protocolCounts,
     [event.protocol]: (state.protocolCounts[event.protocol] ?? 0) + 1,

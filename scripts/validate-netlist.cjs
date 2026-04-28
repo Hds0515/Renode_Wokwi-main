@@ -94,6 +94,12 @@ const {
   getEventParsersForPackage,
   getRuntimePanelsForPackage,
 } = require('../src/lib/device-runtime-registry.ts');
+const {
+  PROTOCOL_RUNTIME_REGISTRY_SCHEMA_VERSION,
+  createProtocolRuntimeRegistry,
+  getProtocolRuntimeDevicesByModel,
+  getProtocolRuntimeSensorDevices,
+} = require('../src/lib/protocol-runtime-registry.ts');
 const { validateWiringRules } = require('../src/lib/firmware.ts');
 
 function connectedPairs(wiring) {
@@ -278,11 +284,18 @@ function validateProjectExample(example) {
   const signalSummary = summarizeSignalBroker(signalState);
   const busManifest = createRuntimeBusManifest(board, project.netlist);
   const deviceRuntimeRegistry = buildDeviceRuntimeRegistryManifest({ board, netlist: project.netlist, busManifest });
+  const protocolRuntimeRegistry = createProtocolRuntimeRegistry({ board, busManifest, signalDefinitions });
   const timelineState = createRuntimeTimelineState(1000);
   const busSensorDevices = getBusSensorRuntimeDevices(busManifest);
   const busSensorState = createBusSensorRuntimeState(busSensorDevices);
   assert(deviceRuntimeRegistry.schemaVersion === DEVICE_RUNTIME_REGISTRY_SCHEMA_VERSION, `${example.id} Device Runtime Registry should use schema v1.`);
   assert(deviceRuntimeRegistry.entries.some((entry) => entry.packageKind === 'uart-terminal'), `${example.id} should include the board UART terminal virtual instrument package.`);
+  assert(protocolRuntimeRegistry.schemaVersion === PROTOCOL_RUNTIME_REGISTRY_SCHEMA_VERSION, `${example.id} Protocol Runtime Registry should use schema v1.`);
+  assert(protocolRuntimeRegistry.summary.busCount === busManifest.length, `${example.id} Protocol Runtime Registry bus count should match the bus manifest.`);
+  assert(
+    protocolRuntimeRegistry.devices.some((device) => device.protocol === 'uart' && device.role === 'instrument'),
+    `${example.id} Protocol Runtime Registry should expose the UART terminal instrument.`
+  );
   project.netlist.components
     .filter((component) => component.kind !== 'board')
     .forEach((component) => {
@@ -307,6 +320,10 @@ function validateProjectExample(example) {
   if (gpioNetCount > 0) {
     assert(signalSummary.inputCount > 0, `${example.id} should expose at least one input signal.`);
     assert(signalSummary.outputCount > 0, `${example.id} should expose at least one output signal.`);
+    assert(
+      protocolRuntimeRegistry.summary.gpioSignalCount === gpioNetCount,
+      `${example.id} Protocol Runtime Registry GPIO signal count should match GPIO net count.`
+    );
   }
   const timelineClock = {
     schemaVersion: 1,
@@ -321,11 +338,19 @@ function validateProjectExample(example) {
   };
   if (project.netlist.components.some((component) => component.kind === 'ssd1306-oled')) {
     assert(
+      getProtocolRuntimeDevicesByModel(protocolRuntimeRegistry, 'ssd1306', 'i2c').length > 0,
+      `${example.id} Protocol Runtime Registry should expose SSD1306 as an I2C display device.`
+    );
+    assert(
       busManifest.some((entry) => entry.protocol === 'i2c' && Array.isArray(entry.devices) && entry.devices.some((device) => device.model === 'ssd1306')),
       `${example.id} should expose an SSD1306 device in the I2C bus manifest.`
     );
   }
   if (project.netlist.components.some((component) => component.kind === 'si7021-sensor')) {
+    assert(
+      getProtocolRuntimeSensorDevices(protocolRuntimeRegistry).some((device) => device.model === 'si7021'),
+      `${example.id} Protocol Runtime Registry should expose SI7021 as an I2C sensor device.`
+    );
     const sensorBus = busManifest.find((entry) => entry.protocol === 'i2c' && Array.isArray(entry.devices) && entry.devices.some((device) => device.model === 'si7021'));
     assert(sensorBus, `${example.id} should expose an SI7021 device in the I2C bus manifest.`);
     assert(artifacts.boardRepl.includes('Sensors.SI70xx'), `${example.id} should attach the SI7021 as a native Renode sensor.`);

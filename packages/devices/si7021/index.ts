@@ -1,5 +1,12 @@
 import type { DevicePackageSource } from '../../../src/lib/device-package-types';
 
+/**
+ * Independent Device Package source for SI7021.
+ *
+ * The compiler turns this descriptor into the runtime catalog entry used by the
+ * visual library, Netlist metadata, native Renode sensor attachment, and generic
+ * sensor control panel.
+ */
 export const SI7021_DEVICE_PACKAGE_SOURCE = {
   source: {
     packagePath: 'packages/devices/si7021',

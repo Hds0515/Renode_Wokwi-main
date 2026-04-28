@@ -312,6 +312,8 @@ function createComponentInstanceFromDevice(device: ReturnType<typeof buildWorkbe
  * and metadata that later generators use for .repl, firmware, and manifests.
  */
 export function createNetlistFromWiring(wiring: DemoWiring, board: BoardSchema): CircuitNetlist {
+  // UI wiring can contain stale derived wires after drag/delete operations.
+  // Normalize first so every downstream compiler sees one canonical graph.
   const normalizedWiring = synchronizeWiringWires(wiring);
   const padById = new Map(getBoardPads(board).map((pad) => [pad.id, pad]));
   const exposedPadIds = new Set(
@@ -336,6 +338,8 @@ export function createNetlistFromWiring(wiring: DemoWiring, board: BoardSchema):
       const pinFunction = pad ? resolvePinFunctionForEndpoint(pad, endpoint) : null;
 
       return {
+        // One routed endpoint becomes one logical net. Multi-endpoint devices
+        // such as RGB LEDs, OLEDs, and sensors therefore produce multiple nets.
         id: `net:${peripheral.id}:${endpointId}`,
         kind: peripheral.kind === 'i2c' ? 'i2c' : 'gpio',
         label: `${peripheral.label} ${peripheral.endpointLabel ?? endpointId}`,
@@ -369,6 +373,8 @@ export function createNetlistFromWiring(wiring: DemoWiring, board: BoardSchema):
       };
     });
   const powerNets = buildWorkbenchDevices(normalizedWiring).flatMap((device): CircuitNet[] => {
+    // Power rails are modeled as digital rule-checking nets. They do not become
+    // SPICE-style analog supplies, but they keep the visual circuit honest.
     const power = getPeripheralPowerBinding(device.members[0]);
     const nets: CircuitNet[] = [];
     if (power.vccPadId) {
@@ -775,6 +781,9 @@ export function compileNetlistToRenodeArtifacts(options: {
   bridgePort?: number;
   uartPort?: number | null;
 }): NetlistRenodeArtifacts {
+  // Renode artifact generation still consumes the legacy wiring shape because
+  // firmware.ts owns board-specific C/.repl generation today. Keeping the
+  // conversion here isolates that compatibility layer from the rest of the app.
   const boardPads = getBoardPads(options.board);
   const wiring = createWiringFromNetlist(options.netlist);
 

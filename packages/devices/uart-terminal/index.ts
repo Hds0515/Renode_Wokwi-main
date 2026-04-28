@@ -1,5 +1,12 @@
 import type { DevicePackageSource } from '../../../src/lib/device-package-types';
 
+/**
+ * Independent Device Package source for the board UART terminal.
+ *
+ * This package is a virtual instrument rather than a dragged component. It keeps
+ * UART terminal panels and event parsing in the same package system as sensors
+ * and displays.
+ */
 export const UART_TERMINAL_DEVICE_PACKAGE_SOURCE = {
   source: {
     packagePath: 'packages/devices/uart-terminal',

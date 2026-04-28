@@ -1,127 +1,266 @@
 # Source Code Learning Guide
 
-这份导览用于学习当前项目的代码结构。它不替代源码注释，而是告诉你应该按什么顺序读、每个文件解决什么问题、以及从“用户拖线”到“Renode 运行 ELF”的链路在哪里。
+这份导览用于学习当前项目的代码结构。它不是完整 API 文档，也不替代源码注释，而是帮你建立一个稳定的阅读顺序：先看数据如何流动，再看每个模块负责哪一段，最后再去扩展新板型、新外设和新协议。
 
-## 1. 先建立整体流程
+## 1. 先记住主链路
 
-当前项目的主链路是：
+当前项目的核心链路是：
 
 ```text
-用户选择板型/拖入外设/连线
+用户选择板型、拖入外设、拖线到引脚
 -> React 维护 wiring 状态
--> Netlist/IR 编译器生成 CircuitNetlist
--> 生成 C 固件、board.repl、run.resc 预览、manifest
--> Electron 调用 ARM GCC 生成 firmware.elf
--> Electron 启动 Renode 并加载 ELF
--> Renode 通过 GPIO/UART/I2C/传感器事件回传状态
--> React 更新 LED、UART、逻辑分析仪、OLED、传感器面板
+-> createNetlistFromWiring() 生成 CircuitNetlist
+-> compileNetlistToRenodeArtifacts() 生成 main.c / board.repl / run.resc / manifests
+-> Electron compileFirmware() 调用 arm-none-eabi-gcc 生成 firmware.elf
+-> Electron startSimulation() 启动 Renode 并执行 sysbus LoadELF
+-> Renode 通过 GPIO/UART/I2C/SPI/传感器事件回传状态
+-> App.tsx 根据 manifest 和 runtime registry 更新 LED、UART、逻辑分析仪、OLED、传感器面板
 ```
 
-最重要的入口是：
+这条链路里最重要的思想是：前端不直接理解 Renode 细节，Renode 也不理解画布图形。中间靠 Netlist/IR、Device Package、Runtime Manifest 和 Protocol Runtime Registry 做翻译。
 
-- `src/App.tsx`: React 主界面和用户工作流。
-- `src/lib/netlist.ts`: 可视化连线到 Netlist/IR，再到 Renode artifacts。
-- `src/lib/firmware.ts`: 板子/外设模板、生成 C 固件、生成 `.repl/.resc`。
-- `packages/devices/*`: 独立 Device Package 源码包，SI7021、SSD1306、UART Terminal 已经迁移到这里。
-- `src/lib/device-package-compiler.ts`: Device Package Compiler v1，把独立包编译成运行时 catalog，并兼容尚未迁移的旧 component package。
-- `src/lib/device-packages.ts`: Device Package catalog 入口，负责汇总编译结果和提供查询 API。
-- `src/lib/device-runtime-registry.ts`: 根据 Device Package 自动生成运行时设备、面板和事件解析器描述。
-- `electron/runtime.cjs`: 本地编译、启动 Renode、桥接运行时事件。
-- `electron/preload.cjs`: 把安全 IPC API 暴露给前端。
+## 2. 代码分层
 
-## 2. 前端应该怎么读
-
-从 `src/App.tsx` 开始，但不要一口气从头读到尾。建议按功能块读：
-
-- 顶部 import 和类型定义：理解 UI 依赖哪些 schema、runtime helper。
-- `BusSensorRuntimePanel`: 学习传感器控制面板如何从 schema 自动渲染。
-- `DeviceRuntimePanelRenderer`: 学习运行时面板如何从 Device Package 的 `runtimePanel` 描述自动组合。
-- `WiringWorkbench`: 学习板图、外设、端点和连线手势如何组织。
-- `App`: 学习全局状态、保存/加载、编译、启动仿真、事件回调。
-- `compileFirmware` 和 `startSimulation`: 理解前端如何进入 Electron/Renode。
-
-关键思想：
-
-- React 只负责用户体验和状态展示。
-- React 不直接启动 Renode，也不直接读写本地文件。
-- 需要本地权限的事情都通过 `window.localWokwi` 进入 Electron。
-
-## 3. 连线如何变成 Renode 文件
-
-这条链路是项目的核心：
+建议按下面的层次理解项目：
 
 ```text
-App.tsx wiring
--> createNetlistFromWiring()
--> CircuitNetlist
--> compileNetlistToRenodeArtifacts()
--> main.c / board.repl / run.resc preview / manifests
+UI 工作流层
+src/App.tsx
+
+项目数据和电路 IR 层
+src/lib/project.ts
+src/lib/netlist.ts
+
+元件包和协议描述层
+packages/devices/*
+src/lib/device-package-types.ts
+src/lib/device-package-compiler.ts
+src/lib/device-packages.ts
+src/lib/component-packs.ts
+src/lib/sensor-packages.ts
+
+运行时发现和可视化层
+src/lib/signal-broker.ts
+src/lib/runtime-timeline.ts
+src/lib/protocol-runtime-registry.ts
+src/lib/device-runtime-registry.ts
+src/lib/bus-sensor-runtime.ts
+src/lib/ssd1306.ts
+src/lib/si70xx.ts
+
+本地执行层
+electron/main.cjs
+electron/preload.cjs
+electron/runtime.cjs
 ```
 
-对应文件：
+如果你第一次读，不要从 `App.tsx` 第一行一路读到底。先读这份文档，再按下面的入口逐个击破。
 
-- `src/lib/device-packages.ts`
-- `src/lib/device-package-compiler.ts`
-- `packages/devices/*`
-- `src/lib/device-runtime-registry.ts`
-- `src/lib/netlist.ts`
-- `src/lib/firmware.ts`
-- `src/lib/component-packs.ts`
-- `src/lib/sensor-packages.ts`
+## 3. 四个核心问题
 
-注意：当前项目不是“不需要 ELF”，而是默认会自动生成 C 代码并编译出 ELF。未来如果加入用户上传 ELF/HEX，这部分会变成可选路径。
+### 问题一：UI 中的线端连接，在哪里变成 Netlist?
 
-## 4. Electron 和 Renode 如何交互
+入口在 `src/App.tsx`：
 
-Electron 分三层：
+```ts
+const circuitNetlist = useMemo(() => createNetlistFromWiring(wiring, selectedBoard), [selectedBoard, wiring]);
+```
 
-- `electron/main.cjs`: Electron 窗口、菜单、IPC handler、文件保存/加载。
-- `electron/preload.cjs`: 安全桥，只暴露允许前端调用的方法。
-- `electron/runtime.cjs`: 真正执行本地动作。
+真正转换在 `src/lib/netlist.ts`：
 
-`runtime.cjs` 中最重要的方法：
+- `createNetlistFromWiring()`: 把 UI 的 `DemoWiring` 转成统一 `CircuitNetlist`。
+- `createBoardComponent()`: 把开发板可见引脚变成 board component。
+- `createComponentInstanceFromDevice()`: 把 LED、按钮、OLED、SI7021 等工作区元件变成 component。
+- `signalNets`: 把 GPIO/I2C 端点连接到 MCU pad。
+- `powerNets`: 把 VCC/GND 作为数字规则校验用的 power/ground net。
 
-- `compileFirmware`: 写入 `main.c/startup.c/linker.ld`，调用 `arm-none-eabi-gcc`，生成 `firmware.elf`。
-- `startSimulation`: 写入 `board.repl/run.resc`，启动 Renode，执行 `sysbus LoadELF`。
-- `sendPeripheralEvent`: 把前端按钮等交互送入 Renode GPIO bridge。
-- `setNativeSensor`: 通过 Renode monitor 修改原生传感器值。
-- `sendBusTransaction`: 把总线读写事件送入统一事件流。
+注意：这里的 VCC/GND 不是 SPICE 模拟电源，它们用于电气规则和可视化合理性校验。
 
-Renode 运行时事件再通过 `local-wokwi:event` 回到 `App.tsx`，前端据此刷新可视化面板。
+### 问题二：Netlist 在哪里生成 `.repl/.resc/main.c`?
 
-## 5. 板型、外设和传感器在哪里扩展
+入口在 `src/lib/netlist.ts`：
 
-新增板型：
+```ts
+compileNetlistToRenodeArtifacts()
+```
 
-- 改 `src/lib/boards.ts`。
-- 添加 board schema、可见引脚、Renode platform path、编译参数、UART/I2C/SPI 信息。
+它会把 `CircuitNetlist` 临时转回兼容的 wiring 结构，然后调用 `src/lib/firmware.ts` 里的生成器：
 
-新增普通外设：
+- `generateDemoMainSource()`: 生成默认 demo C 固件。
+- `generateBoardRepl()`: 生成 board.repl，挂载 GPIO、native Renode sensor、I2C 外设等。
+- `generateRescPreview()`: 生成 run.resc 预览。
+- `buildPeripheralManifest()`: 生成 GPIO bridge manifest。
 
-- 优先新增 `packages/devices/<device>/index.ts`，定义 `visual`、`pins`、`electricalRules`、`protocol`、`renodeBackend`、`runtimePanel`、`exampleFirmware`、`validationFixture`。
-- 如果还要兼容旧的拖入模板，再补 `src/lib/firmware.ts` 的外设模板和 `src/lib/component-packs.ts` 的组件包元数据。
-- 如需要电源/GND/端点规则，改 `src/lib/electrical-rules.ts`。
+当前项目仍默认自动生成 C 代码并编译 ELF。未来加入用户导入 ELF/HEX/BIN 时，这一段会变成可选路径，而不是消失。
 
-新增传感器：
+### 问题三：ELF 在哪里编译，Renode 在哪里 LoadELF?
 
-- 优先新增 `packages/devices/<sensor>/index.ts`，让前端元件库和运行时面板从 Device Package Compiler 读取。
-- 改 `src/lib/sensor-packages.ts`，定义传感器 package。
-- 如果协议类似 SI70xx，可参考 `src/lib/si70xx.ts`。
-- 如果要被通用面板控制，补 `src/lib/bus-sensor-runtime.ts` 的 runtime adapter/codec。
-- 如果要 MCU 真正读到数据，确保 `src/lib/firmware.ts` 生成相应 I2C/SPI/UART 固件逻辑，且 `.repl` 中挂载 Renode 原生外设或自定义 broker 外设。
+入口在 `src/App.tsx`：
 
-## 6. 验证脚本怎么读
+- `compileFirmware`: 前端发起编译请求。
+- `startSimulation`: 前端发起仿真请求。
+
+真正执行在 `electron/runtime.cjs`：
+
+- `compileFirmware()`: 写入 `main.c/startup.c/linker.ld`，调用 `arm-none-eabi-gcc`，生成 `firmware.elf`。
+- `startSimulation()`: 写入 `board.repl/run.resc`，启动 Renode 子进程。
+- `run.resc` 内部包含 `sysbus LoadELF @firmware.elf`。
+- 同时创建 ExternalControlServer、UART socket terminal、GDB server、Transaction Broker Bridge。
+
+这就是为什么当前项目“看起来不需要用户上传 ELF”：因为它会自动生成 demo C 代码并编译出 ELF。Proteus 里用户上传 HEX，本项目未来也应该支持用户导入固件模式。
+
+### 问题四：Renode 的运行事件在哪里回到前端并更新可视化?
+
+入口在 `electron/runtime.cjs`：
+
+- `emitSignal()`: 把 GPIO 状态变成 `signal` 事件。
+- `emitUart()` 和 `emitUartLineBuffered()`: 把 UART socket 输出变成 UART/timeline 事件。
+- `emitBusTransaction()`: 把 I2C/SPI/UART transaction 变成统一 timeline 事件。
+- `setNativeSensor()`: 通过 Renode monitor 修改 native sensor 的属性，例如温度和湿度。
+
+前端接收在 `src/App.tsx`：
+
+```ts
+window.localWokwi.onSimulationEvent(...)
+```
+
+之后分发到不同 reducer：
+
+- `recordSignalSample()`: 更新 GPIO Monitor 和 Logic Analyzer。
+- `recordRuntimeTimelineEvent()`: 更新统一时间线。
+- `applySsd1306Transaction()`: 把 I2C 数据解码成 OLED framebuffer。
+- `applyBusSensorRuntimeEvent()`: 把 I2C sensor transaction 解码成传感器读数。
+- `applyNativeSensorControlValues()`: 把 Renode native sensor 控制结果同步回 UI。
+
+## 4. Device Package 应该怎么读
+
+现在推荐从独立包开始读：
+
+- `packages/devices/si7021/index.ts`
+- `packages/devices/ssd1306/index.ts`
+- `packages/devices/uart-terminal/index.ts`
+
+每个 Device Package 主要描述八类信息：
+
+- `visual`: 元件在元件库和画布上的视觉信息。
+- `pins`: 元件暴露哪些端点，比如 SCL、SDA、VCC、GND。
+- `electricalRules`: 需要电源吗、支持哪些电压域、是否需要 I2C 成对连接。
+- `protocol`: 主协议和 transaction model，比如 `i2c`、`framebuffer-i2c`。
+- `renodeBackend`: 使用 signal broker、bus transaction broker、native Renode sensor，还是 virtual UART terminal。
+- `runtimePanel`: UI 应该组合哪些运行时面板和事件解析器。
+- `exampleFirmware`: 默认 demo 固件需要什么驱动。
+- `validationFixture`: 用哪个示例项目或 smoke test 验证这个包可复用。
+
+编译入口在 `src/lib/device-package-compiler.ts`：
+
+- `compileDevicePackageSource()`: 编译独立包。
+- `compileComponentDevicePackage()`: 兼容旧 component package。
+- `compileDevicePackageCatalog()`: 合并独立包和旧包，独立包优先。
+
+运行时 catalog 入口在 `src/lib/device-packages.ts`。
+
+## 5. Protocol Runtime Registry 应该怎么读
+
+`src/lib/protocol-runtime-registry.ts` 是后续扩展外设生态的关键。它解决的问题是：不要让 OLED、传感器、UART、SPI Flash 分别扫描 manifest，而是先按协议统一发现运行时设备。
+
+输入：
+
+- `RuntimeBusManifestEntry[]`: 来自 `createRuntimeBusManifest()`，负责 UART/I2C/SPI。
+- `SignalDefinition[]`: 来自 `createSignalDefinitionsFromNetlist()`，负责 GPIO。
+- `BoardSchema`: 当前板型信息。
+
+输出：
+
+- `ProtocolRuntimeRegistry`: 按 GPIO、UART、I2C、SPI 分组后的运行时视图。
+- `ProtocolRuntimeDevice`: 每个运行时设备的统一描述。
+- `ProtocolRuntimeBus`: 每条 UART/I2C/SPI 总线的统一描述。
+
+当前用法：
+
+- `getProtocolRuntimeDevicesByModel(registry, 'ssd1306', 'i2c')`: 找 OLED。
+- `getBusSensorRuntimeDevicesFromProtocolRegistry(registry)`: 找 I2C 传感器。
+- `ProtocolRuntimeRegistryPanel`: 在前端展示协议 runtime 摘要。
+
+后续新增 SPI Flash、I2C EEPROM、更多传感器时，优先让它们被这个 registry 发现，再接具体 codec 和面板。
+
+## 6. 传感器运行时应该怎么读
+
+传感器相关文件：
+
+- `src/lib/sensor-packages.ts`: 传感器 SDK 元数据，例如 SI7021 的 Renode 类型、地址、通道、属性名。
+- `src/lib/bus-sensor-runtime.ts`: 通用传感器运行时状态和控制逻辑。
+- `src/lib/si70xx.ts`: SI70xx 协议 codec，负责命令、raw 数据、温湿度转换。
+- `packages/devices/si7021/index.ts`: SI7021 作为可拖拽 Device Package 的声明。
+
+SI7021 的闭环是：
+
+```text
+用户拖入 SI7021 并连接 SCL/SDA/VCC/GND
+-> Netlist 发现 I2C sensor
+-> board.repl 挂载 Sensors.SI70xx
+-> main.c 生成 I2C 读取代码
+-> Renode 内部 MCU 固件读取 I2C sensor
+-> UART 输出温湿度
+-> 前端通过 UART/timeline/sensor runtime 可视化
+```
+
+如果你添加 Renode 已支持的传感器，优先复用 native Renode peripheral。如果 Renode 没有，就需要写 C# peripheral 或先写 broker/codec 原型。
+
+## 7. 前端应该怎么修改
+
+主要区域在 `src/App.tsx`：
+
+- 顶部 import：能看到 UI 依赖哪些 schema 和 runtime helper。
+- `WiringWorkbench`: 板图、元件、端点、拖线手势。
+- `DeviceRuntimePanelRenderer`: 根据 Device Package 的 `runtimePanel` 自动组合面板。
+- `ProtocolRuntimeRegistryPanel`: 展示按协议发现到的运行时设备。
+- `BusSensorRuntimePanel`: 根据 sensor package channel 自动渲染传感器滑块和读数。
+- `compileFirmware`: 把生成代码交给 Electron 编译。
+- `startSimulation`: 把 Renode artifacts 和 manifests 交给 Electron 启动仿真。
+- `onSimulationEvent`: 接收 Electron/Renode 事件并更新可视化状态。
+
+修改样式时，优先改组件内部 JSX 和 Tailwind class。修改逻辑时，先判断它属于 UI 状态、Netlist 编译、Device Package、Protocol Runtime，还是 Electron/Renode 执行层，不要把 Renode 逻辑直接塞进 UI。
+
+## 8. 新增外设的推荐步骤
+
+新增一个 I2C 传感器时：
+
+1. 在 `packages/devices/<sensor>/index.ts` 添加 Device Package。
+2. 在 `src/lib/sensor-packages.ts` 添加 sensor package 和 channel 元数据。
+3. 如果协议与 SI70xx 不同，在 `src/lib/<codec>.ts` 添加 codec。
+4. 在 `src/lib/bus-sensor-runtime.ts` 接入新的 codec 状态和 transaction decode。
+5. 确认 `src/lib/runtime-timeline.ts` 能把它加入 runtime bus manifest。
+6. 如果要 MCU 真正读到数据，在 `src/lib/firmware.ts` 生成对应固件读写逻辑。
+7. 如果 Renode 已支持该传感器，在 `.repl` 中挂 native peripheral。
+8. 如果 Renode 不支持，准备 C# peripheral 或 broker-based MVP。
+9. 给 `scripts/validate-netlist.cjs` 或 smoke script 加验证。
+
+新增一个 SPI 器件时：
+
+1. 先扩展 Device Package 的 `protocol` 和 `pins`，声明 SCK/MISO/MOSI/CS。
+2. 让 `runtime-timeline.ts` 或后续 SPI manifest 生成器发现 SPI 设备。
+3. 让 `protocol-runtime-registry.ts` 能识别它的 role、panels、eventParsers。
+4. 写 SPI codec 或 Renode C# peripheral。
+5. 补 UI 面板和 smoke test。
+
+新增 GPIO 类器件时：
+
+1. 简单器件可以继续走 component adapter。
+2. 需要复用和可发布时，迁移到 `packages/devices/<device>/index.ts`。
+3. 通过 `signal-broker.ts` 的 signal manifest 进入 GPIO Monitor 和 Logic Analyzer。
+
+## 9. 验证脚本怎么读
 
 验证脚本在 `scripts/`：
 
-- `validate-netlist.cjs`: 校验 Netlist/IR、组件包、传感器包、示例项目。
-- `validate-boards.cjs`: 校验板型 schema 和生成工件。
-- `smoke-si7021-native.cjs`: 验证 SI7021 原生 Renode 传感器闭环。
+- `validate-netlist.cjs`: 校验 Netlist/IR、组件包、传感器包、Device Package、Protocol Runtime Registry、示例项目。
+- `validate-boards.cjs`: 校验板型 schema、Renode platform path、编译和启动链路。
+- `smoke-si7021-native.cjs`: 验证 SI7021 native Renode sensor 闭环。
+- `smoke-i2c-demo.cjs`: 验证 SSD1306 I2C transaction 和 OLED framebuffer。
+- `smoke-broker-bridge.cjs`: 验证 Signal Broker/GPIO 桥接。
 - `smoke-test.cjs`: 通用 Renode 运行 smoke test。
-- `smoke-broker-bridge.cjs`: Signal Broker/GPIO 桥接验证。
-- `smoke-i2c-demo.cjs`: I2C demo 验证。
 
-推荐改完代码后至少运行：
+日常修改建议运行：
 
 ```bash
 npm run lint
@@ -129,20 +268,35 @@ npm run validate:netlist
 npm run build
 ```
 
-涉及 Renode 或传感器时再运行：
+涉及板型、Renode、传感器或总线时再运行：
 
 ```bash
 npm run validate:boards
 npm run smoke:si7021
+npm run smoke:i2c
 ```
 
-## 7. 后续学习建议
+## 10. 当前项目边界
 
-第一轮阅读目标不是看懂每一行，而是建立四个问题的答案：
+当前项目更接近“Renode 数字逻辑和协议级仿真平台”，不是 Proteus 的 SPICE 模拟电路引擎。
 
-- UI 中的一个线端连接，在哪里变成 Netlist?
-- Netlist 在哪里生成 `.repl/.resc/main.c`?
-- ELF 在哪里编译，Renode 在哪里 `LoadELF`?
-- Renode 的运行事件在哪里回到前端并更新可视化?
+已经具备：
 
-这四个问题打通后，再去读具体外设、传感器、逻辑分析仪和板型 schema，会轻松很多。
+- 可视化连线到 Netlist/IR。
+- 自动生成 C 固件、`.repl`、`.resc`、manifest。
+- 本地编译 ELF 并启动 Renode。
+- GPIO、UART、I2C 运行事件可视化。
+- SI7021 native Renode sensor 闭环。
+- SSD1306 transaction 到 framebuffer 预览。
+- Device Package Compiler 和 Protocol Runtime Registry。
+
+仍建议优先补强：
+
+- User Firmware Mode，支持导入 `.elf/.hex/.bin`。
+- 更多 Renode native sensor package。
+- SPI runtime 和 SPI Flash/OLED 示例。
+- 更完善的 C# Broker plugin。
+- GDB 源码级调试 UI。
+- 更像 Proteus/Wokwi 的元件属性面板和错误提示。
+
+读代码时始终抓住一句话：用户操作不直接变成 Renode 命令，而是先变成 Netlist 和 Package/Manifest，再由 Electron 和 Renode runtime 执行。

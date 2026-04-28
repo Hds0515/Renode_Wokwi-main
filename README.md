@@ -22,6 +22,7 @@ It keeps the visual workflow from the original prototype, but moves execution in
 - Signal Broker schema v2 with runtime signal manifest metadata
 - SimulationClock schema v1 for clocked runtime events with sequence and virtual-time fields
 - Bus Transaction Broker schema v1 so GPIO, UART, I2C, and SPI events share one timeline
+- Protocol Runtime Registry v1 that groups GPIO, UART, I2C, and SPI runtime devices by protocol and maps them to reusable codecs, panels, and broker backends
 - TCP JSONL Transaction Broker Bridge so native Renode plugins or external tools can inject bus transactions into Electron
 - SSD1306 OLED component template, I2C transaction decoding, and live framebuffer preview demo
 - Sensor Package schema v1 plus Sensor Package SDK v2 with reusable native Renode sensor metadata, monitor-control channels, firmware command metadata, and UI data-flow metadata
@@ -61,6 +62,7 @@ The current MVP has one validated Renode-backed board plus two Renode-verified e
 - runtime signal manifest passed from the renderer to Electron so signal events carry net, component, pin, pad, and MCU metadata
 - SimulationClock snapshots attached to runtime `signal`, `uart`, `bus`, and `timeline` events
 - runtime bus manifest generation for board UART plus discovered I2C/SPI teaching pins and package-backed bus devices
+- Protocol Runtime Registry v1 derived from signal and bus manifests, so OLED displays, I2C sensors, UART terminal instruments, and GPIO endpoints are discovered through one protocol-oriented runtime layer
 - Bus Sensor Runtime state derived from Sensor Package SDK v2, so native sensor control panels are generated from reusable package channels instead of hard-coded SI7021 UI state
 - Bus Transaction Broker panel for UART, I2C, and future SPI protocol events
 - `local-wokwi-broker.json` runtime manifest written beside generated `.repl` / `.resc` files so native plugins can discover the broker endpoint
@@ -285,6 +287,8 @@ npm run start
   - Signal Broker schema v2, runtime signal manifest generation, edge counting, signal definitions from Netlist/IR, runtime signal reducer, and summary helpers
 - `src/lib/runtime-timeline.ts`
   - SimulationClock schema v1, runtime bus manifest generation, unified GPIO/UART/I2C/SPI timeline event types, bus transaction state, and summary helpers
+- `src/lib/protocol-runtime-registry.ts`
+  - Protocol Runtime Registry v1; joins signal/bus manifests with Device Packages so protocol runtimes can discover GPIO, UART, I2C, and SPI devices through one schema
 - `src/lib/ssd1306.ts`
   - minimal SSD1306 command/data decoder and framebuffer state used by the OLED preview and smoke test
 - `src/lib/sensor-packages.ts`

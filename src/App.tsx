@@ -128,11 +128,16 @@ import {
   createBusSensorRuntimeState,
   createNativeSensorControlRequest,
   formatSensorChannelValue,
-  getBusSensorRuntimeDevices,
+  getBusSensorRuntimeDevicesFromProtocolRegistry,
   syncBusSensorRuntimeDevices,
   updateBusSensorChannelConfiguration,
 } from './lib/bus-sensor-runtime';
 import type { BusSensorRuntimeState, RuntimeBusSensorDevice } from './lib/bus-sensor-runtime';
+import {
+  createProtocolRuntimeRegistry,
+  getProtocolRuntimeDevicesByModel,
+} from './lib/protocol-runtime-registry';
+import type { ProtocolRuntimeRegistry } from './lib/protocol-runtime-registry';
 import { ElectricalRuleIssue, evaluateElectricalRules } from './lib/electrical-rules';
 
 type ToolingStatus = {
@@ -234,28 +239,6 @@ function getCanvasHeightForPeripheralCount(count: number) {
 
 function parseLibraryTemplateKind(rawValue: string | null | undefined): DemoPeripheralTemplateKind | null {
   return isDemoPeripheralTemplateKind(rawValue) ? rawValue : null;
-}
-
-type RuntimeI2cDevice = NonNullable<RuntimeBusManifestEntry['devices']>[number] & {
-  busId: string;
-  busLabel: string;
-};
-
-function getRuntimeDevicesByModel(
-  busManifest: RuntimeBusManifestEntry[],
-  model: RuntimeI2cDevice['model']
-): RuntimeI2cDevice[] {
-  return busManifest.flatMap((entry) =>
-    entry.protocol === 'i2c' && Array.isArray(entry.devices)
-      ? entry.devices
-          .filter((device) => device.model === model)
-          .map((device) => ({
-            ...device,
-            busId: entry.id,
-            busLabel: entry.label,
-          }))
-      : []
-  );
 }
 
 function getBoardPads(board: BoardSchema): DemoBoardPad[] {
@@ -884,6 +867,61 @@ function RuntimeTimelinePanel({
   );
 }
 
+function ProtocolRuntimeRegistryPanel({ registry }: { registry: ProtocolRuntimeRegistry }) {
+  const activeProtocols = registry.protocols.filter((protocol) => protocol.buses.length > 0 || protocol.devices.length > 0);
+
+  return (
+    <div className="mt-4 rounded-3xl border border-cyan-900/70 bg-cyan-950/20 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-[0.24em] text-cyan-300/70">Protocol Runtime Registry v1</div>
+          <div className="mt-1 text-sm text-cyan-50/80">
+            Runtime devices are grouped by protocol first, then routed to reusable codecs and panels.
+          </div>
+        </div>
+        <div className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-100">
+          {registry.summary.deviceCount} device(s)
+        </div>
+      </div>
+
+      <div className="mt-3 grid grid-cols-4 gap-2 text-xs text-slate-300">
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Buses</div>
+          <div className="mt-1 font-semibold text-white">{registry.summary.busCount}</div>
+        </div>
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">GPIO</div>
+          <div className="mt-1 font-semibold text-white">{registry.summary.gpioSignalCount}</div>
+        </div>
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Sensors</div>
+          <div className="mt-1 font-semibold text-white">{registry.summary.sensorCount}</div>
+        </div>
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Displays</div>
+          <div className="mt-1 font-semibold text-white">{registry.summary.displayCount}</div>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-2">
+        {activeProtocols.map((protocol) => (
+          <div key={protocol.protocol} className="rounded-2xl border border-cyan-500/20 bg-black/20 px-3 py-2 text-xs text-cyan-50/80">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-cyan-50">{protocol.label}</span>
+              <span className="text-[10px] uppercase tracking-[0.16em] text-cyan-200/60">
+                {protocol.buses.length} bus / {protocol.devices.length} device
+              </span>
+            </div>
+            <div className="mt-1 truncate text-[10px] uppercase tracking-[0.14em] text-cyan-100/50">
+              {[...protocol.eventParsers].join('  ') || 'no codec'}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Ssd1306PreviewPanel({ state }: { state: Ssd1306State }) {
   const pixelSize = 2;
   const width = state.width * pixelSize;
@@ -1166,6 +1204,7 @@ function DeviceRuntimePanelRenderer({
   onClearLogicAnalyzer,
   runtimeTimelineState,
   runtimeBusManifest,
+  protocolRuntimeRegistry,
   transactionBrokerPort,
   ssd1306State,
   sensorDevices,
@@ -1187,6 +1226,7 @@ function DeviceRuntimePanelRenderer({
   onClearLogicAnalyzer: () => void;
   runtimeTimelineState: RuntimeTimelineState;
   runtimeBusManifest: RuntimeBusManifestEntry[];
+  protocolRuntimeRegistry: ProtocolRuntimeRegistry;
   transactionBrokerPort: number | null;
   ssd1306State: Ssd1306State;
   sensorDevices: RuntimeBusSensorDevice[];
@@ -1210,11 +1250,14 @@ function DeviceRuntimePanelRenderer({
         <LogicAnalyzerPanel state={signalBrokerState} nowMs={logicAnalyzerNow} onClear={onClearLogicAnalyzer} />
       ) : null}
       {panelKinds.has('runtime-timeline') || panelKinds.has('bus-transactions') ? (
-        <RuntimeTimelinePanel
-          state={runtimeTimelineState}
-          busManifest={runtimeBusManifest}
-          transactionBrokerPort={transactionBrokerPort}
-        />
+        <>
+          <RuntimeTimelinePanel
+            state={runtimeTimelineState}
+            busManifest={runtimeBusManifest}
+            transactionBrokerPort={transactionBrokerPort}
+          />
+          <ProtocolRuntimeRegistryPanel registry={protocolRuntimeRegistry} />
+        </>
       ) : null}
       {panelKinds.has('oled-preview') || panelKinds.has('i2c-framebuffer') ? <Ssd1306PreviewPanel state={ssd1306State} /> : null}
       {panelKinds.has('sensor-control') || panelKinds.has('sensor-inspector') ? (
@@ -4002,18 +4045,38 @@ export default function App() {
   }, [ledStates, poweredDeviceIds, workbenchDevices]);
   const circuitNetlist = useMemo(() => createNetlistFromWiring(wiring, selectedBoard), [selectedBoard, wiring]);
   const netlistSummary = useMemo(() => summarizeNetlist(circuitNetlist), [circuitNetlist]);
+
+  // Runtime derivation chain:
+  // wiring -> Netlist/IR -> signal/bus manifests -> protocol registry -> panels.
+  // Keeping this chain explicit makes it easier to add new protocols without
+  // teaching the UI about every concrete sensor or display model.
   const signalDefinitions = useMemo(() => createSignalDefinitionsFromNetlist(circuitNetlist), [circuitNetlist]);
   const runtimeSignalManifest = useMemo(() => createRuntimeSignalManifest(signalDefinitions), [signalDefinitions]);
   const runtimeBusManifest = useMemo(() => createRuntimeBusManifest(selectedBoard, circuitNetlist), [circuitNetlist, selectedBoard]);
+  const protocolRuntimeRegistry = useMemo(
+    () =>
+      createProtocolRuntimeRegistry({
+        board: selectedBoard,
+        busManifest: runtimeBusManifest,
+        signalDefinitions,
+      }),
+    [runtimeBusManifest, selectedBoard, signalDefinitions]
+  );
   const deviceRuntimeRegistry = useMemo(
     () => buildDeviceRuntimeRegistryManifest({ board: selectedBoard, netlist: circuitNetlist, busManifest: runtimeBusManifest }),
     [circuitNetlist, runtimeBusManifest, selectedBoard]
   );
-  const ssd1306Devices = useMemo(() => getRuntimeDevicesByModel(runtimeBusManifest, 'ssd1306'), [runtimeBusManifest]);
-  const busSensorDevices = useMemo(() => getBusSensorRuntimeDevices(runtimeBusManifest), [runtimeBusManifest]);
+
+  // Feature-specific panels query the protocol registry instead of scanning the
+  // raw bus manifest themselves. SSD1306 and SI7021 are the current examples.
+  const ssd1306Devices = useMemo(() => getProtocolRuntimeDevicesByModel(protocolRuntimeRegistry, 'ssd1306', 'i2c'), [protocolRuntimeRegistry]);
+  const busSensorDevices = useMemo(() => getBusSensorRuntimeDevicesFromProtocolRegistry(protocolRuntimeRegistry), [protocolRuntimeRegistry]);
   const runtimeBusDeviceLabels = useMemo(
-    () => runtimeBusManifest.flatMap((entry) => entry.devices?.map((device) => `${device.label} (${entry.protocol.toUpperCase()})`) ?? []),
-    [runtimeBusManifest]
+    () =>
+      protocolRuntimeRegistry.devices
+        .filter((device) => device.source === 'runtime-bus-manifest')
+        .map((device) => `${device.label} (${device.protocol.toUpperCase()})`),
+    [protocolRuntimeRegistry]
   );
   const hasSsd1306Device = useMemo(
     () => ssd1306Devices.length > 0,
@@ -4134,6 +4197,8 @@ export default function App() {
 
   useEffect(() => {
     const nowMs = Date.now();
+    // Regenerate runtime panel state whenever the circuit graph changes. User
+    // sensor channel values are preserved by syncBusSensorRuntimeDevices.
     setSignalBrokerState(createSignalBrokerState(signalDefinitions, nowMs));
     setRuntimeTimelineState(createRuntimeTimelineState(nowMs));
     setSsd1306State(createSsd1306State());
@@ -4238,6 +4303,9 @@ export default function App() {
       }
 
       if (event.type === 'timeline') {
+        // Bus transactions are the common runtime event format for UART/I2C/SPI.
+        // Model-specific reducers decode the same event stream into visual
+        // widgets such as the OLED framebuffer and sensor readouts.
         const timelineEvent = event.event as RuntimeTimelineEvent;
         setRuntimeTimelineState((current) => recordRuntimeTimelineEvent(current, timelineEvent));
         if (timelineEvent.protocol === 'i2c' && timelineEvent.kind === 'bus-transaction') {
@@ -4248,6 +4316,9 @@ export default function App() {
       }
 
       if (event.type === 'signal') {
+        // GPIO samples feed both the GPIO Monitor and Logic Analyzer. The
+        // signal manifest gives the sample enough context to point back to the
+        // visual endpoint and MCU pad.
         setSignalBrokerState((current) =>
           recordSignalSample(current, {
             peripheralId: event.peripheralId,
@@ -5101,6 +5172,9 @@ export default function App() {
     );
 
     const result = await window.localWokwi.startSimulation({
+      // Electron receives generated artifacts plus manifests. Renode only sees
+      // .repl/.resc/ELF, while the manifests teach the local bridge how to map
+      // runtime events back to visual devices.
       workspaceDir: compileResult.workspaceDir,
       elfPath: compileResult.elfPath,
       boardRepl,
@@ -5636,6 +5710,7 @@ export default function App() {
               onClearLogicAnalyzer={clearLogicAnalyzer}
               runtimeTimelineState={runtimeTimelineState}
               runtimeBusManifest={runtimeBusManifest}
+              protocolRuntimeRegistry={protocolRuntimeRegistry}
               transactionBrokerPort={simulation.transactionBrokerPort}
               ssd1306State={ssd1306State}
               sensorDevices={busSensorDevices}

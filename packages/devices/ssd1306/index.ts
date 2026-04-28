@@ -1,5 +1,12 @@
 import type { DevicePackageSource } from '../../../src/lib/device-package-types';
 
+/**
+ * Independent Device Package source for SSD1306.
+ *
+ * It declares only reusable metadata: visual terminals, I2C protocol details,
+ * Renode bus-broker backend, runtime panels, and validation fixtures. The UI
+ * should not need SSD1306-specific library code to make this draggable.
+ */
 export const SSD1306_DEVICE_PACKAGE_SOURCE = {
   source: {
     packagePath: 'packages/devices/ssd1306',

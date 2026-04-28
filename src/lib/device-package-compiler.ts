@@ -74,6 +74,9 @@ function normalizeProtocols(protocols: readonly ComponentPackageProtocol[]): rea
 }
 
 function getComponentBackend(componentPackage: ComponentPackageSdk, sensorSdk: SensorPackageSdk | null): DevicePackage['renodeBackend'] {
+  // During migration, legacy component packages still need to become full
+  // Device Packages. This function chooses the same backend vocabulary used by
+  // independent packages: native Renode model, bus broker, or GPIO signal broker.
   if (sensorSdk) {
     return {
       type: 'renode-native-sensor',
@@ -114,6 +117,9 @@ function getComponentEventParsers(componentPackage: ComponentPackageSdk, sensorS
 }
 
 function getComponentPanels(componentPackage: ComponentPackageSdk, sensorSdk: SensorPackageSdk | null): DevicePackage['runtimePanel'] {
+  // Runtime panels are deliberately metadata, not React imports. App.tsx later
+  // uses these names to compose the visible panels without checking for each
+  // concrete device kind.
   if (sensorSdk) {
     return {
       controls: ['sensor-control', 'sensor-inspector'],
@@ -183,6 +189,8 @@ function getComponentValidation(componentPackage: ComponentPackageSdk, sensorSdk
 }
 
 export function compileComponentDevicePackage(componentPackage: ComponentPackageSdk): DevicePackage {
+  // Compatibility path: old Component Package SDK entries become Device Package
+  // records so the rest of the runtime can depend on one unified schema.
   const sensorSdk =
     componentPackage.runtime.type === 'renode-i2c-broker' && isSensorPackageKind(componentPackage.runtime.sensorPackage)
       ? getSensorPackageSdk(componentPackage.runtime.sensorPackage)
@@ -272,6 +280,9 @@ export function compileComponentDevicePackage(componentPackage: ComponentPackage
 }
 
 export function compileDevicePackageSource(source: DevicePackageSource): DevicePackage {
+  // Independent packages already own the complete device description. The
+  // compiler only stamps schema/compiler metadata and keeps legacy links for the
+  // current Netlist/Renode generators.
   return {
     schemaVersion: DEVICE_PACKAGE_SCHEMA_VERSION,
     kind: source.kind,
@@ -306,6 +317,8 @@ export function compileDevicePackageCatalog(options: {
   componentPackages: readonly ComponentPackageSdk[];
   sources: readonly DevicePackageSource[];
 }): DevicePackageCatalog {
+  // Independent packages win over generated adapters. This lets us migrate one
+  // device at a time while keeping the visible library stable for users.
   const sourceByComponentKind = new Map(
     options.sources.flatMap((source) => (source.source.componentPackageKind ? [[source.source.componentPackageKind, source] as const] : []))
   );
