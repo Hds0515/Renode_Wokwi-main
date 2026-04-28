@@ -42,6 +42,11 @@ import {
   SENSOR_PACKAGES,
 } from './sensor-packages';
 import {
+  DEVICE_PACKAGE_CATALOG_VERSION,
+  DEVICE_PACKAGE_SCHEMA_VERSION,
+  DEVICE_PACKAGES,
+} from './device-packages';
+import {
   CircuitNetlist,
   NETLIST_SCHEMA_VERSION,
   createNetlistFromWiring,
@@ -85,6 +90,11 @@ export type ProjectDocument = {
   };
   sensorPackageSdk: {
     schemaVersion: 2;
+    catalogVersion: 1;
+    kinds: string[];
+  };
+  devicePackages: {
+    schemaVersion: 3;
     catalogVersion: 1;
     kinds: string[];
   };
@@ -421,6 +431,11 @@ export function createProjectDocument(options: {
       catalogVersion: SENSOR_PACKAGE_SDK_CATALOG_VERSION,
       kinds: SENSOR_PACKAGE_SDKS.map((sensorPackage) => sensorPackage.kind),
     },
+    devicePackages: {
+      schemaVersion: DEVICE_PACKAGE_SCHEMA_VERSION,
+      catalogVersion: DEVICE_PACKAGE_CATALOG_VERSION,
+      kinds: DEVICE_PACKAGES.map((devicePackage) => devicePackage.kind),
+    },
     wiring,
     pinMux: createPinFunctionMuxState(wiring, boardPads),
     netlist: createNetlistFromWiring(wiring, board),
@@ -505,6 +520,11 @@ export function normalizeLoadedProjectDocument(value: unknown): ProjectLoadResul
         schemaVersion: SENSOR_PACKAGE_SDK_SCHEMA_VERSION,
         catalogVersion: SENSOR_PACKAGE_SDK_CATALOG_VERSION,
         kinds: SENSOR_PACKAGE_SDKS.map((sensorPackage) => sensorPackage.kind),
+      },
+      devicePackages: {
+        schemaVersion: DEVICE_PACKAGE_SCHEMA_VERSION,
+        catalogVersion: DEVICE_PACKAGE_CATALOG_VERSION,
+        kinds: DEVICE_PACKAGES.map((devicePackage) => devicePackage.kind),
       },
       wiring,
       pinMux,

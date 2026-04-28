@@ -13,6 +13,8 @@ It keeps the visual workflow from the original prototype, but moves execution in
 - logical `VCC` / `GND` power rail binding for power-aware peripherals
 - local project save/load as `.renode-wokwi.json`
 - project schema v2 with a unified Netlist/IR plus component package catalog and SDK metadata
+- Device Package schema v3 that unifies visual metadata, pins, electrical rules, protocols, Renode backends, runtime panels, example firmware, and validation fixtures
+- schema-driven Device Runtime Panel renderer that composes GPIO, OLED, sensor, UART, and timeline panels from Device Package runtime metadata
 - peripheral behavior schema v2 so outputs can be controlled by firmware, a chosen input, or generated demo behavior instead of hard-coded LED/Button rules
 - Electrical Rule Engine schema v1 for power rails, voltage domains, bus pairing, output contention, and open-drain I2C checks
 - Pin Function Mux schema v1 so routed endpoints select GPIO/I2C/SPI/UART/PWM/ADC pad functions instead of relying only on text labels

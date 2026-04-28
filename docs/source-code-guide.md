@@ -22,6 +22,8 @@
 - `src/App.tsx`: React 主界面和用户工作流。
 - `src/lib/netlist.ts`: 可视化连线到 Netlist/IR，再到 Renode artifacts。
 - `src/lib/firmware.ts`: 板子/外设模板、生成 C 固件、生成 `.repl/.resc`。
+- `src/lib/device-packages.ts`: 统一 Device Package schema，把视觉、引脚、电气规则、协议、Renode 后端、运行时面板和验证样例放到同一个包里。
+- `src/lib/device-runtime-registry.ts`: 根据 Device Package 自动生成运行时设备、面板和事件解析器描述。
 - `electron/runtime.cjs`: 本地编译、启动 Renode、桥接运行时事件。
 - `electron/preload.cjs`: 把安全 IPC API 暴露给前端。
 
@@ -31,6 +33,7 @@
 
 - 顶部 import 和类型定义：理解 UI 依赖哪些 schema、runtime helper。
 - `BusSensorRuntimePanel`: 学习传感器控制面板如何从 schema 自动渲染。
+- `DeviceRuntimePanelRenderer`: 学习运行时面板如何从 Device Package 的 `runtimePanel` 描述自动组合。
 - `WiringWorkbench`: 学习板图、外设、端点和连线手势如何组织。
 - `App`: 学习全局状态、保存/加载、编译、启动仿真、事件回调。
 - `compileFirmware` 和 `startSimulation`: 理解前端如何进入 Electron/Renode。
@@ -55,6 +58,8 @@ App.tsx wiring
 
 对应文件：
 
+- `src/lib/device-packages.ts`
+- `src/lib/device-runtime-registry.ts`
 - `src/lib/netlist.ts`
 - `src/lib/firmware.ts`
 - `src/lib/component-packs.ts`

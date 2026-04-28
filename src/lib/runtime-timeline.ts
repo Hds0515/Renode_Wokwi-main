@@ -7,6 +7,7 @@
  */
 import type { BoardSchema } from './boards';
 import { getComponentPackage } from './component-packs';
+import { getDevicePackageForTemplate } from './device-packages';
 import type { DemoPeripheralTemplateKind } from './firmware';
 import type { CircuitNetlist } from './netlist';
 import type { SignalDirection, SignalLevel, SignalSampleSource } from './signal-broker';
@@ -52,6 +53,8 @@ export type RuntimeBusDeviceManifestEntry = {
   id: string;
   componentId: string;
   componentKind: string;
+  devicePackageKind?: string;
+  devicePackageSchemaVersion?: number;
   label: string;
   address: number | null;
   model: string;
@@ -324,6 +327,7 @@ function collectI2cDevicesFromNetlist(board: BoardSchema, netlist: CircuitNetlis
       }
       const sensorPackage = findSensorPackage(templateKind);
       const sensorPackageSdk = sensorPackage ? getSensorPackageSdk(sensorPackage.kind) : null;
+      const devicePackage = getDevicePackageForTemplate(templateKind);
       const model = runtime.model ?? 'generic-i2c';
       const sclNet = netlist.nets.find(
         (net) => net.kind === 'i2c' && net.connections.some((connection) => connection.componentId === component.id && connection.pinId === 'scl')
@@ -342,6 +346,8 @@ function collectI2cDevicesFromNetlist(board: BoardSchema, netlist: CircuitNetlis
         id: `${component.id}:${model}`,
         componentId: component.id,
         componentKind: component.kind,
+        devicePackageKind: devicePackage.kind,
+        devicePackageSchemaVersion: devicePackage.schemaVersion,
         label: component.label,
         address: sensorPackage ? sensorPackage.native.defaultAddress : runtime.type === 'renode-i2c-broker' ? runtime.address : null,
         model,

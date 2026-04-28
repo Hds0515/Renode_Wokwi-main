@@ -37,6 +37,8 @@ type RuntimeBusManifestEntry = {
     id: string;
     componentId: string;
     componentKind: string;
+    devicePackageKind?: string;
+    devicePackageSchemaVersion?: number;
     label: string;
     address: number | null;
     model: string;
@@ -271,6 +273,11 @@ type LocalProjectDocument = {
     kinds: string[];
   };
   sensorPackageSdk?: {
+    schemaVersion: number;
+    catalogVersion: number;
+    kinds: string[];
+  };
+  devicePackages?: {
     schemaVersion: number;
     catalogVersion: number;
     kinds: string[];

@@ -42,6 +42,11 @@ import {
   synchronizeWiringWires,
   validateWiringRules,
 } from './firmware';
+import {
+  DEVICE_PACKAGE_CATALOG_VERSION,
+  DEVICE_PACKAGE_SCHEMA_VERSION,
+  getDevicePackageForTemplate,
+} from './device-packages';
 
 export const NETLIST_SCHEMA_VERSION = 1;
 
@@ -77,11 +82,19 @@ export type CircuitComponentInstance = {
   kind: CircuitComponentKind;
   label: string;
   packageVersion?: number;
+  devicePackageVersion?: number;
   pins: CircuitComponentPin[];
   properties?: Record<string, unknown>;
   metadata?: {
     legacyPeripherals?: DemoPeripheral[];
     sourceBindings?: Record<string, string | null>;
+    devicePackage?: {
+      schemaVersion: typeof DEVICE_PACKAGE_SCHEMA_VERSION;
+      catalogVersion: typeof DEVICE_PACKAGE_CATALOG_VERSION;
+      kind: string;
+      runtimePanels: readonly string[];
+      eventParsers: readonly string[];
+    };
   };
 };
 
@@ -119,6 +132,10 @@ export type CircuitNetlist = {
   componentPackages: {
     schemaVersion: typeof COMPONENT_PACKAGE_SCHEMA_VERSION;
     catalogVersion: typeof COMPONENT_PACKAGE_CATALOG_VERSION;
+  };
+  devicePackages: {
+    schemaVersion: typeof DEVICE_PACKAGE_SCHEMA_VERSION;
+    catalogVersion: typeof DEVICE_PACKAGE_CATALOG_VERSION;
   };
   components: CircuitComponentInstance[];
   nets: CircuitNet[];
@@ -223,6 +240,7 @@ function findMemberForPackagePin(members: readonly DemoPeripheral[], pin: Compon
 
 function createComponentInstanceFromDevice(device: ReturnType<typeof buildWorkbenchDevices>[number]): CircuitComponentInstance {
   const componentPackage = getComponentPackage(device.templateKind);
+  const devicePackage = getDevicePackageForTemplate(device.templateKind);
   const sourceBindings: Record<string, string | null> = {};
   const power = getPeripheralPowerBinding(device.members[0]);
 
@@ -265,6 +283,7 @@ function createComponentInstanceFromDevice(device: ReturnType<typeof buildWorkbe
     kind: device.templateKind,
     label: device.label,
     packageVersion: COMPONENT_PACKAGE_CATALOG_VERSION,
+    devicePackageVersion: DEVICE_PACKAGE_CATALOG_VERSION,
     pins: [...signalPins, ...powerPins],
     properties: {
       category: componentPackage.category,
@@ -274,6 +293,13 @@ function createComponentInstanceFromDevice(device: ReturnType<typeof buildWorkbe
     metadata: {
       legacyPeripherals: device.members.map((member) => clonePeripheral(member)),
       sourceBindings,
+      devicePackage: {
+        schemaVersion: DEVICE_PACKAGE_SCHEMA_VERSION,
+        catalogVersion: DEVICE_PACKAGE_CATALOG_VERSION,
+        kind: devicePackage.kind,
+        runtimePanels: [...devicePackage.runtimePanel.controls, ...devicePackage.runtimePanel.visualizers],
+        eventParsers: devicePackage.runtimePanel.eventParsers,
+      },
     },
   };
 }
@@ -416,6 +442,10 @@ export function createNetlistFromWiring(wiring: DemoWiring, board: BoardSchema):
     componentPackages: {
       schemaVersion: COMPONENT_PACKAGE_SCHEMA_VERSION,
       catalogVersion: COMPONENT_PACKAGE_CATALOG_VERSION,
+    },
+    devicePackages: {
+      schemaVersion: DEVICE_PACKAGE_SCHEMA_VERSION,
+      catalogVersion: DEVICE_PACKAGE_CATALOG_VERSION,
     },
     components,
     nets,

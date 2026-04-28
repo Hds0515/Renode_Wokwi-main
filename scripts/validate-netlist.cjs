@@ -76,6 +76,21 @@ const {
   getSensorPackage,
   getSensorPackageSdk,
 } = require('../src/lib/sensor-packages.ts');
+const {
+  DEVICE_PACKAGE_SCHEMA_VERSION,
+  DEVICE_PACKAGE_CATALOG_VERSION,
+  DEVICE_PACKAGES,
+  DEVICE_PACKAGE_LIBRARY_ITEMS,
+  getDevicePackage,
+  getDevicePackageForTemplate,
+  getSensorDevicePackage,
+} = require('../src/lib/device-packages.ts');
+const {
+  DEVICE_RUNTIME_REGISTRY_SCHEMA_VERSION,
+  buildDeviceRuntimeRegistryManifest,
+  getEventParsersForPackage,
+  getRuntimePanelsForPackage,
+} = require('../src/lib/device-runtime-registry.ts');
 const { validateWiringRules } = require('../src/lib/firmware.ts');
 
 function connectedPairs(wiring) {
@@ -147,6 +162,44 @@ function validateSensorPackages() {
   );
 }
 
+function validateDevicePackages() {
+  assert(DEVICE_PACKAGE_SCHEMA_VERSION === 3, 'Expected unified Device Package schema v3.');
+  assert(DEVICE_PACKAGE_CATALOG_VERSION === 1, 'Expected unified Device Package catalog v1.');
+  assert(DEVICE_PACKAGES.length >= COMPONENT_PACKAGE_SDKS.length + 1, 'Device Package catalog should include component SDKs plus virtual instruments.');
+  assert(DEVICE_PACKAGE_LIBRARY_ITEMS.length === COMPONENT_PACKAGE_SDKS.length, 'Visible library should be driven by component-backed Device Packages.');
+
+  const requiredFixtures = new Set(['i2c-sensor', 'i2c-display', 'uart-instrument']);
+  DEVICE_PACKAGES.forEach((devicePackage) => {
+    assert(devicePackage.schemaVersion === DEVICE_PACKAGE_SCHEMA_VERSION, `${devicePackage.kind} should use Device Package schema v3.`);
+    assert(devicePackage.visual && devicePackage.pins && devicePackage.electricalRules, `${devicePackage.kind} should expose visual, pins, and electrical rules.`);
+    assert(devicePackage.protocol && devicePackage.renodeBackend && devicePackage.runtimePanel, `${devicePackage.kind} should expose protocol, Renode backend, and runtime panel metadata.`);
+    assert(devicePackage.exampleFirmware && devicePackage.validationFixture, `${devicePackage.kind} should expose example firmware and validation fixture metadata.`);
+    assert(getRuntimePanelsForPackage(devicePackage.kind).length > 0, `${devicePackage.kind} should generate runtime panel descriptors.`);
+    assert(getEventParsersForPackage(devicePackage.kind).length > 0, `${devicePackage.kind} should generate event parser descriptors.`);
+    requiredFixtures.delete(devicePackage.validationFixture.representative);
+  });
+
+  const si7021 = getSensorDevicePackage('si7021-sensor');
+  assert(si7021.kind === 'si7021-sensor', 'SI7021 should be represented by a unified Device Package.');
+  assert(si7021.renodeBackend.type === 'renode-native-sensor', 'SI7021 Device Package should use Renode native sensor backend.');
+  assert(si7021.runtimePanel.eventParsers.includes('i2c-si70xx-measurement'), 'SI7021 Device Package should register SI70xx event parser.');
+
+  const oled = getDevicePackage('ssd1306-oled');
+  assert(oled.renodeBackend.model === 'ssd1306', 'SSD1306 Device Package should preserve the SSD1306 model.');
+  assert(oled.runtimePanel.eventParsers.includes('i2c-ssd1306-framebuffer'), 'SSD1306 Device Package should register framebuffer parser.');
+
+  const uart = getDevicePackage('uart-terminal');
+  assert(uart.renodeBackend.type === 'virtual-uart-terminal', 'UART Terminal should be registered as a virtual instrument package.');
+  assert(uart.runtimePanel.eventParsers.includes('uart-line-buffer'), 'UART Terminal should register UART line parser.');
+
+  COMPONENT_PACKAGE_SDKS.forEach((componentPackage) => {
+    const devicePackage = getDevicePackageForTemplate(componentPackage.kind);
+    assert(devicePackage.legacy.componentPackageKind === componentPackage.kind, `${componentPackage.kind} should be reachable through Device Package template lookup.`);
+  });
+
+  assert(requiredFixtures.size === 0, `Missing representative device package fixture(s): ${Array.from(requiredFixtures).join(', ')}`);
+}
+
 function validateProjectExample(example) {
   const board = BOARD_SCHEMAS.find((candidate) => candidate.id === example.boardId);
   assert(board, `${example.id} references unknown board ${example.boardId}.`);
@@ -160,6 +213,8 @@ function validateProjectExample(example) {
   assert(project.sensorPackages?.schemaVersion === 1, `${example.id} should save Sensor Package schema v1.`);
   assert(project.componentPackageSdk?.schemaVersion === 2, `${example.id} should save Component Package SDK schema v2.`);
   assert(project.sensorPackageSdk?.schemaVersion === 2, `${example.id} should save Sensor Package SDK schema v2.`);
+  assert(project.devicePackages?.schemaVersion === DEVICE_PACKAGE_SCHEMA_VERSION, `${example.id} should save unified Device Package schema v3.`);
+  assert(project.netlist.devicePackages?.schemaVersion === DEVICE_PACKAGE_SCHEMA_VERSION, `${example.id} netlist should carry Device Package schema v3 metadata.`);
 
   const regeneratedNetlist = createNetlistFromWiring(project.wiring, board);
   const netlistIssues = validateNetlist(project.netlist, board);
@@ -206,9 +261,20 @@ function validateProjectExample(example) {
   const signalState = createSignalBrokerState(signalDefinitions, 1000);
   const signalSummary = summarizeSignalBroker(signalState);
   const busManifest = createRuntimeBusManifest(board, project.netlist);
+  const deviceRuntimeRegistry = buildDeviceRuntimeRegistryManifest({ board, netlist: project.netlist, busManifest });
   const timelineState = createRuntimeTimelineState(1000);
   const busSensorDevices = getBusSensorRuntimeDevices(busManifest);
   const busSensorState = createBusSensorRuntimeState(busSensorDevices);
+  assert(deviceRuntimeRegistry.schemaVersion === DEVICE_RUNTIME_REGISTRY_SCHEMA_VERSION, `${example.id} Device Runtime Registry should use schema v1.`);
+  assert(deviceRuntimeRegistry.entries.some((entry) => entry.packageKind === 'uart-terminal'), `${example.id} should include the board UART terminal virtual instrument package.`);
+  project.netlist.components
+    .filter((component) => component.kind !== 'board')
+    .forEach((component) => {
+      assert(
+        deviceRuntimeRegistry.entries.some((entry) => entry.componentId === component.id),
+        `${example.id} component ${component.id} should generate a Device Runtime Registry entry.`
+      );
+    });
   assert(signalState.schemaVersion === 2, `${example.id} signal broker state should use schema v2.`);
   assert(busSensorState.schemaVersion === BUS_SENSOR_RUNTIME_SCHEMA_VERSION, `${example.id} bus sensor runtime should use schema v1.`);
   assert(SIGNAL_BROKER_SCHEMA_VERSION === 2, `${example.id} should compile against Signal Broker schema v2.`);
@@ -416,12 +482,13 @@ function validateProjectExample(example) {
 function main() {
   validateComponentPackages();
   validateSensorPackages();
+  validateDevicePackages();
   BOARD_SCHEMAS.forEach((board) => {
     const examples = getExamplesForBoard(board.id);
     assert(examples.length > 0, `${board.name} has no bundled examples.`);
   });
   EXAMPLE_PROJECTS.forEach((example) => validateProjectExample(example));
-  console.log('Netlist and component package validation completed successfully.');
+  console.log('Netlist, component package, sensor package, and device package validation completed successfully.');
 }
 
 try {

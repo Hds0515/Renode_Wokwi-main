@@ -35,7 +35,6 @@ import {
   DEFAULT_LINKER_SCRIPT,
   DEFAULT_MAIN_SOURCE,
   DEFAULT_STARTUP_SOURCE,
-  DEMO_PERIPHERAL_TEMPLATES,
   MAX_PERIPHERALS,
   DemoBoardConnector,
   DemoBoardPad,
@@ -77,7 +76,10 @@ import {
   validateWiringRules,
 } from './lib/firmware';
 import { ACTIVE_BOARD_SCHEMA, BOARD_SCHEMAS, BoardSchema, getBoardSchema } from './lib/boards';
-import { COMPONENT_PACKAGE_CATALOG_VERSION, getComponentPackage, getComponentPackageSdkPin } from './lib/component-packs';
+import { COMPONENT_PACKAGE_CATALOG_VERSION, getComponentPackageSdkPin } from './lib/component-packs';
+import { DEVICE_PACKAGE_LIBRARY_ITEMS, getDevicePackageForTemplate } from './lib/device-packages';
+import { buildDeviceRuntimeRegistryManifest } from './lib/device-runtime-registry';
+import type { DeviceRuntimeRegistryManifest } from './lib/device-runtime-registry';
 import {
   CircuitNetlistIssue,
   compileNetlistToRenodeArtifacts,
@@ -512,8 +514,9 @@ function getRuleIssueTone(issue: Pick<DemoWiringRuleIssue | CircuitNetlistIssue 
 }
 
 function getTemplateRequirementSummary(templateKind: DemoPeripheralTemplateKind): string {
-  const componentPackage = getComponentPackage(templateKind);
-  return componentPackage.pins
+  const devicePackage = getDevicePackageForTemplate(templateKind);
+  return devicePackage.pins
+    .filter((pin) => pin.terminal.connectable && pin.netKind !== 'power' && pin.netKind !== 'ground')
     .map((pin) => `${pin.label}: ${pin.requiredPadCapabilities.join(' + ')}`)
     .join(' / ');
 }
@@ -1067,6 +1070,175 @@ function BusSensorRuntimePanel({
         })}
       </div>
     </div>
+  );
+}
+
+function UartTerminalRuntimePanel({
+  board,
+  simulation,
+  transcript,
+  input,
+  onInputChange,
+  onSend,
+  onClear,
+}: {
+  board: BoardSchema;
+  simulation: SimulationState;
+  transcript: string;
+  input: string;
+  onInputChange: (value: string) => void;
+  onSend: (lineMode: boolean) => void;
+  onClear: () => void;
+}) {
+  const uart = board.runtime.uart;
+  const recentLines = transcript.split(/\r?\n/).filter(Boolean).slice(-5);
+
+  return (
+    <div className="mt-4 rounded-3xl border border-fuchsia-900/60 bg-fuchsia-950/25 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-[0.24em] text-fuchsia-300/70">UART Terminal Package</div>
+          <div className="mt-1 text-sm text-fuchsia-50/80">
+            {uart
+              ? `${uart.displayName} is exposed as a reusable virtual instrument package.`
+              : 'This board profile does not expose a UART terminal package.'}
+          </div>
+        </div>
+        <div className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
+          simulation.uartConnected ? 'border-fuchsia-400/40 bg-fuchsia-500/10 text-fuchsia-100' : 'border-slate-700 bg-slate-950 text-slate-500'
+        }`}>
+          {simulation.uartConnected ? 'online' : 'offline'}
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-2xl border border-slate-800 bg-black/30 p-3 font-mono text-xs text-fuchsia-100">
+        {recentLines.length === 0 ? (
+          <div className="text-slate-500">UART transcript preview is empty.</div>
+        ) : (
+          recentLines.map((line, index) => <div key={`${line}:${index}`}>{line}</div>)
+        )}
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
+        <input
+          value={input}
+          onChange={(event) => onInputChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              onSend(true);
+            }
+          }}
+          disabled={!simulation.running || !simulation.uartConnected}
+          placeholder="Type text to send over UART..."
+          className="min-w-0 rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-fuchsia-50 outline-none transition placeholder:text-slate-600 focus:border-fuchsia-400 disabled:cursor-not-allowed disabled:text-slate-500"
+        />
+        <button
+          onClick={() => onSend(false)}
+          disabled={!simulation.running || !simulation.uartConnected || !input}
+          className="rounded-2xl border border-fuchsia-500/40 bg-fuchsia-500/10 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-fuchsia-100 transition hover:bg-fuchsia-500/20 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900 disabled:text-slate-600"
+        >
+          Send
+        </button>
+        <button
+          onClick={() => onSend(true)}
+          disabled={!simulation.running || !simulation.uartConnected || !input}
+          className="rounded-2xl border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100 transition hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900 disabled:text-slate-600"
+        >
+          Send Line
+        </button>
+        <button
+          onClick={onClear}
+          className="rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300 transition hover:border-slate-500 hover:text-white"
+        >
+          Clear
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function DeviceRuntimePanelRenderer({
+  registry,
+  board,
+  signalBrokerState,
+  logicAnalyzerNow,
+  onClearLogicAnalyzer,
+  runtimeTimelineState,
+  runtimeBusManifest,
+  transactionBrokerPort,
+  ssd1306State,
+  sensorDevices,
+  busSensorRuntimeState,
+  simulation,
+  onConfigureSensor,
+  onApplyNativeSensor,
+  onReadSensor,
+  uartTranscript,
+  uartInput,
+  onUartInputChange,
+  onSendUart,
+  onClearUart,
+}: {
+  registry: DeviceRuntimeRegistryManifest;
+  board: BoardSchema;
+  signalBrokerState: SignalBrokerState;
+  logicAnalyzerNow: number;
+  onClearLogicAnalyzer: () => void;
+  runtimeTimelineState: RuntimeTimelineState;
+  runtimeBusManifest: RuntimeBusManifestEntry[];
+  transactionBrokerPort: number | null;
+  ssd1306State: Ssd1306State;
+  sensorDevices: RuntimeBusSensorDevice[];
+  busSensorRuntimeState: BusSensorRuntimeState;
+  simulation: SimulationState;
+  onConfigureSensor: (deviceId: string, channelId: string, value: number) => void;
+  onApplyNativeSensor: (deviceId: string) => void;
+  onReadSensor: (deviceId: string, channelId: string) => void;
+  uartTranscript: string;
+  uartInput: string;
+  onUartInputChange: (value: string) => void;
+  onSendUart: (lineMode: boolean) => void;
+  onClearUart: () => void;
+}) {
+  const panelKinds = new Set(registry.entries.flatMap((entry) => entry.runtimePanels));
+
+  return (
+    <>
+      {panelKinds.has('gpio-monitor') ? <GpioMonitorPanel state={signalBrokerState} nowMs={logicAnalyzerNow} /> : null}
+      {panelKinds.has('logic-analyzer') ? (
+        <LogicAnalyzerPanel state={signalBrokerState} nowMs={logicAnalyzerNow} onClear={onClearLogicAnalyzer} />
+      ) : null}
+      {panelKinds.has('runtime-timeline') || panelKinds.has('bus-transactions') ? (
+        <RuntimeTimelinePanel
+          state={runtimeTimelineState}
+          busManifest={runtimeBusManifest}
+          transactionBrokerPort={transactionBrokerPort}
+        />
+      ) : null}
+      {panelKinds.has('oled-preview') || panelKinds.has('i2c-framebuffer') ? <Ssd1306PreviewPanel state={ssd1306State} /> : null}
+      {panelKinds.has('sensor-control') || panelKinds.has('sensor-inspector') ? (
+        <BusSensorRuntimePanel
+          devices={sensorDevices}
+          state={busSensorRuntimeState}
+          simulationRunning={simulation.running}
+          onConfigure={onConfigureSensor}
+          onApplyNative={onApplyNativeSensor}
+          onRead={onReadSensor}
+        />
+      ) : null}
+      {panelKinds.has('uart-terminal') ? (
+        <UartTerminalRuntimePanel
+          board={board}
+          simulation={simulation}
+          transcript={uartTranscript}
+          input={uartInput}
+          onInputChange={onUartInputChange}
+          onSend={onSendUart}
+          onClear={onClearUart}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -3176,16 +3348,22 @@ function WiringWorkbench({
           </div>
 
           <div className="mt-5 grid gap-3">
-            {DEMO_PERIPHERAL_TEMPLATES.map((template) => (
-              <div key={template.kind}>
+            {DEVICE_PACKAGE_LIBRARY_ITEMS.map((devicePackage) => {
+              const templateKind = devicePackage.legacy.componentPackageKind;
+              if (!templateKind) {
+                return null;
+              }
+              return (
+              <div key={devicePackage.kind}>
                 <PeripheralLibraryCard
-                  kind={template.kind}
+                  kind={templateKind}
                   disabled={workbenchDevices.length >= MAX_PERIPHERALS || simulationRunning}
-                  onAdd={() => onAddPeripheral(template.kind)}
+                  onAdd={() => onAddPeripheral(templateKind)}
                   onDragStateChange={setLibraryDragKind}
                 />
               </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-sm text-slate-300">
@@ -3827,6 +4005,10 @@ export default function App() {
   const signalDefinitions = useMemo(() => createSignalDefinitionsFromNetlist(circuitNetlist), [circuitNetlist]);
   const runtimeSignalManifest = useMemo(() => createRuntimeSignalManifest(signalDefinitions), [signalDefinitions]);
   const runtimeBusManifest = useMemo(() => createRuntimeBusManifest(selectedBoard, circuitNetlist), [circuitNetlist, selectedBoard]);
+  const deviceRuntimeRegistry = useMemo(
+    () => buildDeviceRuntimeRegistryManifest({ board: selectedBoard, netlist: circuitNetlist, busManifest: runtimeBusManifest }),
+    [circuitNetlist, runtimeBusManifest, selectedBoard]
+  );
   const ssd1306Devices = useMemo(() => getRuntimeDevicesByModel(runtimeBusManifest, 'ssd1306'), [runtimeBusManifest]);
   const busSensorDevices = useMemo(() => getBusSensorRuntimeDevices(runtimeBusManifest), [runtimeBusManifest]);
   const runtimeBusDeviceLabels = useMemo(
@@ -5412,10 +5594,14 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="mt-3 grid grid-cols-3 gap-2 text-xs text-slate-300">
+              <div className="mt-3 grid grid-cols-4 gap-2 text-xs text-slate-300">
                 <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
                   <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Components</div>
                   <div className="mt-1 font-semibold text-white">{netlistSummary.packageComponentCount}</div>
+                </div>
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Runtime Devices</div>
+                  <div className="mt-1 font-semibold text-white">{deviceRuntimeRegistry.entries.length}</div>
                 </div>
                 <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
                   <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Nets</div>
@@ -5442,27 +5628,28 @@ export default function App() {
               </div>
             </div>
 
-            <GpioMonitorPanel state={signalBrokerState} nowMs={logicAnalyzerNow} />
-
-            <LogicAnalyzerPanel state={signalBrokerState} nowMs={logicAnalyzerNow} onClear={clearLogicAnalyzer} />
-
-            <RuntimeTimelinePanel
-              state={runtimeTimelineState}
-              busManifest={runtimeBusManifest}
+            <DeviceRuntimePanelRenderer
+              registry={deviceRuntimeRegistry}
+              board={selectedBoard}
+              signalBrokerState={signalBrokerState}
+              logicAnalyzerNow={logicAnalyzerNow}
+              onClearLogicAnalyzer={clearLogicAnalyzer}
+              runtimeTimelineState={runtimeTimelineState}
+              runtimeBusManifest={runtimeBusManifest}
               transactionBrokerPort={simulation.transactionBrokerPort}
+              ssd1306State={ssd1306State}
+              sensorDevices={busSensorDevices}
+              busSensorRuntimeState={busSensorRuntimeState}
+              simulation={simulation}
+              onConfigureSensor={updateBusSensorConfiguration}
+              onApplyNativeSensor={applyNativeBusSensorConfiguration}
+              onReadSensor={sendBusSensorMeasurement}
+              uartTranscript={uartTranscript}
+              uartInput={uartInput}
+              onUartInputChange={setUartInput}
+              onSendUart={(lineMode) => void sendUartText(lineMode)}
+              onClearUart={() => setUartTranscript('UART terminal cleared.\n')}
             />
-
-            {hasSsd1306Device ? <Ssd1306PreviewPanel state={ssd1306State} /> : null}
-            {hasBusSensorDevice ? (
-              <BusSensorRuntimePanel
-                devices={busSensorDevices}
-                state={busSensorRuntimeState}
-                simulationRunning={simulation.running}
-                onConfigure={updateBusSensorConfiguration}
-                onApplyNative={applyNativeBusSensorConfiguration}
-                onRead={sendBusSensorMeasurement}
-              />
-            ) : null}
 
             <div className="mt-4 grid gap-2 text-sm text-slate-300">
               <div className="rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2">
@@ -5485,14 +5672,6 @@ export default function App() {
                 <div className="rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2">
                   <div className="text-xs uppercase tracking-[0.24em] text-slate-500">GDB port</div>
                   <div className="mt-1">{simulation.gdbPort}</div>
-                </div>
-              </div>
-              <div className="rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2">
-                <div className="text-xs uppercase tracking-[0.24em] text-slate-500">UART terminal</div>
-                <div className="mt-1">
-                  {selectedBoard.runtime.uart
-                    ? `${selectedBoard.runtime.uart.displayName} via Renode ${selectedBoard.runtime.uart.peripheralName}${simulation.uartPort ? ` on socket ${simulation.uartPort}` : ''}`
-                    : 'No UART socket terminal configured for this board'}
                 </div>
               </div>
             </div>
