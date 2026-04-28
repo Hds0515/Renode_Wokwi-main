@@ -79,6 +79,9 @@ const {
 const {
   DEVICE_PACKAGE_SCHEMA_VERSION,
   DEVICE_PACKAGE_CATALOG_VERSION,
+  DEVICE_PACKAGE_COMPILER_VERSION,
+  DEVICE_PACKAGE_CATALOG,
+  DEVICE_PACKAGE_SOURCES,
   DEVICE_PACKAGES,
   DEVICE_PACKAGE_LIBRARY_ITEMS,
   getDevicePackage,
@@ -165,6 +168,9 @@ function validateSensorPackages() {
 function validateDevicePackages() {
   assert(DEVICE_PACKAGE_SCHEMA_VERSION === 3, 'Expected unified Device Package schema v3.');
   assert(DEVICE_PACKAGE_CATALOG_VERSION === 1, 'Expected unified Device Package catalog v1.');
+  assert(DEVICE_PACKAGE_COMPILER_VERSION === 1, 'Expected Device Package Compiler v1.');
+  assert(DEVICE_PACKAGE_CATALOG.compilerVersion === DEVICE_PACKAGE_COMPILER_VERSION, 'Device Package catalog should be compiled by compiler v1.');
+  assert(DEVICE_PACKAGE_SOURCES.length === 3, 'Expected SI7021, SSD1306, and UART Terminal independent device package sources.');
   assert(DEVICE_PACKAGES.length >= COMPONENT_PACKAGE_SDKS.length + 1, 'Device Package catalog should include component SDKs plus virtual instruments.');
   assert(DEVICE_PACKAGE_LIBRARY_ITEMS.length === COMPONENT_PACKAGE_SDKS.length, 'Visible library should be driven by component-backed Device Packages.');
 
@@ -174,6 +180,7 @@ function validateDevicePackages() {
     assert(devicePackage.visual && devicePackage.pins && devicePackage.electricalRules, `${devicePackage.kind} should expose visual, pins, and electrical rules.`);
     assert(devicePackage.protocol && devicePackage.renodeBackend && devicePackage.runtimePanel, `${devicePackage.kind} should expose protocol, Renode backend, and runtime panel metadata.`);
     assert(devicePackage.exampleFirmware && devicePackage.validationFixture, `${devicePackage.kind} should expose example firmware and validation fixture metadata.`);
+    assert(devicePackage.compiler.version === DEVICE_PACKAGE_COMPILER_VERSION, `${devicePackage.kind} should declare Device Package Compiler v1 metadata.`);
     assert(getRuntimePanelsForPackage(devicePackage.kind).length > 0, `${devicePackage.kind} should generate runtime panel descriptors.`);
     assert(getEventParsersForPackage(devicePackage.kind).length > 0, `${devicePackage.kind} should generate event parser descriptors.`);
     requiredFixtures.delete(devicePackage.validationFixture.representative);
@@ -181,16 +188,25 @@ function validateDevicePackages() {
 
   const si7021 = getSensorDevicePackage('si7021-sensor');
   assert(si7021.kind === 'si7021-sensor', 'SI7021 should be represented by a unified Device Package.');
+  assert(si7021.compiler.source === 'independent-package', 'SI7021 should be compiled from an independent device package.');
+  assert(si7021.compiler.packagePath === 'packages/devices/si7021', 'SI7021 package path should point to packages/devices/si7021.');
   assert(si7021.renodeBackend.type === 'renode-native-sensor', 'SI7021 Device Package should use Renode native sensor backend.');
   assert(si7021.runtimePanel.eventParsers.includes('i2c-si70xx-measurement'), 'SI7021 Device Package should register SI70xx event parser.');
 
   const oled = getDevicePackage('ssd1306-oled');
+  assert(oled.compiler.source === 'independent-package', 'SSD1306 should be compiled from an independent device package.');
+  assert(oled.compiler.packagePath === 'packages/devices/ssd1306', 'SSD1306 package path should point to packages/devices/ssd1306.');
   assert(oled.renodeBackend.model === 'ssd1306', 'SSD1306 Device Package should preserve the SSD1306 model.');
   assert(oled.runtimePanel.eventParsers.includes('i2c-ssd1306-framebuffer'), 'SSD1306 Device Package should register framebuffer parser.');
 
   const uart = getDevicePackage('uart-terminal');
+  assert(uart.compiler.source === 'independent-package', 'UART Terminal should be compiled from an independent device package.');
+  assert(uart.compiler.packagePath === 'packages/devices/uart-terminal', 'UART Terminal package path should point to packages/devices/uart-terminal.');
   assert(uart.renodeBackend.type === 'virtual-uart-terminal', 'UART Terminal should be registered as a virtual instrument package.');
   assert(uart.runtimePanel.eventParsers.includes('uart-line-buffer'), 'UART Terminal should register UART line parser.');
+
+  const button = getDevicePackage('button');
+  assert(button.compiler.source === 'component-adapter', 'Legacy GPIO button should still be adapted by the Device Package Compiler.');
 
   COMPONENT_PACKAGE_SDKS.forEach((componentPackage) => {
     const devicePackage = getDevicePackageForTemplate(componentPackage.kind);

@@ -14,6 +14,7 @@ It keeps the visual workflow from the original prototype, but moves execution in
 - local project save/load as `.renode-wokwi.json`
 - project schema v2 with a unified Netlist/IR plus component package catalog and SDK metadata
 - Device Package schema v3 that unifies visual metadata, pins, electrical rules, protocols, Renode backends, runtime panels, example firmware, and validation fixtures
+- Device Package Compiler v1 that compiles independent `packages/devices/*` packages into the runtime catalog while adapting legacy component packages during migration
 - schema-driven Device Runtime Panel renderer that composes GPIO, OLED, sensor, UART, and timeline panels from Device Package runtime metadata
 - peripheral behavior schema v2 so outputs can be controlled by firmware, a chosen input, or generated demo behavior instead of hard-coded LED/Button rules
 - Electrical Rule Engine schema v1 for power rails, voltage domains, bus pairing, output contention, and open-drain I2C checks
@@ -51,6 +52,7 @@ The current MVP has one validated Renode-backed board plus two Renode-verified e
 - board-aware generated `main.c`, `board.repl`, `.resc`, compiler args, and bundled example projects
 - project document schema v2 for wiring, Netlist/IR, workbench layout, code mode, and component/sensor SDK metadata
 - component package catalog plus Component Package SDK v2 for `Button`, `LED`, `Buzzer`, grouped `RGB LED`, `SSD1306 OLED`, and `SI7021 Sensor` pin/capability, power-pin, behavior, terminal placement, runtime broker, and reusable result-panel definitions
+- independent Device Package sources for `SI7021`, `SSD1306`, and `UART Terminal` under `packages/devices`, compiled by Device Package Compiler v1 into the UI library and runtime registry
 - functional `VCC` / `GND` power rails exposed on each board profile and emitted as Netlist/IR power and ground nets
 - behavior schema v2 for reusable output behavior: firmware-controlled GPIO, explicit input mirroring, or generated blink demo logic
 - board pad mux metadata for GPIO input/output, I2C, SPI, UART, PWM, ADC, power, ground, and passive/control functions
@@ -272,6 +274,10 @@ npm run start
   - project load normalization and forward-compatible warning collection
 - `src/lib/component-packs.ts`
   - versioned component package catalog plus SDK v2 terminal metadata with pins, capabilities, power pins, behavior defaults, visual metadata, runtime broker binding, and result-panel hints
+- `packages/devices/*`
+  - independent reusable Device Package sources; `si7021`, `ssd1306`, and `uart-terminal` now own their visual metadata, pins, electrical rules, protocol model, Renode backend, runtime panels, example firmware, and validation fixtures
+- `src/lib/device-package-compiler.ts`
+  - Device Package Compiler v1; compiles independent package sources and adapts legacy component packages until they are migrated
 - `src/lib/netlist.ts`
   - unified Netlist/IR schema
   - compiler from wiring to Netlist/IR, pin function metadata, power/ground net emission, Netlist validation, Netlist round-trip, and Renode artifact generation

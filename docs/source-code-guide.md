@@ -22,7 +22,9 @@
 - `src/App.tsx`: React 主界面和用户工作流。
 - `src/lib/netlist.ts`: 可视化连线到 Netlist/IR，再到 Renode artifacts。
 - `src/lib/firmware.ts`: 板子/外设模板、生成 C 固件、生成 `.repl/.resc`。
-- `src/lib/device-packages.ts`: 统一 Device Package schema，把视觉、引脚、电气规则、协议、Renode 后端、运行时面板和验证样例放到同一个包里。
+- `packages/devices/*`: 独立 Device Package 源码包，SI7021、SSD1306、UART Terminal 已经迁移到这里。
+- `src/lib/device-package-compiler.ts`: Device Package Compiler v1，把独立包编译成运行时 catalog，并兼容尚未迁移的旧 component package。
+- `src/lib/device-packages.ts`: Device Package catalog 入口，负责汇总编译结果和提供查询 API。
 - `src/lib/device-runtime-registry.ts`: 根据 Device Package 自动生成运行时设备、面板和事件解析器描述。
 - `electron/runtime.cjs`: 本地编译、启动 Renode、桥接运行时事件。
 - `electron/preload.cjs`: 把安全 IPC API 暴露给前端。
@@ -59,6 +61,8 @@ App.tsx wiring
 对应文件：
 
 - `src/lib/device-packages.ts`
+- `src/lib/device-package-compiler.ts`
+- `packages/devices/*`
 - `src/lib/device-runtime-registry.ts`
 - `src/lib/netlist.ts`
 - `src/lib/firmware.ts`
@@ -94,12 +98,13 @@ Renode 运行时事件再通过 `local-wokwi:event` 回到 `App.tsx`，前端据
 
 新增普通外设：
 
-- 改 `src/lib/firmware.ts` 的外设模板。
-- 改 `src/lib/component-packs.ts` 的组件包元数据。
+- 优先新增 `packages/devices/<device>/index.ts`，定义 `visual`、`pins`、`electricalRules`、`protocol`、`renodeBackend`、`runtimePanel`、`exampleFirmware`、`validationFixture`。
+- 如果还要兼容旧的拖入模板，再补 `src/lib/firmware.ts` 的外设模板和 `src/lib/component-packs.ts` 的组件包元数据。
 - 如需要电源/GND/端点规则，改 `src/lib/electrical-rules.ts`。
 
 新增传感器：
 
+- 优先新增 `packages/devices/<sensor>/index.ts`，让前端元件库和运行时面板从 Device Package Compiler 读取。
 - 改 `src/lib/sensor-packages.ts`，定义传感器 package。
 - 如果协议类似 SI70xx，可参考 `src/lib/si70xx.ts`。
 - 如果要被通用面板控制，补 `src/lib/bus-sensor-runtime.ts` 的 runtime adapter/codec。
