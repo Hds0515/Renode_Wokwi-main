@@ -39,7 +39,6 @@ import {
   DemoBoardConnector,
   DemoBoardPad,
   DemoPeripheralController,
-  DemoPeripheralPowerBinding,
   DemoPeripheral,
   DemoPeripheralKind,
   DemoPeripheralTemplateKind,
@@ -51,7 +50,6 @@ import {
   countPeripheralTemplateInstances,
   createPeripheralTemplate,
   createDefaultPeripheralBehavior,
-  createDefaultPowerBinding,
   describePad,
   formatPadCapabilities,
   getConnectedPeripherals,
@@ -61,16 +59,11 @@ import {
   getPeripheralBehavior,
   getPeripheralController,
   getPeripheralControllerLabel,
-  getPeripheralPowerBinding,
   getPeripheralTemplateDefinition,
   getPeripheralTemplateKind,
-  getGroundPads,
-  getPowerPads,
   getWiringWires,
   getWorkbenchDeviceId,
-  inferPowerVoltage,
   isDemoPeripheralTemplateKind,
-  isDevicePowered,
   resolveSelectablePad,
   synchronizeWiringWires,
   validateWiringRules,
@@ -274,37 +267,14 @@ function getPadDescription(padId: string | null, board: BoardSchema, fallback: s
   return describePad(resolveSelectablePad(padId, getBoardPads(board)));
 }
 
-function getDevicePower(device: DemoWorkbenchDevice): DemoPeripheralPowerBinding {
-  return getPeripheralPowerBinding(device.members[0]);
-}
-
-function getDevicePowerLabel(device: DemoWorkbenchDevice): string {
-  const template = getPeripheralTemplateDefinition(device.templateKind);
-  if (!template.behavior.powerRequired) {
-    return 'Power optional';
-  }
-  const power = getDevicePower(device);
-  if (!power.vccPadId || !power.gndPadId) {
-    return 'Unpowered';
-  }
-  return `${power.voltage?.toUpperCase() ?? 'VCC'} + GND`;
-}
-
 function reconcileWiringForBoard(wiring: DemoWiring, board: BoardSchema): DemoWiring {
   const selectablePadIds = new Set(board.connectors.selectablePads.map((pad) => pad.id));
-  const boardPadIds = new Set(getBoardPads(board).map((pad) => pad.id));
   return synchronizeWiringWires({
     peripherals: wiring.peripherals.map((peripheral) =>
       ({
         ...peripheral,
         padId: peripheral.padId && selectablePadIds.has(peripheral.padId) ? peripheral.padId : null,
-        power: peripheral.power
-          ? {
-              ...peripheral.power,
-              vccPadId: peripheral.power.vccPadId && boardPadIds.has(peripheral.power.vccPadId) ? peripheral.power.vccPadId : null,
-              gndPadId: peripheral.power.gndPadId && boardPadIds.has(peripheral.power.gndPadId) ? peripheral.power.gndPadId : null,
-            }
-          : createDefaultPowerBinding(),
+        power: undefined,
         behavior: peripheral.behavior ?? createDefaultPeripheralBehavior(getPeripheralTemplateKind(peripheral)),
       })
     ),
@@ -1459,10 +1429,7 @@ function buildWorkbenchConnectorGroups(wiring: DemoWiring, showFullPinout: boole
   const curatedPadIds = new Set<string>(board.teaching.curatedPadIds);
   const connectedPadIds = new Set(
     wiring.peripherals
-      .flatMap((peripheral) => {
-        const power = getPeripheralPowerBinding(peripheral);
-        return [peripheral.padId, power.vccPadId, power.gndPadId];
-      })
+      .map((peripheral) => peripheral.padId)
       .filter((padId): padId is string => Boolean(padId))
   );
 
@@ -1910,7 +1877,6 @@ function PeripheralRackCard({
   onPress,
   onSourceChange,
   onBehaviorChange,
-  onPowerChange,
 }: {
   board: BoardSchema;
   peripheral: DemoPeripheral;
@@ -1925,19 +1891,14 @@ function PeripheralRackCard({
   onPress: (pressed: boolean) => void;
   onSourceChange: (sourceId: string | null) => void;
   onBehaviorChange: (controller: DemoPeripheralController) => void;
-  onPowerChange: (power: Partial<DemoPeripheralPowerBinding>) => void;
 }) {
   const templateKind = getPeripheralTemplateKind(peripheral);
   const palette = getTemplatePalette(templateKind);
   const behavior = getPeripheralBehavior(peripheral);
   const controller = getPeripheralController(peripheral);
-  const power = getPeripheralPowerBinding(peripheral);
   const endpoint = getPeripheralSdkEndpoint(peripheral);
   const endpointLabel = getPeripheralEndpointLabelText(peripheral);
   const endpointRequirements = endpoint ? formatPadCapabilities(endpoint.requiredPadCapabilities) : 'matching board pad';
-  const powerPads = getPowerPads(getBoardPads(board));
-  const groundPads = getGroundPads(getBoardPads(board));
-  const powered = !behavior.powerRequired || (Boolean(power.vccPadId) && Boolean(power.gndPadId));
   const baseTone =
     peripheral.kind === 'button'
       ? buttonPressed
@@ -1973,47 +1934,6 @@ function PeripheralRackCard({
       <div className="mt-3 rounded-2xl border border-current/20 bg-black/10 px-3 py-2 text-sm">
         {getPadDescription(peripheral.padId, board, 'Not connected to a board pad')}
       </div>
-
-      {behavior.powerRequired ? (
-        <div className="mt-3 rounded-2xl border border-current/20 bg-black/10 p-3">
-          <div className="text-xs uppercase tracking-[0.22em] text-current/70">Power Rails</div>
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            <select
-              value={power.vccPadId ?? ''}
-              onChange={(event) => {
-                const pad = powerPads.find((candidate) => candidate.id === event.target.value) ?? null;
-                onPowerChange({
-                  vccPadId: pad?.id ?? null,
-                  voltage: inferPowerVoltage(pad),
-                });
-              }}
-              className="rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
-            >
-              <option value="">VCC...</option>
-              {powerPads.map((pad) => (
-                <option key={pad.id} value={pad.id} className="text-slate-900">
-                  {pad.connectorTitle} {pad.pinLabel}
-                </option>
-              ))}
-            </select>
-            <select
-              value={power.gndPadId ?? ''}
-              onChange={(event) => onPowerChange({ gndPadId: event.target.value || null })}
-              className="rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
-            >
-              <option value="">GND...</option>
-              {groundPads.map((pad) => (
-                <option key={pad.id} value={pad.id} className="text-slate-900">
-                  {pad.connectorTitle} {pad.pinLabel}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="mt-2 text-[11px] text-current/70">
-            {powered ? `${power.voltage?.toUpperCase() ?? 'VCC'} and GND connected.` : 'Missing VCC/GND: visual output stays unpowered.'}
-          </div>
-        </div>
-      ) : null}
 
       {peripheral.kind === 'led' ? (
         <div className="mt-3">
@@ -2094,7 +2014,7 @@ function PeripheralRackCard({
         </button>
       ) : (
         <div className="mt-3 rounded-2xl border border-current/20 bg-black/10 px-3 py-3 text-center text-sm font-semibold">
-          {behavior.powerRequired && !powered ? 'Unpowered' : templateKind === 'buzzer' ? (ledOn ? 'Buzzer is active' : 'Buzzer is idle') : ledOn ? 'LED is glowing' : 'LED is idle'}
+        {templateKind === 'buzzer' ? (ledOn ? 'Buzzer is active' : 'Buzzer is idle') : ledOn ? 'LED is glowing' : 'LED is idle'}
         </div>
       )}
     </div>
@@ -2304,64 +2224,6 @@ function BoardTopView({
       }
     >;
   }, [board, boardPads, resolveCanvasPosition, wiring, workbenchDevices]);
-  const powerWires = useMemo(() => {
-    const deviceIndexById = new Map(workbenchDevices.map((device, index) => [device.id, index]));
-    const boardPadById = new Map<string, DemoBoardPad>(boardPads.map((pad) => [pad.id, pad]));
-
-    return workbenchDevices.flatMap((device) => {
-      const template = getPeripheralTemplateDefinition(device.templateKind);
-      if (!template.behavior.powerRequired) {
-        return [];
-      }
-
-      const deviceIndex = deviceIndexById.get(device.id);
-      if (deviceIndex === undefined) {
-        return [];
-      }
-
-      const frame = resolveCanvasPosition(device.id, deviceIndex);
-      const power = getPeripheralPowerBinding(device.members[0]);
-      const rails = [
-        {
-          id: `${device.id}:vcc`,
-          label: `${device.label} VCC`,
-          padId: power.vccPadId,
-          color: '#22c55e',
-          start: {
-            x: frame.x + PERIPHERAL_CARD_WIDTH + (device.templateKind === 'ssd1306-oled' || device.templateKind === 'si7021-sensor' ? 34 : 18),
-            y: frame.y + PERIPHERAL_CARD_HEIGHT - 30,
-          },
-        },
-        {
-          id: `${device.id}:gnd`,
-          label: `${device.label} GND`,
-          padId: power.gndPadId,
-          color: '#64748b',
-          start: {
-            x: frame.x + PERIPHERAL_CARD_WIDTH + (device.templateKind === 'ssd1306-oled' || device.templateKind === 'si7021-sensor' ? 34 : 18),
-            y: frame.y + PERIPHERAL_CARD_HEIGHT - 14,
-          },
-        },
-      ];
-
-      return rails.flatMap((rail) => {
-        const pad = rail.padId ? boardPadById.get(rail.padId) ?? null : null;
-        if (!pad) {
-          return [];
-        }
-        const padAnchor = getPadAnchor(pad, board);
-        return [
-          {
-            id: rail.id,
-            label: rail.label,
-            pad,
-            path: buildWirePath(rail.start, padAnchor),
-            color: rail.color,
-          },
-        ];
-      });
-    });
-  }, [board, boardPads, resolveCanvasPosition, workbenchDevices]);
   const selectedWire = selectedWireId ? wires.find((wire) => wire.id === selectedWireId) ?? null : null;
 
   useEffect(() => {
@@ -2661,19 +2523,6 @@ function BoardTopView({
             viewBox={`0 0 ${BOARD_CANVAS_WIDTH} ${canvasHeight}`}
             preserveAspectRatio="none"
           >
-            {powerWires.map((wire) => (
-              <path
-                key={wire.id}
-                d={wire.path}
-                fill="none"
-                stroke={wire.color}
-                strokeWidth="2.5"
-                strokeDasharray={wire.id.endsWith(':gnd') ? '5 7' : undefined}
-                strokeLinecap="round"
-                opacity="0.72"
-                style={{ pointerEvents: 'none' }}
-              />
-            ))}
             {wires.map((wire) => (
               <g key={wire.id}>
                 <path
@@ -3424,7 +3273,6 @@ function WiringWorkbench({
   onPressPeripheral,
   onSourceChange,
   onBehaviorChange,
-  onPowerChange,
   onToggleFullPinout,
   onMovePeripheral,
 }: {
@@ -3447,7 +3295,6 @@ function WiringWorkbench({
   onPressPeripheral: (peripheralId: string, pressed: boolean) => void;
   onSourceChange: (peripheralId: string, sourceId: string | null) => void;
   onBehaviorChange: (peripheralId: string, controller: DemoPeripheralController) => void;
-  onPowerChange: (deviceId: string, power: Partial<DemoPeripheralPowerBinding>) => void;
   onToggleFullPinout: () => void;
   onMovePeripheral: (peripheralId: string, position: PeripheralPosition) => void;
 }) {
@@ -3457,8 +3304,6 @@ function WiringWorkbench({
   const [libraryDragKind, setLibraryDragKind] = useState<DemoPeripheralTemplateKind | null>(null);
   const workbenchConnectors = useMemo(() => buildWorkbenchConnectorGroups(wiring, showFullPinout, board), [board, wiring, showFullPinout]);
   const boardPads = useMemo(() => getBoardPads(board), [board]);
-  const powerPads = useMemo(() => getPowerPads(boardPads), [boardPads]);
-  const groundPads = useMemo(() => getGroundPads(boardPads), [boardPads]);
   const hiddenPadCount = Math.max(0, board.connectors.selectablePads.length - workbenchConnectors.visibleSelectablePads);
   const deviceCounts = useMemo(
     () => ({
@@ -3475,7 +3320,7 @@ function WiringWorkbench({
     () =>
       workbenchConnectors.connectors
         .flatMap((connector) => connector.pins)
-        .filter((pad) => pad.selectable || pad.role === 'power' || pad.role === 'ground'),
+        .filter((pad) => pad.selectable),
     [workbenchConnectors]
   );
 
@@ -3662,7 +3507,6 @@ function WiringWorkbench({
                     onPress={(pressed) => onPressPeripheral(peripheral.id, pressed)}
                     onSourceChange={(sourceId) => onSourceChange(peripheral.id, sourceId)}
                     onBehaviorChange={(controller) => onBehaviorChange(peripheral.id, controller)}
-                    onPowerChange={(power) => onPowerChange(device.id, power)}
                   />
                 </div>
               );
@@ -3687,39 +3531,6 @@ function WiringWorkbench({
 
                   <div className="mt-3 rounded-2xl border border-sky-200/20 bg-black/30 px-3 py-3 text-sm text-sky-50/90">
                     Wire SCL and SDA to matching I2C-capable pads. Runtime transactions at address 0x3C update the OLED preview panel.
-                  </div>
-
-                  <div className="mt-3 rounded-2xl border border-sky-200/20 bg-black/20 p-3">
-                    <div className="text-xs uppercase tracking-[0.22em] text-sky-100/70">Power Rails</div>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                      <select
-                        value={getDevicePower(device).vccPadId ?? ''}
-                        onChange={(event) => {
-                          const pad = powerPads.find((candidate) => candidate.id === event.target.value) ?? null;
-                          onPowerChange(device.id, { vccPadId: pad?.id ?? null, voltage: inferPowerVoltage(pad) });
-                        }}
-                        className="rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
-                      >
-                        <option value="">VCC...</option>
-                        {powerPads.map((pad) => (
-                          <option key={pad.id} value={pad.id} className="text-slate-900">
-                            {pad.connectorTitle} {pad.pinLabel}
-                          </option>
-                        ))}
-                      </select>
-                      <select
-                        value={getDevicePower(device).gndPadId ?? ''}
-                        onChange={(event) => onPowerChange(device.id, { gndPadId: event.target.value || null })}
-                        className="rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
-                      >
-                        <option value="">GND...</option>
-                        {groundPads.map((pad) => (
-                          <option key={pad.id} value={pad.id} className="text-slate-900">
-                            {pad.connectorTitle} {pad.pinLabel}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
                   </div>
 
                   <div className="mt-3 space-y-3">
@@ -3767,39 +3578,6 @@ function WiringWorkbench({
 
                   <div className="mt-3 rounded-2xl border border-emerald-200/20 bg-black/30 px-3 py-3 text-sm text-emerald-50/90">
                     Wire SCL and SDA to matching I2C-capable pads. Generated board.repl attaches Renode SI70xx, and generated firmware reads it through MCU I2C at address 0x40.
-                  </div>
-
-                  <div className="mt-3 rounded-2xl border border-emerald-200/20 bg-black/20 p-3">
-                    <div className="text-xs uppercase tracking-[0.22em] text-emerald-100/70">Power Rails</div>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                      <select
-                        value={getDevicePower(device).vccPadId ?? ''}
-                        onChange={(event) => {
-                          const pad = powerPads.find((candidate) => candidate.id === event.target.value) ?? null;
-                          onPowerChange(device.id, { vccPadId: pad?.id ?? null, voltage: inferPowerVoltage(pad) });
-                        }}
-                        className="rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
-                      >
-                        <option value="">VCC...</option>
-                        {powerPads.map((pad) => (
-                          <option key={pad.id} value={pad.id} className="text-slate-900">
-                            {pad.connectorTitle} {pad.pinLabel}
-                          </option>
-                        ))}
-                      </select>
-                      <select
-                        value={getDevicePower(device).gndPadId ?? ''}
-                        onChange={(event) => onPowerChange(device.id, { gndPadId: event.target.value || null })}
-                        className="rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
-                      >
-                        <option value="">GND...</option>
-                        {groundPads.map((pad) => (
-                          <option key={pad.id} value={pad.id} className="text-slate-900">
-                            {pad.connectorTitle} {pad.pinLabel}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
                   </div>
 
                   <div className="mt-3 space-y-3">
@@ -3857,40 +3635,6 @@ function WiringWorkbench({
                     }}
                   />
                   <div className="text-sm text-cyan-50/90">Three independent channels. Wire each color to a GPIO, then choose firmware, input mirror, or blink behavior per channel.</div>
-                </div>
-
-                <div className="mt-3 rounded-2xl border border-current/20 bg-black/10 p-3">
-                  <div className="text-xs uppercase tracking-[0.22em] text-current/70">Power Rails</div>
-                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                    <select
-                      value={getDevicePower(device).vccPadId ?? ''}
-                      onChange={(event) => {
-                        const pad = powerPads.find((candidate) => candidate.id === event.target.value) ?? null;
-                        onPowerChange(device.id, { vccPadId: pad?.id ?? null, voltage: inferPowerVoltage(pad) });
-                      }}
-                      className="rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
-                    >
-                      <option value="">VCC...</option>
-                      {powerPads.map((pad) => (
-                        <option key={pad.id} value={pad.id} className="text-slate-900">
-                          {pad.connectorTitle} {pad.pinLabel}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={getDevicePower(device).gndPadId ?? ''}
-                      onChange={(event) => onPowerChange(device.id, { gndPadId: event.target.value || null })}
-                      className="rounded-2xl border border-current/25 bg-black/10 px-3 py-2 text-sm text-white"
-                    >
-                      <option value="">GND...</option>
-                      {groundPads.map((pad) => (
-                        <option key={pad.id} value={pad.id} className="text-slate-900">
-                          {pad.connectorTitle} {pad.pinLabel}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="mt-2 text-[11px] text-current/70">{getDevicePowerLabel(device)}</div>
                 </div>
 
                 <div className="mt-3 space-y-3">
@@ -4048,7 +3792,7 @@ function WiringWorkbench({
               4. Any pad you already connected stays visible, so the board never loses the context of your wiring.
             </div>
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-              5. Bind VCC/GND for powered parts, compile, start Renode, then press input cards to drive only the outputs you explicitly configured.
+              5. Optionally draw VCC/GND for readability, compile, start Renode, then press input cards to drive only the outputs you explicitly configured.
             </div>
           </div>
         </div>
@@ -4125,23 +3869,11 @@ export default function App() {
   const connectedButtons = useMemo(() => getConnectedPeripherals(wiring, 'button'), [wiring]);
   const connectedLeds = useMemo(() => getConnectedPeripherals(wiring, 'led'), [wiring]);
   const workbenchDevices = useMemo(() => buildWorkbenchDevices(wiring), [wiring]);
-  const poweredDeviceIds = useMemo(
-    () => new Set(workbenchDevices.filter((device) => isDevicePowered(device, selectedBoardPads)).map((device) => device.id)),
-    [selectedBoardPads, workbenchDevices]
-  );
   const effectiveLedStates = useMemo(() => {
-    const memberDeviceId = new Map<string, string>();
-    workbenchDevices.forEach((device) => {
-      device.members.forEach((member) => memberDeviceId.set(member.id, device.id));
-    });
-    return Object.fromEntries(
-      Object.entries(ledStates).map(([peripheralId, state]) => {
-        const deviceId = memberDeviceId.get(peripheralId);
-        const powered = deviceId ? poweredDeviceIds.has(deviceId) : true;
-        return [peripheralId, Boolean(state && powered)];
-      })
-    );
-  }, [ledStates, poweredDeviceIds, workbenchDevices]);
+    // Renode executes digital GPIO/I2C/UART behavior without SPICE-style power
+    // solving, so VCC/GND visual wires never gate output visualization.
+    return Object.fromEntries(Object.entries(ledStates).map(([peripheralId, state]) => [peripheralId, Boolean(state)]));
+  }, [ledStates]);
   const circuitNetlist = useMemo(() => createNetlistFromWiring(wiring, selectedBoard), [selectedBoard, wiring]);
   const netlistSummary = useMemo(() => summarizeNetlist(circuitNetlist), [circuitNetlist]);
 
@@ -5004,24 +4736,6 @@ export default function App() {
     });
   }, [updatePeripheralBehavior]);
 
-  const updateDevicePower = useCallback((deviceId: string, power: Partial<DemoPeripheralPowerBinding>) => {
-    setWiring((current) => ({
-      peripherals: current.peripherals.map((item) => {
-        if (getWorkbenchDeviceId(item) !== deviceId) {
-          return item;
-        }
-        const currentPower = getPeripheralPowerBinding(item);
-        return {
-          ...item,
-          power: {
-            ...currentPower,
-            ...power,
-          },
-        };
-      }),
-    }));
-  }, []);
-
   const movePeripheral = useCallback((peripheralId: string, position: PeripheralPosition) => {
     const canvasHeight = getCanvasHeightForPeripheralCount(workbenchDevices.length);
     setPeripheralPositions((current) => ({
@@ -5528,7 +5242,7 @@ export default function App() {
               <StatusPill active={simulation.uartConnected} label="UART online" />
               <StatusPill active={debugState.connected} label="Debugger attached" />
               <StatusPill active={wiringRuleErrors.length === 0} label="Pin rules OK" />
-              <StatusPill active={electricalRuleErrors.length === 0} label="Electrical OK" />
+              <StatusPill active={electricalRuleErrors.length === 0} label="Digital bus OK" />
               <StatusPill active={pinMuxSelections.length > 0} label="Pin mux v1" />
               <StatusPill active={netlistErrors.length === 0} label="Netlist OK" />
               <StatusPill active={signalDefinitions.length > 0} label="Signal broker" />
@@ -5584,7 +5298,6 @@ export default function App() {
               onPressPeripheral={(peripheralId, pressed) => void sendButtonState(peripheralId, pressed)}
               onSourceChange={updateLedSource}
               onBehaviorChange={updatePeripheralBehavior}
-              onPowerChange={updateDevicePower}
               onToggleFullPinout={() => setShowFullPinout((current) => !current)}
               onMovePeripheral={movePeripheral}
             />
@@ -5839,11 +5552,11 @@ export default function App() {
             <div className="mt-4 rounded-3xl border border-slate-800 bg-slate-900/70 p-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Electrical Rule Engine</div>
+                  <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Digital Pin/Bus Rules</div>
                   <div className="mt-1 text-sm text-slate-300">
                     {electricalRuleErrors.length === 0
-                      ? 'Power rails, voltage domains, bus pairing, and pin mux selections are electrically consistent.'
-                      : `${electricalRuleErrors.length} electrical issue(s) block compile/start.`}
+                      ? 'Pin mux selections, endpoint directions, output drivers, and I2C bus pairs are digitally consistent.'
+                      : `${electricalRuleErrors.length} digital pin/bus issue(s) block compile/start.`}
                   </div>
                 </div>
                 <div className="flex shrink-0 gap-2 text-[10px] font-semibold uppercase tracking-[0.18em]">
@@ -5874,7 +5587,7 @@ export default function App() {
               <div className="mt-3 grid gap-2">
                 {electricalRuleIssues.length === 0 ? (
                   <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
-                    ERC passed: no unsafe 5V pull-ups, bus mismatches, missing rail errors, or output contention were detected.
+                    Digital rule check passed: no pin mux, direction, I2C bus mismatch, or output-contention issues were detected. VCC/GND remain visual-only.
                   </div>
                 ) : (
                   electricalRuleIssues.slice(0, 4).map((issue) => (

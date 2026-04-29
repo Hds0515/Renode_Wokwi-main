@@ -196,28 +196,16 @@ export function compileComponentDevicePackage(componentPackage: ComponentPackage
       ? getSensorPackageSdk(componentPackage.runtime.sensorPackage)
       : null;
   const protocolBuses = Array.from(new Set(componentPackage.capabilities.protocols.flatMap((protocol) => normalizeProtocols([protocol]))));
-  const pins = [
-    ...componentPackage.pins.map((pin): DevicePackagePin => ({
-      id: pin.id,
-      label: pin.label,
-      role: roleForPin(pin.role),
-      direction: pin.direction,
-      requiredPadCapabilities: pin.requiredPadCapabilities,
-      netKind: pin.netKind,
-      protocols: normalizeProtocols(pin.protocols),
-      terminal: pin.terminal,
-    })),
-    ...componentPackage.powerPins.map((pin): DevicePackagePin => ({
-      id: pin.id,
-      label: pin.label,
-      role: pin.id === 'vcc' ? 'power-vcc' : 'power-gnd',
-      direction: 'bidirectional',
-      requiredPadCapabilities: pin.requiredPadCapabilities,
-      netKind: pin.netKind,
-      protocols: pin.id === 'vcc' ? ['power'] : ['ground'],
-      terminal: pin.terminal,
-    })),
-  ];
+  const pins = componentPackage.pins.map((pin): DevicePackagePin => ({
+    id: pin.id,
+    label: pin.label,
+    role: roleForPin(pin.role),
+    direction: pin.direction,
+    requiredPadCapabilities: pin.requiredPadCapabilities,
+    netKind: pin.netKind,
+    protocols: normalizeProtocols(pin.protocols),
+    terminal: pin.terminal,
+  }));
 
   return {
     schemaVersion: DEVICE_PACKAGE_SCHEMA_VERSION,
@@ -243,9 +231,9 @@ export function compileComponentDevicePackage(componentPackage: ComponentPackage
     },
     pins,
     electricalRules: {
-      requiresPower: componentPackage.capabilities.requiresPower,
-      requiresGround: componentPackage.capabilities.requiresPower,
-      voltageDomains: componentPackage.capabilities.requiresPower ? ['3v3', '5v'] : [],
+      requiresPower: false,
+      requiresGround: false,
+      voltageDomains: [],
       compatibleProtocols: protocolBuses,
       busPairing: componentPackage.capabilities.protocols.includes('i2c') ? 'i2c-scl-sda' : 'none',
       outputContention: componentPackage.category === 'input' ? 'not-applicable' : 'forbid',

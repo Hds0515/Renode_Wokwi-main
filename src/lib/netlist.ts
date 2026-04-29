@@ -34,7 +34,6 @@ import {
   generateRescPreview,
   getPadCapabilities,
   getPeripheralEndpointDefinition,
-  getPeripheralPowerBinding,
   getPeripheralTemplateKind,
   getWorkbenchDeviceId,
   isDemoPeripheralTemplateKind,
@@ -52,8 +51,8 @@ export const NETLIST_SCHEMA_VERSION = 1;
 
 export type CircuitComponentKind = 'board' | DemoPeripheralTemplateKind;
 export type CircuitPinDirection = 'input' | 'output' | 'bidirectional';
-export type CircuitPinRole = 'board-pad' | 'board-power' | 'board-ground' | 'component-gpio' | 'component-i2c' | 'component-power';
-export type CircuitNetKind = 'gpio' | 'i2c' | 'power' | 'ground';
+export type CircuitPinRole = 'board-pad' | 'component-gpio' | 'component-i2c';
+export type CircuitNetKind = 'gpio' | 'i2c';
 
 export type CircuitBoardTarget = {
   id: string;
@@ -193,12 +192,7 @@ function clonePeripheral(peripheral: DemoPeripheral): DemoPeripheral {
   return {
     ...peripheral,
     behavior: peripheral.behavior ?? createDefaultPeripheralBehavior(templateKind),
-    power: peripheral.power ?? {
-      schemaVersion: 1,
-      vccPadId: null,
-      gndPadId: null,
-      voltage: null,
-    },
+    power: undefined,
   };
 }
 
@@ -212,7 +206,7 @@ function createBoardComponent(board: BoardSchema, exposedPadIds: ReadonlySet<str
       .map((pad) => ({
         id: pad.id,
         label: pad.pinLabel,
-        role: pad.role === 'power' ? 'board-power' : pad.role === 'ground' ? 'board-ground' : 'board-pad',
+        role: 'board-pad',
         direction: 'bidirectional',
         requiredPadCapabilities: [],
         capabilities: pad.capabilities,
@@ -242,7 +236,6 @@ function createComponentInstanceFromDevice(device: ReturnType<typeof buildWorkbe
   const componentPackage = getComponentPackage(device.templateKind);
   const devicePackage = getDevicePackageForTemplate(device.templateKind);
   const sourceBindings: Record<string, string | null> = {};
-  const power = getPeripheralPowerBinding(device.members[0]);
 
   const signalPins = componentPackage.pins.map((pin): CircuitComponentPin => {
     const member = findMemberForPackagePin(device.members, pin);
@@ -264,19 +257,6 @@ function createComponentInstanceFromDevice(device: ReturnType<typeof buildWorkbe
       accentColor: pin.accentColor,
     };
   });
-  const powerPins = componentPackage.powerPins.map((pin): CircuitComponentPin => ({
-    id: pin.id,
-    label: pin.label,
-    role: 'component-power',
-    direction: 'bidirectional',
-    requiredPadCapabilities: pin.requiredPadCapabilities,
-    capabilities: [],
-    endpointId: pin.id,
-    padId: pin.id === 'vcc' ? power.vccPadId : power.gndPadId,
-    mcuPinId: null,
-    selectable: true,
-    accentColor: pin.id === 'vcc' ? '#22c55e' : '#64748b',
-  }));
 
   return {
     id: device.id,
@@ -284,11 +264,11 @@ function createComponentInstanceFromDevice(device: ReturnType<typeof buildWorkbe
     label: device.label,
     packageVersion: COMPONENT_PACKAGE_CATALOG_VERSION,
     devicePackageVersion: DEVICE_PACKAGE_CATALOG_VERSION,
-    pins: [...signalPins, ...powerPins],
+    pins: signalPins,
     properties: {
       category: componentPackage.category,
       pinCount: componentPackage.pins.length,
-      powerRequired: componentPackage.behavior.powerRequired,
+      powerRequired: false,
     },
     metadata: {
       legacyPeripherals: device.members.map((member) => clonePeripheral(member)),
@@ -308,7 +288,7 @@ function createComponentInstanceFromDevice(device: ReturnType<typeof buildWorkbe
  * Converts the drag-and-drop wiring model into the canonical project IR.
  *
  * Read this first when studying how visual operations become something Renode
- * can consume. The function creates board/component nodes, GPIO/I2C/power nets,
+ * can consume. The function creates board/component nodes, GPIO/I2C signal nets,
  * and metadata that later generators use for .repl, firmware, and manifests.
  */
 export function createNetlistFromWiring(wiring: DemoWiring, board: BoardSchema): CircuitNetlist {
@@ -317,10 +297,9 @@ export function createNetlistFromWiring(wiring: DemoWiring, board: BoardSchema):
   const normalizedWiring = synchronizeWiringWires(wiring);
   const padById = new Map(getBoardPads(board).map((pad) => [pad.id, pad]));
   const exposedPadIds = new Set(
-    normalizedWiring.peripherals.flatMap((peripheral) => {
-      const power = getPeripheralPowerBinding(peripheral);
-      return [peripheral.padId, power.vccPadId, power.gndPadId].filter((padId): padId is string => Boolean(padId));
-    })
+    normalizedWiring.peripherals
+      .map((peripheral) => peripheral.padId)
+      .filter((padId): padId is string => Boolean(padId))
   );
   const components = [
     createBoardComponent(board, exposedPadIds),
@@ -372,70 +351,7 @@ export function createNetlistFromWiring(wiring: DemoWiring, board: BoardSchema):
         },
       };
     });
-  const powerNets = buildWorkbenchDevices(normalizedWiring).flatMap((device): CircuitNet[] => {
-    // Power rails are modeled as digital rule-checking nets. They do not become
-    // SPICE-style analog supplies, but they keep the visual circuit honest.
-    const power = getPeripheralPowerBinding(device.members[0]);
-    const nets: CircuitNet[] = [];
-    if (power.vccPadId) {
-      const pad = padById.get(power.vccPadId) ?? null;
-      nets.push({
-        id: `net:${device.id}:vcc`,
-        kind: 'power',
-        label: `${device.label} VCC`,
-        connections: [
-          {
-            componentId: device.id,
-            pinId: 'vcc',
-            role: 'component-power',
-          },
-          {
-            componentId: `board:${board.id}`,
-            pinId: power.vccPadId,
-            role: 'board-power',
-            padId: power.vccPadId,
-          },
-        ],
-        metadata: {
-          boardId: board.id,
-          peripheralId: device.members[0].id,
-          endpointId: 'vcc',
-          padId: power.vccPadId,
-          mcuPinId: pad?.mcuPinId ?? null,
-        },
-      });
-    }
-    if (power.gndPadId) {
-      const pad = padById.get(power.gndPadId) ?? null;
-      nets.push({
-        id: `net:${device.id}:gnd`,
-        kind: 'ground',
-        label: `${device.label} GND`,
-        connections: [
-          {
-            componentId: device.id,
-            pinId: 'gnd',
-            role: 'component-power',
-          },
-          {
-            componentId: `board:${board.id}`,
-            pinId: power.gndPadId,
-            role: 'board-ground',
-            padId: power.gndPadId,
-          },
-        ],
-        metadata: {
-          boardId: board.id,
-          peripheralId: device.members[0].id,
-          endpointId: 'gnd',
-          padId: power.gndPadId,
-          mcuPinId: pad?.mcuPinId ?? null,
-        },
-      });
-    }
-    return nets;
-  });
-  const nets = [...signalNets, ...powerNets];
+  const nets = signalNets;
 
   return {
     schemaVersion: NETLIST_SCHEMA_VERSION,
@@ -491,10 +407,9 @@ export function createWiringFromNetlist(netlist: CircuitNetlist): DemoWiring {
             behavior: {
               ...componentPackage.behavior,
               controller: componentPackage.behavior.controller ? { ...componentPackage.behavior.controller } : null,
+              powerRequired: false,
             },
-            power: {
-              ...componentPackage.defaultPower,
-            },
+            power: undefined,
             templateKind,
             groupId: componentPackage.pins.length === 1 ? null : component.id,
             groupLabel: componentPackage.pins.length === 1 ? null : component.label,
@@ -512,30 +427,6 @@ export function createWiringFromNetlist(netlist: CircuitNetlist): DemoWiring {
     });
 
   netlist.nets.forEach((net) => {
-    if (net.kind === 'power' || net.kind === 'ground') {
-      const componentConnection = net.connections.find((connection) => connection.role === 'component-power');
-      const padId =
-        net.metadata?.padId ??
-        net.connections.find((connection) => connection.role === 'board-power' || connection.role === 'board-ground')?.padId ??
-        null;
-      if (!componentConnection || !padId) {
-        return;
-      }
-
-      peripherals
-        .filter((peripheral) => getWorkbenchDeviceId(peripheral) === componentConnection.componentId)
-        .forEach((peripheral) => {
-          const currentPower = getPeripheralPowerBinding(peripheral);
-          peripheral.power = {
-            ...currentPower,
-            vccPadId: net.kind === 'power' ? padId : currentPower.vccPadId,
-            gndPadId: net.kind === 'ground' ? padId : currentPower.gndPadId,
-            voltage: currentPower.voltage,
-          };
-        });
-      return;
-    }
-
     const componentConnection = net.connections.find(
       (connection) => connection.role === 'component-gpio' || connection.role === 'component-i2c'
     );
@@ -615,7 +506,7 @@ export function validateNetlist(netlist: CircuitNetlist, board: BoardSchema): Ci
     }
 
     const componentPackage = getComponentPackage(component.kind);
-    [...componentPackage.pins, ...componentPackage.powerPins].forEach((pin) => {
+    componentPackage.pins.forEach((pin) => {
       if (!component.pins.some((componentPin) => componentPin.id === pin.id)) {
         pushIssue(issues, {
           id: `unknown-pin:${component.id}:${pin.id}`,

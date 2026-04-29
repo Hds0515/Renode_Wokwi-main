@@ -6,7 +6,6 @@
  * analysis, bus transaction views, OLED previews, and sensor controls.
  */
 import type { BoardSchema } from './boards';
-import { getComponentPackage } from './component-packs';
 import { getDevicePackageForTemplate } from './device-packages';
 import type { DemoPeripheralTemplateKind } from './firmware';
 import type { CircuitNetlist } from './netlist';
@@ -324,19 +323,18 @@ function collectI2cDevicesFromNetlist(board: BoardSchema, netlist: CircuitNetlis
         return false;
       }
       const templateKind = component.kind as DemoPeripheralTemplateKind;
-      const runtime = getComponentPackage(templateKind).runtime;
-      return runtime.type === 'renode-i2c-broker';
+      const devicePackage = getDevicePackageForTemplate(templateKind);
+      return devicePackage.protocol.primary === 'i2c' && devicePackage.renodeBackend.manifest === 'runtime-bus-manifest';
     })
     .forEach((component) => {
       const templateKind = component.kind as DemoPeripheralTemplateKind;
-      const runtime = getComponentPackage(templateKind).runtime;
-      if (runtime.type !== 'renode-i2c-broker') {
+      const devicePackage = getDevicePackageForTemplate(templateKind);
+      if (devicePackage.protocol.primary !== 'i2c' || devicePackage.renodeBackend.manifest !== 'runtime-bus-manifest') {
         return;
       }
-      const sensorPackage = findSensorPackage(templateKind);
+      const sensorPackage = findSensorPackage(devicePackage.renodeBackend.sensorPackage);
       const sensorPackageSdk = sensorPackage ? getSensorPackageSdk(sensorPackage.kind) : null;
-      const devicePackage = getDevicePackageForTemplate(templateKind);
-      const model = runtime.model ?? 'generic-i2c';
+      const model = devicePackage.renodeBackend.model ?? 'generic-i2c';
       const sclNet = netlist.nets.find(
         (net) => net.kind === 'i2c' && net.connections.some((connection) => connection.componentId === component.id && connection.pinId === 'scl')
       );
@@ -357,7 +355,7 @@ function collectI2cDevicesFromNetlist(board: BoardSchema, netlist: CircuitNetlis
         devicePackageKind: devicePackage.kind,
         devicePackageSchemaVersion: devicePackage.schemaVersion,
         label: component.label,
-        address: sensorPackage ? sensorPackage.native.defaultAddress : runtime.type === 'renode-i2c-broker' ? runtime.address : null,
+        address: sensorPackage ? sensorPackage.native.defaultAddress : devicePackage.renodeBackend.address ?? null,
         model,
         sensorPackage: sensorPackage?.kind,
         sensorPackageTitle: sensorPackageSdk?.title,

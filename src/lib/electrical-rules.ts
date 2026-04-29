@@ -1,9 +1,10 @@
 /**
- * Digital electrical rule checker.
+ * Digital pin/protocol rule checker.
  *
- * Renode is not a SPICE simulator, so these rules model teaching-friendly
- * digital constraints: VCC/GND presence, compatible pin roles, and common
- * wiring mistakes.
+ * Renode is not a SPICE simulator, and this project intentionally does not
+ * validate VCC/GND/resistor correctness. These rules only cover digital
+ * simulation semantics that affect Renode wiring: pin mux selection, endpoint
+ * direction, output contention, and I2C pair/bus consistency.
  */
 import { BoardSchema } from './boards';
 import {
@@ -12,19 +13,11 @@ import {
   DemoPeripheral,
   DemoPinFunctionDefinition,
   DemoPinFunctionMuxState,
-  DemoPeripheralPowerVoltage,
   DemoWiring,
   buildWorkbenchDevices,
   createPinFunctionMuxState,
   describePad,
-  getGroundPads,
-  getPadCapabilities,
   getPeripheralEndpointDefinition,
-  getPeripheralPowerBinding,
-  getPeripheralTemplateDefinition,
-  getPowerPads,
-  getWorkbenchDeviceId,
-  inferPowerVoltage,
   resolvePinFunctionForEndpoint,
 } from './firmware';
 
@@ -35,15 +28,8 @@ export type ElectricalRuleCode =
   | 'pin-function-missing'
   | 'pin-direction-conflict'
   | 'output-contention'
-  | 'power-rail-missing'
-  | 'ground-rail-missing'
-  | 'power-rail-invalid'
-  | 'ground-rail-invalid'
-  | 'voltage-domain-mismatch'
   | 'i2c-pair-incomplete'
-  | 'i2c-bus-mismatch'
-  | 'i2c-pullup-missing'
-  | 'unsafe-i2c-pullup-voltage';
+  | 'i2c-bus-mismatch';
 
 export type ElectricalRuleIssue = {
   id: string;
@@ -82,14 +68,6 @@ function isOutputDirection(direction: DemoEndpointDirection): boolean {
   return direction === 'output';
 }
 
-function describeVoltage(voltage: DemoPeripheralPowerVoltage | null): string {
-  return voltage ? voltage.toUpperCase() : 'unknown voltage';
-}
-
-function getPadVoltage(pad: DemoBoardPad | null): DemoPeripheralPowerVoltage | null {
-  return pad ? inferPowerVoltage(pad) : null;
-}
-
 function getSignalFunctionForPeripheral(
   peripheral: DemoPeripheral,
   padById: ReadonlyMap<string, DemoBoardPad>
@@ -121,8 +99,6 @@ function expectedDirectionMatches(endpointDirection: DemoEndpointDirection, pinF
 export function evaluateElectricalRules(wiring: DemoWiring, board: BoardSchema): ElectricalRuleReport {
   const boardPads = getBoardPads(board);
   const padById = new Map(boardPads.map((pad) => [pad.id, pad]));
-  const powerPads = getPowerPads(boardPads);
-  const groundPads = getGroundPads(boardPads);
   const issues: ElectricalRuleIssue[] = [];
   const pinMux = createPinFunctionMuxState(wiring, boardPads);
   const padUsers = new Map<string, DemoPeripheral[]>();
@@ -184,77 +160,8 @@ export function evaluateElectricalRules(wiring: DemoWiring, board: BoardSchema):
   });
 
   buildWorkbenchDevices(wiring).forEach((device) => {
-    const template = getPeripheralTemplateDefinition(device.templateKind);
     const representative = device.members[0];
-    const power = getPeripheralPowerBinding(representative);
-    const vccPad = power.vccPadId ? padById.get(power.vccPadId) ?? null : null;
-    const gndPad = power.gndPadId ? padById.get(power.gndPadId) ?? null : null;
     const deviceId = device.id;
-
-    if (template.behavior.powerRequired && !power.vccPadId) {
-      pushIssue(issues, {
-        id: `electrical-missing-vcc:${deviceId}`,
-        severity: 'warning',
-        code: 'power-rail-missing',
-        deviceId,
-        peripheralId: representative.id,
-        message: `${device.label} has no VCC rail. The simulator can keep the card, but the electrical model treats it as unpowered.`,
-      });
-    }
-    if (template.behavior.powerRequired && !power.gndPadId) {
-      pushIssue(issues, {
-        id: `electrical-missing-gnd:${deviceId}`,
-        severity: 'warning',
-        code: 'ground-rail-missing',
-        deviceId,
-        peripheralId: representative.id,
-        message: `${device.label} has no GND rail. Real hardware needs a ground reference before signals are meaningful.`,
-      });
-    }
-    if (power.vccPadId && (!vccPad || !powerPads.some((pad) => pad.id === power.vccPadId))) {
-      pushIssue(issues, {
-        id: `electrical-invalid-vcc:${deviceId}:${power.vccPadId}`,
-        severity: 'error',
-        code: 'power-rail-invalid',
-        deviceId,
-        peripheralId: representative.id,
-        padId: power.vccPadId,
-        message: `${device.label} VCC is connected to ${vccPad ? describePad(vccPad) : power.vccPadId}, which is not a voltage rail.`,
-      });
-    }
-    if (power.gndPadId && (!gndPad || !groundPads.some((pad) => pad.id === power.gndPadId))) {
-      pushIssue(issues, {
-        id: `electrical-invalid-gnd:${deviceId}:${power.gndPadId}`,
-        severity: 'error',
-        code: 'ground-rail-invalid',
-        deviceId,
-        peripheralId: representative.id,
-        padId: power.gndPadId,
-        message: `${device.label} GND is connected to ${gndPad ? describePad(gndPad) : power.gndPadId}, which is not a ground rail.`,
-      });
-    }
-
-    const vccVoltage = power.voltage ?? getPadVoltage(vccPad);
-    const signalFunctions = device.members.flatMap((member) => {
-      const resolved = getSignalFunctionForPeripheral(member, padById);
-      return resolved?.pinFunction ? [{ member, pad: resolved.pad, pinFunction: resolved.pinFunction }] : [];
-    });
-    signalFunctions.forEach(({ member, pad, pinFunction }) => {
-      if (vccVoltage === '5v' && pinFunction.electrical.logicLevel === '3v3') {
-        const isUnsafeI2cPullup = pinFunction.electrical.openDrain && pinFunction.electrical.requiresExternalPullup;
-        pushIssue(issues, {
-          id: `${isUnsafeI2cPullup ? 'unsafe-i2c-pullup-voltage' : 'voltage-domain-mismatch'}:${member.id}:${pad.id}`,
-          severity: isUnsafeI2cPullup ? 'error' : 'warning',
-          code: isUnsafeI2cPullup ? 'unsafe-i2c-pullup-voltage' : 'voltage-domain-mismatch',
-          deviceId,
-          peripheralId: member.id,
-          endpointId: member.endpointId ?? null,
-          padId: pad.id,
-          functionId: pinFunction.id,
-          message: `${device.label} is powered from ${describeVoltage(vccVoltage)}, but ${pinFunction.label} is a ${describeVoltage(pinFunction.electrical.logicLevel)} MCU function. Add level shifting or use 3V3 power.`,
-        });
-      }
-    });
 
     const i2cMembers = device.members.filter((member) => member.kind === 'i2c');
     if (i2cMembers.length > 0) {
@@ -285,17 +192,6 @@ export function evaluateElectricalRules(wiring: DemoWiring, board: BoardSchema):
           deviceId,
           peripheralId: representative.id,
           message: `${device.label} SCL/SDA are on different I2C buses (${Array.from(busIds).join(', ')}). Choose pads from the same I2C peripheral.`,
-        });
-      }
-
-      if (connectedI2c.length === i2cMembers.length && (!vccPad || !gndPad)) {
-        pushIssue(issues, {
-          id: `i2c-pullup-missing:${deviceId}`,
-          severity: 'warning',
-          code: 'i2c-pullup-missing',
-          deviceId,
-          peripheralId: representative.id,
-          message: `${device.label} uses open-drain I2C pins. Bind VCC/GND so the simulator can model the breakout pull-up reference.`,
         });
       }
     }

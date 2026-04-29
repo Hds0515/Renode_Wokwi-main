@@ -73,9 +73,8 @@ const circuitNetlist = useMemo(() => createNetlistFromWiring(wiring, selectedBoa
 - `createBoardComponent()`: 把开发板可见引脚变成 board component。
 - `createComponentInstanceFromDevice()`: 把 LED、按钮、OLED、SI7021 等工作区元件变成 component。
 - `signalNets`: 把 GPIO/I2C 端点连接到 MCU pad。
-- `powerNets`: 把 VCC/GND 作为数字规则校验用的 power/ground net。
 
-注意：这里的 VCC/GND 不是 SPICE 模拟电源，它们用于电气规则和可视化合理性校验。
+注意：当前项目不再生成外部 VCC/GND 可视化连线，也不会把 VCC/GND 作为项目保存信息写进 Netlist/IR。真正会影响 Renode 仿真的仍然是 GPIO/I2C/UART/SPI 等数字协议连接。
 
 ### 问题二：Netlist 在哪里生成 `.repl/.resc/main.c`?
 
@@ -146,8 +145,8 @@ window.localWokwi.onSimulationEvent(...)
 每个 Device Package 主要描述八类信息：
 
 - `visual`: 元件在元件库和画布上的视觉信息。
-- `pins`: 元件暴露哪些端点，比如 SCL、SDA、VCC、GND。
-- `electricalRules`: 需要电源吗、支持哪些电压域、是否需要 I2C 成对连接。
+- `pins`: 元件暴露哪些 Renode 相关端点，比如 SIG、SCL、SDA、TX、RX。
+- `electricalRules`: 历史字段名仍然保留，但当前只建议表达数字仿真规则，比如引脚方向、总线成对关系、输出冲突；不要用它做 VCC/GND/电阻的 SPICE 式校验。
 - `protocol`: 主协议和 transaction model，比如 `i2c`、`framebuffer-i2c`。
 - `renodeBackend`: 使用 signal broker、bus transaction broker、native Renode sensor，还是 virtual UART terminal。
 - `runtimePanel`: UI 应该组合哪些运行时面板和事件解析器。
@@ -191,14 +190,15 @@ window.localWokwi.onSimulationEvent(...)
 传感器相关文件：
 
 - `src/lib/sensor-packages.ts`: 传感器 SDK 元数据，例如 SI7021 的 Renode 类型、地址、通道、属性名。
-- `src/lib/bus-sensor-runtime.ts`: 通用传感器运行时状态和控制逻辑。
-- `src/lib/si70xx.ts`: SI70xx 协议 codec，负责命令、raw 数据、温湿度转换。
+- `src/lib/bus-sensor-runtime.ts`: 通用传感器运行时状态和控制逻辑，不直接写死某一个传感器协议。
+- `src/lib/sensor-protocol-codecs.ts`: 传感器协议 codec registry，负责按 package 中声明的 codec 找到对应解析器。
+- `src/lib/si70xx.ts`: SI70xx 协议 codec 的底层工具，负责命令、raw 数据、温湿度转换。
 - `packages/devices/si7021/index.ts`: SI7021 作为可拖拽 Device Package 的声明。
 
 SI7021 的闭环是：
 
 ```text
-用户拖入 SI7021 并连接 SCL/SDA/VCC/GND
+用户拖入 SI7021 并连接 SCL/SDA
 -> Netlist 发现 I2C sensor
 -> board.repl 挂载 Sensors.SI70xx
 -> main.c 生成 I2C 读取代码
@@ -230,13 +230,13 @@ SI7021 的闭环是：
 
 1. 在 `packages/devices/<sensor>/index.ts` 添加 Device Package。
 2. 在 `src/lib/sensor-packages.ts` 添加 sensor package 和 channel 元数据。
-3. 如果协议与 SI70xx 不同，在 `src/lib/<codec>.ts` 添加 codec。
-4. 在 `src/lib/bus-sensor-runtime.ts` 接入新的 codec 状态和 transaction decode。
+3. 如果协议与 SI70xx 不同，在 `src/lib/<codec>.ts` 或 `src/lib/sensor-protocol-codecs.ts` 添加 codec，并注册到 `SENSOR_PROTOCOL_CODECS`。
+4. 不要在 `src/lib/bus-sensor-runtime.ts` 写新的传感器分支；它应该通过 codec registry 自动调用对应的 transaction decode。
 5. 确认 `src/lib/runtime-timeline.ts` 能把它加入 runtime bus manifest。
 6. 如果要 MCU 真正读到数据，在 `src/lib/firmware.ts` 生成对应固件读写逻辑。
 7. 如果 Renode 已支持该传感器，在 `.repl` 中挂 native peripheral。
 8. 如果 Renode 不支持，准备 C# peripheral 或 broker-based MVP。
-9. 给 `scripts/validate-netlist.cjs` 或 smoke script 加验证。
+9. 给 `scripts/validate-device-packages.cjs`、`scripts/validate-netlist.cjs` 或 smoke script 加验证。
 
 新增一个 SPI 器件时：
 
@@ -256,6 +256,7 @@ SI7021 的闭环是：
 
 验证脚本在 `scripts/`：
 
+- `validate-device-packages.cjs`: 校验 Device Package 是否能完整描述 visual、pins、Renode backend、runtime panel、event parser、sensor SDK 和 protocol codec。
 - `validate-netlist.cjs`: 校验 Netlist/IR、组件包、传感器包、Device Package、Protocol Runtime Registry、示例项目。
 - `validate-boards.cjs`: 校验板型 schema、Renode platform path、编译和启动链路。
 - `smoke-si7021-native.cjs`: 验证 SI7021 native Renode sensor 闭环。
@@ -267,6 +268,7 @@ SI7021 的闭环是：
 
 ```bash
 npm run lint
+npm run validate:devices
 npm run validate:netlist
 npm run build
 ```
@@ -332,4 +334,3 @@ F4 / F1 板型定义在：[src/lib/boards.ts](F:/YL/Renode_Wokwi-main/src/lib/bo
 源码：[src/lib/firmware.ts](F:/YL/Renode_Wokwi-main/src/lib/firmware.ts:3031)
 
 所以：自动 demo 固件的“控制逻辑”来自用户连线 + 用户选择的外设控制方式 + 当前板型 schema。现在新增的 `User Firmware Mode` 会绕过自动生成 C 控制逻辑，只复用 `.repl/.resc/manifest`，真正控制逻辑由你导入的 ELF 决定。
-

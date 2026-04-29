@@ -10,19 +10,20 @@ It keeps the visual workflow from the original prototype, but moves execution in
 - board selector for `NUCLEO-H753ZI`, experimental `STM32F4 Discovery`, and experimental `STM32F103 GPIO Lab`
 - pin-level placement on the selected board's connector layout
 - drag-in peripheral templates, endpoint-terminal-to-pad gestures, and selectable wires on the main canvas
-- logical `VCC` / `GND` power rail binding for power-aware peripherals
 - local project save/load as `.renode-wokwi.json`
 - project schema v2 with a unified Netlist/IR plus component package catalog and SDK metadata
 - Device Package schema v3 that unifies visual metadata, pins, electrical rules, protocols, Renode backends, runtime panels, example firmware, and validation fixtures
 - Device Package Compiler v1 that compiles independent `packages/devices/*` packages into the runtime catalog while adapting legacy component packages during migration
 - schema-driven Device Runtime Panel renderer that composes GPIO, OLED, sensor, UART, and timeline panels from Device Package runtime metadata
 - peripheral behavior schema v2 so outputs can be controlled by firmware, a chosen input, or generated demo behavior instead of hard-coded LED/Button rules
-- Electrical Rule Engine schema v1 for power rails, voltage domains, bus pairing, output contention, and open-drain I2C checks
+- Digital Pin/Bus Rule Engine schema v1 for pin mux selection, endpoint direction, output contention, and I2C bus pairing
 - Pin Function Mux schema v1 so routed endpoints select GPIO/I2C/SPI/UART/PWM/ADC pad functions instead of relying only on text labels
 - Signal Broker schema v2 with runtime signal manifest metadata
 - SimulationClock schema v1 for clocked runtime events with sequence and virtual-time fields
 - Bus Transaction Broker schema v1 so GPIO, UART, I2C, and SPI events share one timeline
 - Protocol Runtime Registry v1 that groups GPIO, UART, I2C, and SPI runtime devices by protocol and maps them to reusable codecs, panels, and broker backends
+- Device Package Conformance Test v1 for proving each reusable package can generate Netlist nodes, Renode manifest metadata, runtime panels, event parsers, and protocol codecs
+- Sensor Protocol Codec Registry v1 so SI7021/SI70xx is one codec in an extensible sensor protocol library instead of a one-off demo path
 - TCP JSONL Transaction Broker Bridge so native Renode plugins or external tools can inject bus transactions into Electron
 - SSD1306 OLED component template, I2C transaction decoding, and live framebuffer preview demo
 - Sensor Package schema v1 plus Sensor Package SDK v2 with reusable native Renode sensor metadata, monitor-control channels, firmware command metadata, and UI data-flow metadata
@@ -54,12 +55,12 @@ The current MVP has one validated Renode-backed board plus two Renode-verified e
 - board schema abstraction for board metadata, visual frames, curated pins, compiler settings, linker scripts, GPIO register model, and Renode platform path
 - board-aware generated `main.c`, `board.repl`, `.resc`, compiler args, and bundled example projects
 - project document schema v2 for wiring, Netlist/IR, workbench layout, code mode, and component/sensor SDK metadata
-- component package catalog plus Component Package SDK v2 for `Button`, `LED`, `Buzzer`, grouped `RGB LED`, `SSD1306 OLED`, and `SI7021 Sensor` pin/capability, power-pin, behavior, terminal placement, runtime broker, and reusable result-panel definitions
+- component package catalog plus Component Package SDK v2 for `Button`, `LED`, `Buzzer`, grouped `RGB LED`, `SSD1306 OLED`, and `SI7021 Sensor` pin/capability, behavior, terminal placement, runtime broker, and reusable result-panel definitions
 - independent Device Package sources for `SI7021`, `SSD1306`, and `UART Terminal` under `packages/devices`, compiled by Device Package Compiler v1 into the UI library and runtime registry
-- functional `VCC` / `GND` power rails exposed on each board profile and emitted as Netlist/IR power and ground nets
+- Netlist/IR now stores only Renode-relevant signal/bus nets; external VCC/GND visual wire bindings are intentionally not emitted or saved
 - behavior schema v2 for reusable output behavior: firmware-controlled GPIO, explicit input mirroring, or generated blink demo logic
 - board pad mux metadata for GPIO input/output, I2C, SPI, UART, PWM, ADC, power, ground, and passive/control functions
-- an Electrical Rule Engine that blocks unsafe electrical combinations such as mismatched I2C buses, invalid power rails, multiple output drivers, and 5V open-drain pull-ups on 3V3 MCU pins
+- a Digital Pin/Bus Rule Engine that blocks Renode-relevant digital mistakes such as mux mismatch, endpoint direction conflict, mismatched I2C buses, and multiple output drivers
 - Signal Broker schema v2 derived from Netlist/IR GPIO nets and Electron runtime `signal` events
 - runtime signal manifest passed from the renderer to Electron so signal events carry net, component, pin, pad, and MCU metadata
 - SimulationClock snapshots attached to runtime `signal`, `uart`, `bus`, and `timeline` events
@@ -81,7 +82,7 @@ The current MVP has one validated Renode-backed board plus two Renode-verified e
 
 This is intentionally narrower than a full Wokwi replacement. The goal is to finish the local execution chain first and then extend the device library and debugger UX.
 
-The power model is intentionally digital and educational: `VCC` / `GND` validate whether a component is logically powered and make project wiring look closer to real hardware, but they are not SPICE rails and do not simulate impedance, current draw, RC timing, or analog voltage drop.
+External `VCC` / `GND` visual wires are intentionally disabled in this Renode-based simulator. The project focuses on Renode-relevant digital GPIO/I2C/UART/SPI links, so saved projects and Netlist/IR files do not persist separate power/ground wire bindings.
 
 The SI7021 path now has three layers: a reusable Sensor Package v1 declares the native Renode model and controllable channels, the UI can write temperature/humidity into the live `Sensors.SI70xx` instance through the Renode monitor, and generated MCU firmware reads that native sensor through the MCU I2C controller. The panel can still emit SI70xx-compatible broker transactions for the unified Bus Timeline. This is digital/bus-level simulation, not SPICE analog sensor physics.
 
@@ -133,18 +134,17 @@ The helper launcher `scripts/run-local.ps1` will install dependencies automatica
 3. Pull the device's named endpoint terminal directly onto a hotspot on the board canvas, or use the pin chooser on the lower half of the UI.
 4. Click any existing wire to open the inline wire action popover. From there you can `Rewire`, `Delete`, or press `Delete` / `Backspace`.
 5. Drag the device card around the workbench until the layout feels right.
-6. For power-aware outputs, choose `VCC` and `GND` rails in the rack below the board. Unpowered components stay visually disabled and produce validation warnings.
-7. For `LED`, `Buzzer`, and `RGB LED` endpoints, choose the behavior explicitly: firmware controls GPIO, mirror one selected input, or generated blink demo logic.
-8. For `SSD1306 OLED`, connect `SCL` and `SDA` to the board's I2C-capable teaching pins and bind `VCC` / `GND`. The generated runtime manifest will attach the OLED device to that bus and the I2C demo feed will update the framebuffer preview.
-9. For `SI7021 Sensor`, connect `SCL` and `SDA`, bind `VCC` / `GND`, compile, then start the simulation. The Bus Sensor Runtime builds sliders from the sensor package channels; click `Apply Channels To Native Renode Sensor` to write the real Renode SI70xx instance, and use each `Read` button to emit decoded timeline transactions for UI-side inspection. Generated firmware still probes the native sensor over MCU I2C and prints readings on UART.
-10. If you need a less common GPIO, click `Show Full Pinout`.
-11. The app regenerates `main.c`, `board.repl`, and the Renode launch preview from that board and wiring.
-12. Use `Save`, `Save As`, or `Load` in the control panel to persist the board choice, wiring, behavior, power rails, and workbench layout.
-13. Or choose a bundled board-specific example in `Control -> Project -> Examples` and click `Open Example`.
-14. Choose `Generated Demo` to compile the auto-generated firmware, or choose `User Firmware` and click `Import ELF` to load your own compiled `.elf`.
-15. Click `Compile` / `Import ELF`, then `Start`.
-16. Press and hold the external button card in the board canvas and watch only the explicitly mirrored output cards update in real time.
-17. Open a board-specific `SSD1306 OLED over I2C` or `SI7021 sensor over I2C` example to verify the complex-bus path.
+6. For `LED`, `Buzzer`, and `RGB LED` endpoints, choose the behavior explicitly: firmware controls GPIO, mirror one selected input, or generated blink demo logic.
+7. For `SSD1306 OLED`, connect `SCL` and `SDA` to the board's I2C-capable teaching pins. The generated runtime manifest will attach the OLED device to that bus and the I2C demo feed will update the framebuffer preview.
+8. For `SI7021 Sensor`, connect `SCL` and `SDA`, compile, then start the simulation. The Bus Sensor Runtime builds sliders from the sensor package channels; click `Apply Channels To Native Renode Sensor` to write the real Renode SI70xx instance, and use each `Read` button to emit decoded timeline transactions for UI-side inspection. Generated firmware still probes the native sensor over MCU I2C and prints readings on UART.
+9. If you need a less common GPIO, click `Show Full Pinout`.
+10. The app regenerates `main.c`, `board.repl`, and the Renode launch preview from that board and wiring.
+11. Use `Save`, `Save As`, or `Load` in the control panel to persist the board choice, signal/bus wiring, behavior, and workbench layout.
+12. Or choose a bundled board-specific example in `Control -> Project -> Examples` and click `Open Example`.
+13. Choose `Generated Demo` to compile the auto-generated firmware, or choose `User Firmware` and click `Import ELF` to load your own compiled `.elf`.
+14. Click `Compile` / `Import ELF`, then `Start`.
+15. Press and hold the external button card in the board canvas and watch only the explicitly mirrored output cards update in real time.
+16. Open a board-specific `SSD1306 OLED over I2C` or `SI7021 sensor over I2C` example to verify the complex-bus path.
 
 ## Project files
 
@@ -154,7 +154,6 @@ The desktop shell can save and load local `.renode-wokwi.json` files. A saved pr
 - the external peripheral wiring graph
 - explicit `wiring.wires[]` entries for each GPIO connection, derived from the endpoint-to-pad assignment
 - per-component behavior definitions, including explicit controller selection for output endpoints
-- per-component logical power bindings for `VCC` / `GND` rails
 - a `pinMux` section with schema v1 function selections inferred from routed endpoints
 - a unified `netlist` IR with board component, package-backed component instances, GPIO nets, and endpoint-to-pad references
 - `componentPackages` v1 catalog metadata plus `componentPackageSdk` v2 terminal/runtime metadata so future packages can be versioned independently from project files
@@ -270,9 +269,9 @@ npm run start
 - `src/lib/boards.ts`
   - board schemas for identity, connector groups, teaching-friendly pad selection, board canvas coordinates, compiler defaults, linker scripts, and Renode runtime metadata
 - `src/lib/firmware.ts`
-  - peripheral templates, behavior schema v2, pin function mux schema v1, logical power validation, board-aware generated `main.c`, native SI7021 I2C firmware probing, and Renode `.repl` generation
+  - peripheral templates, behavior schema v2, pin function mux schema v1, board-aware generated `main.c`, native SI7021 I2C firmware probing, and Renode `.repl` generation
 - `src/lib/electrical-rules.ts`
-  - Electrical Rule Engine schema v1 for power, ground, voltage domains, pin mux compatibility, I2C bus pairing, I2C pull-up safety, and output contention
+  - Digital Pin/Bus Rule Engine schema v1 for pin mux compatibility, endpoint direction, I2C bus pairing, and output contention
 - `src/App.tsx`
   - board selector plus common-pin-first wiring UX for the selected board
   - Wokwi-like endpoint terminal drag handles on single-pin and multi-endpoint devices
@@ -285,20 +284,24 @@ npm run start
   - `.renode-wokwi.json` project document schema v2
   - project load normalization and forward-compatible warning collection
 - `src/lib/component-packs.ts`
-  - versioned component package catalog plus SDK v2 terminal metadata with pins, capabilities, power pins, behavior defaults, visual metadata, runtime broker binding, and result-panel hints
+  - versioned component package catalog plus SDK v2 terminal metadata with pins, capabilities, behavior defaults, visual metadata, runtime broker binding, and result-panel hints
 - `packages/devices/*`
   - independent reusable Device Package sources; `si7021`, `ssd1306`, and `uart-terminal` now own their visual metadata, pins, electrical rules, protocol model, Renode backend, runtime panels, example firmware, and validation fixtures
+- `src/lib/device-package-conformance.ts`
+  - Device Package Conformance Test v1; verifies package schema, backend manifest, runtime panels, event parsers, legacy links, sensor SDK links, and protocol codec availability
 - `src/lib/device-package-compiler.ts`
   - Device Package Compiler v1; compiles independent package sources and adapts legacy component packages until they are migrated
 - `src/lib/netlist.ts`
   - unified Netlist/IR schema
-  - compiler from wiring to Netlist/IR, pin function metadata, power/ground net emission, Netlist validation, Netlist round-trip, and Renode artifact generation
+  - compiler from wiring to Netlist/IR, pin function metadata, signal/bus net emission, Netlist validation, Netlist round-trip, and Renode artifact generation
 - `src/lib/signal-broker.ts`
   - Signal Broker schema v2, runtime signal manifest generation, edge counting, signal definitions from Netlist/IR, runtime signal reducer, and summary helpers
 - `src/lib/runtime-timeline.ts`
   - SimulationClock schema v1, runtime bus manifest generation, unified GPIO/UART/I2C/SPI timeline event types, bus transaction state, and summary helpers
 - `src/lib/protocol-runtime-registry.ts`
   - Protocol Runtime Registry v1; joins signal/bus manifests with Device Packages so protocol runtimes can discover GPIO, UART, I2C, and SPI devices through one schema
+- `src/lib/sensor-protocol-codecs.ts`
+  - Sensor Protocol Codec Registry v1; reusable protocol codecs such as SI70xx convert bus transactions into normalized sensor channel readings
 - `src/lib/ssd1306.ts`
   - minimal SSD1306 command/data decoder and framebuffer state used by the OLED preview and smoke test
 - `src/lib/sensor-packages.ts`

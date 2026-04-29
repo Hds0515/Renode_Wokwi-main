@@ -15,7 +15,7 @@ export type SensorBusProtocol = 'i2c';
 export type SensorChannelKind = string;
 export type SensorChannelUnit = 'celsius' | 'percent-rh';
 export type SensorControlTransport = 'renode-monitor-property';
-export type SensorTransactionCodec = 'si70xx-compatible';
+export type SensorTransactionCodec = 'si70xx-compatible' | (string & {});
 
 export type SensorPackageChannel = {
   id: SensorChannelKind;

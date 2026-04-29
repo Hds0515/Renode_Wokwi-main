@@ -95,6 +95,12 @@ const {
   getRuntimePanelsForPackage,
 } = require('../src/lib/device-runtime-registry.ts');
 const {
+  validateDevicePackageCatalogConformance,
+} = require('../src/lib/device-package-conformance.ts');
+const {
+  findSensorProtocolCodec,
+} = require('../src/lib/sensor-protocol-codecs.ts');
+const {
   PROTOCOL_RUNTIME_REGISTRY_SCHEMA_VERSION,
   createProtocolRuntimeRegistry,
   getProtocolRuntimeDevicesByModel,
@@ -220,6 +226,18 @@ function validateDevicePackages() {
   });
 
   assert(requiredFixtures.size === 0, `Missing representative device package fixture(s): ${Array.from(requiredFixtures).join(', ')}`);
+
+  const conformance = validateDevicePackageCatalogConformance({
+    catalog: DEVICE_PACKAGE_CATALOG,
+    componentPackages: COMPONENT_PACKAGE_SDKS,
+  });
+  assert(conformance.errorCount === 0, `Device Package conformance failed: ${conformance.issues.find((issue) => issue.severity === 'error')?.message}`);
+  SENSOR_PACKAGE_SDKS.forEach((sensorPackage) => {
+    assert(
+      findSensorProtocolCodec(sensorPackage.busRuntime.transactionCodec),
+      `${sensorPackage.kind} should resolve a reusable sensor protocol codec.`
+    );
+  });
 }
 
 function validateProjectExample(example) {

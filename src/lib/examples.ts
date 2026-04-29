@@ -8,14 +8,9 @@
 import { BoardSchema, BOARD_SCHEMAS } from './boards';
 import {
   DemoPeripheral,
-  DemoPeripheralPowerBinding,
   DemoWiring,
   createDefaultPeripheralBehavior,
-  createDefaultPowerBinding,
   generateDemoMainSource,
-  getGroundPads,
-  getPowerPads,
-  inferPowerVoltage,
 } from './firmware';
 import { ProjectDocument, ProjectPeripheralPosition, createProjectDocument } from './project';
 
@@ -128,25 +123,13 @@ function createButton(id: string, label: string, padId: string): DemoPeripheral 
     padId,
     sourcePeripheralId: null,
     behavior: createDefaultPeripheralBehavior('button'),
-    power: createDefaultPowerBinding(),
+    power: undefined,
     templateKind: 'button',
     groupId: null,
     groupLabel: null,
     endpointId: 'signal',
     endpointLabel: 'SIG',
     accentColor: '#d946ef',
-  };
-}
-
-function createExamplePower(board: BoardSchema): DemoPeripheralPowerBinding {
-  const pads = board.connectors.all.flatMap((connector) => connector.pins);
-  const vccPad = getPowerPads(pads).find((pad) => pad.capabilities.includes('power-3v3')) ?? getPowerPads(pads)[0] ?? null;
-  const gndPad = getGroundPads(pads)[0] ?? null;
-  return {
-    schemaVersion: 1,
-    vccPadId: vccPad?.id ?? null,
-    gndPadId: gndPad?.id ?? null,
-    voltage: inferPowerVoltage(vccPad),
   };
 }
 
@@ -161,7 +144,6 @@ function createOutput(options: {
   accentColor: string;
   groupId?: string | null;
   groupLabel?: string | null;
-  power: DemoPeripheralPowerBinding;
 }): DemoPeripheral {
   return {
     id: options.id,
@@ -176,7 +158,7 @@ function createOutput(options: {
         sourcePeripheralId: options.sourcePeripheralId,
       },
     },
-    power: options.power,
+    power: undefined,
     templateKind: options.templateKind,
     groupId: options.groupId ?? null,
     groupLabel: options.groupLabel ?? null,
@@ -195,7 +177,6 @@ function createI2cEndpoint(options: {
   accentColor: string;
   groupId: string;
   groupLabel: string;
-  power: DemoPeripheralPowerBinding;
   templateKind?: 'ssd1306-oled' | 'si7021-sensor';
 }): DemoPeripheral {
   const templateKind = options.templateKind ?? 'ssd1306-oled';
@@ -206,7 +187,7 @@ function createI2cEndpoint(options: {
     padId: options.padId,
     sourcePeripheralId: null,
     behavior: createDefaultPeripheralBehavior(templateKind),
-    power: options.power,
+    power: undefined,
     templateKind,
     groupId: options.groupId,
     groupLabel: options.groupLabel,
@@ -241,7 +222,6 @@ function buildBoardExamples(board: BoardSchema): ExampleProject[] {
   if (!pins) {
     return [];
   }
-  const power = createExamplePower(board);
 
   const buttonLedWiring: DemoWiring = {
     peripherals: [
@@ -255,7 +235,6 @@ function buildBoardExamples(board: BoardSchema): ExampleProject[] {
         endpointId: 'signal',
         endpointLabel: 'SIG',
         accentColor: '#f59e0b',
-        power,
       }),
     ],
   };
@@ -272,7 +251,6 @@ function buildBoardExamples(board: BoardSchema): ExampleProject[] {
         endpointId: 'signal',
         endpointLabel: 'OUT',
         accentColor: '#14b8a6',
-        power,
       }),
     ],
   };
@@ -293,7 +271,6 @@ function buildBoardExamples(board: BoardSchema): ExampleProject[] {
         accentColor: '#ef4444',
         groupId: 'rgb-led-1',
         groupLabel: 'RGB LED 1',
-        power,
       }),
       createOutput({
         id: 'rgb-led-1-green',
@@ -306,7 +283,6 @@ function buildBoardExamples(board: BoardSchema): ExampleProject[] {
         accentColor: '#22c55e',
         groupId: 'rgb-led-1',
         groupLabel: 'RGB LED 1',
-        power,
       }),
       createOutput({
         id: 'rgb-led-1-blue',
@@ -319,7 +295,6 @@ function buildBoardExamples(board: BoardSchema): ExampleProject[] {
         accentColor: '#3b82f6',
         groupId: 'rgb-led-1',
         groupLabel: 'RGB LED 1',
-        power,
       }),
     ],
   };
@@ -335,7 +310,6 @@ function buildBoardExamples(board: BoardSchema): ExampleProject[] {
         accentColor: '#38bdf8',
         groupId: 'ssd1306-oled-1',
         groupLabel: 'OLED 1',
-        power,
       }),
       createI2cEndpoint({
         id: 'ssd1306-oled-1-sda',
@@ -346,7 +320,6 @@ function buildBoardExamples(board: BoardSchema): ExampleProject[] {
         accentColor: '#0ea5e9',
         groupId: 'ssd1306-oled-1',
         groupLabel: 'OLED 1',
-        power,
       }),
     ],
   };
@@ -362,7 +335,6 @@ function buildBoardExamples(board: BoardSchema): ExampleProject[] {
         accentColor: '#34d399',
         groupId: 'si7021-sensor-1',
         groupLabel: 'SI7021 1',
-        power,
         templateKind: 'si7021-sensor',
       }),
       createI2cEndpoint({
@@ -374,7 +346,6 @@ function buildBoardExamples(board: BoardSchema): ExampleProject[] {
         accentColor: '#10b981',
         groupId: 'si7021-sensor-1',
         groupLabel: 'SI7021 1',
-        power,
         templateKind: 'si7021-sensor',
       }),
     ],

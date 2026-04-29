@@ -187,7 +187,6 @@ function createRuntimeBinding(template: DemoPeripheralTemplateDefinition): Compo
 }
 
 function createComponentPackage(template: DemoPeripheralTemplateDefinition): ComponentPackage {
-  const powerRequired = template.behavior.powerRequired;
   return {
     schemaVersion: COMPONENT_PACKAGE_SCHEMA_VERSION,
     kind: template.kind,
@@ -199,7 +198,7 @@ function createComponentPackage(template: DemoPeripheralTemplateDefinition): Com
       schemaVersion: 2,
       role: template.behavior.role,
       controller: template.behavior.defaultController,
-      powerRequired,
+      powerRequired: false,
     },
     defaultPower: {
       schemaVersion: 1,
@@ -217,22 +216,7 @@ function createComponentPackage(template: DemoPeripheralTemplateDefinition): Com
       accentColor: endpoint.accentColor,
       legacyPeripheralKind: endpoint.kind,
     })),
-    powerPins: [
-      {
-        id: 'vcc',
-        label: 'VCC',
-        role: 'power-vcc',
-        required: powerRequired,
-        requiredPadCapabilities: ['power-vcc'],
-      },
-      {
-        id: 'gnd',
-        label: 'GND',
-        role: 'power-gnd',
-        required: powerRequired,
-        requiredPadCapabilities: ['ground'],
-      },
-    ],
+    powerPins: [],
     visual: {
       accentColor: template.accentColor,
       defaultWidth: template.kind === 'rgb-led' || template.kind === 'ssd1306-oled' || template.kind === 'si7021-sensor' ? 168 : 138,
@@ -353,7 +337,7 @@ function createComponentPackageSdk(componentPackage: ComponentPackage): Componen
     capabilities: {
       endpointCount: componentPackage.pins.length,
       multiEndpoint: componentPackage.pins.length > 1,
-      requiresPower: componentPackage.behavior.powerRequired,
+      requiresPower: false,
       protocols,
       observable: resultPanels.some((panel) => panel !== 'gpio-control'),
       controllable: componentPackage.category === 'input' || componentPackage.kind === 'si7021-sensor',

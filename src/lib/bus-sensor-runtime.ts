@@ -4,7 +4,7 @@
  * Protocol Runtime Registry v1 now owns protocol-level discovery. This module
  * remains the sensor-specific runtime layer: it consumes registry sensor
  * devices, manages channel state, creates native Renode control requests, and
- * decodes sensor transactions. SI70xx is the first codec.
+ * delegates transaction decoding to the sensor protocol codec registry.
  */
 import type { RuntimeBusManifestEntry, RuntimeBusTimelineEvent } from './runtime-timeline';
 import {
@@ -18,12 +18,9 @@ import {
 } from './protocol-runtime-registry';
 import type { ProtocolRuntimeDevice, ProtocolRuntimeRegistry } from './protocol-runtime-registry';
 import {
-  SI7021_DEFAULT_ADDRESS,
-  applySi70xxTransaction,
-  createSi70xxMeasurementTransactions,
-  createSi70xxState,
-} from './si70xx';
-import type { Si70xxMeasurementKind, Si70xxState } from './si70xx';
+  SensorProtocolBrokerTransaction,
+  getSensorProtocolCodec,
+} from './sensor-protocol-codecs';
 
 export const BUS_SENSOR_RUNTIME_SCHEMA_VERSION = 1;
 
@@ -75,7 +72,7 @@ export type BusSensorRuntimeDeviceState = {
   channels: Record<string, BusSensorRuntimeChannelState>;
   transactionCount: number;
   updatedAtVirtualTimeNs: number | null;
-  protocolState: Si70xxState | null;
+  protocolState: unknown | null;
 };
 
 export type BusSensorRuntimeState = {
@@ -97,17 +94,7 @@ export type NativeSensorControlRequestPayload = {
   channels: NativeSensorControlChannelRequest[];
 };
 
-export type BusSensorBrokerTransaction = {
-  protocol: 'i2c';
-  source: 'ui';
-  status: 'data';
-  busId: string;
-  busLabel: string;
-  peripheralName: string;
-  direction: 'read' | 'write';
-  address: number;
-  data: number[];
-};
+export type BusSensorBrokerTransaction = SensorProtocolBrokerTransaction;
 
 /**
  * Narrows the generic protocol runtime device into a sensor runtime device.
@@ -168,13 +155,12 @@ function createChannelState(channel: SensorPackageSdkChannel): BusSensorRuntimeC
   };
 }
 
-function createProtocolState(device: RuntimeBusSensorDevice): Si70xxState | null {
+function createProtocolState(device: RuntimeBusSensorDevice): unknown | null {
   // Each sensor codec owns protocol-specific rolling state. More codecs can add
-  // their own state objects here without changing the React panel contract.
-  if (device.package.busRuntime.transactionCodec !== 'si70xx-compatible') {
-    return null;
-  }
-  return createSi70xxState(device.address ?? SI7021_DEFAULT_ADDRESS);
+  // their own state objects without changing the React panel contract.
+  return getSensorProtocolCodec(device.package.busRuntime.transactionCodec).createInitialState(
+    device.address ?? device.package.protocol.defaultAddress
+  );
 }
 
 function createDeviceState(device: RuntimeBusSensorDevice): BusSensorRuntimeDeviceState {
@@ -361,31 +347,34 @@ export function applyNativeSensorControlValues(
   };
 }
 
-function applySi70xxRuntimeEvent(
+function applyCodecRuntimeEvent(
+  runtimeDevice: RuntimeBusSensorDevice,
   device: BusSensorRuntimeDeviceState,
   event: RuntimeBusTimelineEvent
 ): BusSensorRuntimeDeviceState {
-  const protocolState = applySi70xxTransaction(device.protocolState ?? createSi70xxState(device.address), event);
+  const result = getSensorProtocolCodec(runtimeDevice.package.busRuntime.transactionCodec).applyEvent({
+    state: device.protocolState,
+    address: device.address,
+    event,
+  });
   const channels = { ...device.channels };
-  if (channels.temperature && protocolState.lastReadTemperatureC !== null) {
-    channels.temperature = {
-      ...channels.temperature,
-      lastReadValue: protocolState.lastReadTemperatureC,
+  Object.entries(result.readings).forEach(([channelId, value]) => {
+    const channel = channels[channelId];
+    if (!channel || value === null || typeof value === 'undefined') {
+      return;
+    }
+    channels[channelId] = {
+      ...channel,
+      lastReadValue: value,
     };
-  }
-  if (channels.humidity && protocolState.lastReadHumidityPercent !== null) {
-    channels.humidity = {
-      ...channels.humidity,
-      lastReadValue: protocolState.lastReadHumidityPercent,
-    };
-  }
+  });
 
   return {
     ...device,
     channels,
-    protocolState,
-    transactionCount: protocolState.transactionCount,
-    updatedAtVirtualTimeNs: protocolState.updatedAtVirtualTimeNs,
+    protocolState: result.state,
+    transactionCount: result.transactionCount,
+    updatedAtVirtualTimeNs: result.updatedAtVirtualTimeNs,
   };
 }
 
@@ -410,10 +399,8 @@ export function applyBusSensorRuntimeEvent(
       return;
     }
 
-    if (runtimeDevice.package.busRuntime.transactionCodec === 'si70xx-compatible') {
-      nextDevices[deviceId] = applySi70xxRuntimeEvent(device, event);
-      changed = true;
-    }
+    nextDevices[deviceId] = applyCodecRuntimeEvent(runtimeDevice, device, event);
+    changed = true;
   });
 
   return changed
@@ -431,21 +418,13 @@ export function createBusSensorReadTransactions(
 ): BusSensorBrokerTransaction[] {
   // UI-triggered reads are timeline/demo helpers. Real MCU reads still happen
   // inside Renode through the generated/user firmware and native sensor model.
-  if (device.package.busRuntime.transactionCodec !== 'si70xx-compatible') {
-    return [];
-  }
-  if (channelId !== 'temperature' && channelId !== 'humidity') {
-    return [];
-  }
-
-  return createSi70xxMeasurementTransactions({
+  return getSensorProtocolCodec(device.package.busRuntime.transactionCodec).createReadTransactions({
     busId: device.busId,
     busLabel: device.busLabel,
     componentId: device.componentId,
     address: device.address ?? device.package.protocol.defaultAddress,
-    temperatureC: state.channels.temperature?.configuredValue ?? 24,
-    humidityPercent: state.channels.humidity?.configuredValue ?? 45,
-    kind: channelId as Si70xxMeasurementKind,
+    channelId,
+    channels: state.channels,
   });
 }
 

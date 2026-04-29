@@ -4,16 +4,13 @@ import {
   DemoPeripheralBehavior,
   DemoPeripheralController,
   DemoPinFunctionMuxState,
-  DemoPeripheralPowerBinding,
   DemoPeripheralTemplateKind,
   DemoWiring,
   buildWorkbenchDevices,
   createDefaultPeripheralBehavior,
   createPinFunctionMuxState,
-  createDefaultPowerBinding,
   generateDemoMainSource,
   getPeripheralTemplateKind,
-  inferPowerVoltage,
   isDemoPeripheralTemplateKind,
   synchronizeWiringWires,
 } from './firmware';
@@ -184,42 +181,7 @@ function normalizePeripheralBehavior(
         ? value.role
         : fallback.role,
     controller: normalizePeripheralController(value.controller) ?? fallback.controller,
-    powerRequired: typeof value.powerRequired === 'boolean' ? value.powerRequired : fallback.powerRequired,
-  };
-}
-
-function normalizePeripheralPower(
-  value: unknown,
-  board: BoardSchema,
-  warnings: string[],
-  peripheralId: string
-): DemoPeripheralPowerBinding {
-  const fallback = createDefaultPowerBinding();
-  if (!isRecord(value)) {
-    return fallback;
-  }
-
-  const padById = new Map(board.connectors.all.flatMap((connector) => connector.pins).map((pad) => [pad.id, pad]));
-  const vccPadId = normalizeNullableString(value.vccPadId);
-  const gndPadId = normalizeNullableString(value.gndPadId);
-  const vccPad = vccPadId ? padById.get(vccPadId) ?? null : null;
-  const gndPad = gndPadId ? padById.get(gndPadId) ?? null : null;
-
-  if (vccPadId && !vccPad) {
-    warnings.push(`Cleared missing VCC pad "${vccPadId}" from "${peripheralId}".`);
-  }
-  if (gndPadId && !gndPad) {
-    warnings.push(`Cleared missing GND pad "${gndPadId}" from "${peripheralId}".`);
-  }
-
-  return {
-    schemaVersion: 1,
-    vccPadId: vccPad ? vccPad.id : null,
-    gndPadId: gndPad ? gndPad.id : null,
-    voltage:
-      value.voltage === '3v3' || value.voltage === '5v' || value.voltage === 'vin' || value.voltage === 'external'
-        ? value.voltage
-        : inferPowerVoltage(vccPad),
+    powerRequired: false,
   };
 }
 
@@ -360,7 +322,7 @@ function normalizeProjectWiring(value: unknown, board: BoardSchema, warnings: st
         padId: padId && selectablePadIds.has(padId) ? padId : null,
         sourcePeripheralId: behavior.controller?.type === 'mirror-input' ? behavior.controller.sourcePeripheralId : legacySourcePeripheralId,
         behavior,
-        power: normalizePeripheralPower(rawPeripheral.power, board, warnings, uniqueId),
+        power: undefined,
         templateKind,
         groupId: normalizeNullableString(rawPeripheral.groupId),
         groupLabel: normalizeNullableString(rawPeripheral.groupLabel),
@@ -419,6 +381,22 @@ function normalizeProjectNetlist(value: unknown, board: BoardSchema, warnings: s
   return netlist;
 }
 
+function stripPowerBindingsFromWiring(wiring: DemoWiring): DemoWiring {
+  return synchronizeWiringWires({
+    ...wiring,
+    peripherals: wiring.peripherals.map((peripheral) => ({
+      ...peripheral,
+      behavior: peripheral.behavior
+        ? {
+            ...peripheral.behavior,
+            powerRequired: false,
+          }
+        : peripheral.behavior,
+      power: undefined,
+    })),
+  });
+}
+
 export function createProjectDocument(options: {
   board?: BoardSchema;
   wiring: DemoWiring;
@@ -429,7 +407,7 @@ export function createProjectDocument(options: {
   userFirmware?: ProjectUserFirmware | null;
 }): ProjectDocument {
   const board = options.board ?? ACTIVE_BOARD_SCHEMA;
-  const wiring = synchronizeWiringWires(options.wiring);
+  const wiring = stripPowerBindingsFromWiring(options.wiring);
   const boardPads = board.connectors.all.flatMap((connector) => connector.pins);
   return {
     app: PROJECT_APP_ID,

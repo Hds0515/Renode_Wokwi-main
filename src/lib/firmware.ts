@@ -340,10 +340,6 @@ export type DemoWiringRuleIssue = {
     | 'pad-unavailable'
     | 'pad-shared'
     | 'capability-mismatch'
-    | 'missing-power'
-    | 'missing-ground'
-    | 'invalid-power'
-    | 'invalid-ground'
     | 'missing-driver'
     | 'invalid-driver'
     | 'unwired-driver';
@@ -390,7 +386,7 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
     category: 'output',
     behavior: {
       role: 'gpio-output',
-      powerRequired: true,
+      powerRequired: false,
       defaultController: {
         type: 'firmware',
       },
@@ -417,7 +413,7 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
     category: 'output',
     behavior: {
       role: 'gpio-output',
-      powerRequired: true,
+      powerRequired: false,
       defaultController: {
         type: 'firmware',
       },
@@ -444,7 +440,7 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
     category: 'grouped-output',
     behavior: {
       role: 'gpio-output',
-      powerRequired: true,
+      powerRequired: false,
       defaultController: {
         type: 'firmware',
       },
@@ -489,7 +485,7 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
     category: 'display',
     behavior: {
       role: 'i2c-display',
-      powerRequired: true,
+      powerRequired: false,
       defaultController: null,
     },
     endpoints: [
@@ -523,7 +519,7 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
     category: 'sensor',
     behavior: {
       role: 'i2c-sensor',
-      powerRequired: true,
+      powerRequired: false,
       defaultController: null,
     },
     endpoints: [
@@ -676,20 +672,11 @@ export function inferPowerVoltage(pad: DemoBoardPad | null): DemoPeripheralPower
 }
 
 export function isDevicePowered(device: DemoWorkbenchDevice, boardPads: readonly DemoBoardPad[]): boolean {
-  const template = getPeripheralTemplateDefinition(device.templateKind);
-  if (!template.behavior.powerRequired) {
-    return true;
-  }
-
-  const power = getPeripheralPowerBinding(device.members[0]);
-  const vccPad = power.vccPadId ? boardPads.find((pad) => pad.id === power.vccPadId) ?? null : null;
-  const gndPad = power.gndPadId ? boardPads.find((pad) => pad.id === power.gndPadId) ?? null : null;
-  return Boolean(
-    vccPad &&
-      gndPad &&
-      getPadCapabilities(vccPad).includes('power-vcc') &&
-      getPadCapabilities(gndPad).includes('ground')
-  );
+  void device;
+  void boardPads;
+  // Power rails are intentionally outside the runtime model. Renode evaluates
+  // digital GPIO/I2C/UART state, not SPICE-style power networks.
+  return true;
 }
 
 export function getPeripheralControllerLabel(peripheral: DemoPeripheral, wiring: DemoWiring): string {
@@ -1612,7 +1599,7 @@ export const DEFAULT_DEMO_WIRING: DemoWiring = {
       padId: 'CN10-3',
       sourcePeripheralId: null,
       behavior: createDefaultPeripheralBehavior('button'),
-      power: createDefaultPowerBinding(),
+      power: undefined,
       templateKind: 'button',
       groupId: null,
       groupLabel: null,
@@ -1633,12 +1620,7 @@ export const DEFAULT_DEMO_WIRING: DemoWiring = {
           sourcePeripheralId: 'button-1',
         },
       },
-      power: {
-        schemaVersion: 1,
-        vccPadId: 'CN7-3',
-        gndPadId: 'CN7-5',
-        voltage: '3v3',
-      },
+      power: undefined,
       templateKind: 'led',
       groupId: null,
       groupLabel: null,
@@ -1853,7 +1835,7 @@ function buildTemplatePeripheral(
     padId: null,
     sourcePeripheralId: options?.sourcePeripheralId ?? null,
     behavior: options?.behavior ?? createDefaultPeripheralBehavior(definition.kind),
-    power: options?.power ?? createDefaultPowerBinding(),
+    power: options?.power,
     templateKind: definition.kind,
     groupId,
     groupLabel,
@@ -2119,61 +2101,6 @@ export function validateWiringRules(
         });
       }
     });
-  });
-
-  buildWorkbenchDevices(wiring).forEach((device) => {
-    const template = getPeripheralTemplateDefinition(device.templateKind);
-    const representative = device.members[0];
-    const power = getPeripheralPowerBinding(representative);
-
-    if (template.behavior.powerRequired) {
-      if (!power.vccPadId) {
-        issues.push({
-          id: `missing-power:${device.id}`,
-          severity: 'warning',
-          code: 'missing-power',
-          peripheralId: representative.id,
-          message: `${device.label} is missing VCC. It can stay wired, but the visual runtime will treat it as unpowered.`,
-        });
-      }
-      if (!power.gndPadId) {
-        issues.push({
-          id: `missing-ground:${device.id}`,
-          severity: 'warning',
-          code: 'missing-ground',
-          peripheralId: representative.id,
-          message: `${device.label} is missing GND. It can stay wired, but the visual runtime will treat it as unpowered.`,
-        });
-      }
-    }
-
-    if (power.vccPadId) {
-      const pad = padById.get(power.vccPadId);
-      if (!pad || !getPadCapabilities(pad).includes('power-vcc')) {
-        issues.push({
-          id: `invalid-power:${device.id}:${power.vccPadId}`,
-          severity: 'error',
-          code: 'invalid-power',
-          peripheralId: representative.id,
-          padId: power.vccPadId,
-          message: `${device.label} VCC is connected to ${pad ? describePad(pad) : power.vccPadId}, which is not a power rail.`,
-        });
-      }
-    }
-
-    if (power.gndPadId) {
-      const pad = padById.get(power.gndPadId);
-      if (!pad || !getPadCapabilities(pad).includes('ground')) {
-        issues.push({
-          id: `invalid-ground:${device.id}:${power.gndPadId}`,
-          severity: 'error',
-          code: 'invalid-ground',
-          peripheralId: representative.id,
-          padId: power.gndPadId,
-          message: `${device.label} GND is connected to ${pad ? describePad(pad) : power.gndPadId}, which is not a ground rail.`,
-        });
-      }
-    }
   });
 
   wiring.peripherals
