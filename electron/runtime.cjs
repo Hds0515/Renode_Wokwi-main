@@ -41,6 +41,10 @@ function fileExists(filePath) {
   }
 }
 
+function sanitizeFileName(fileName) {
+  return String(fileName || 'firmware.elf').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+}
+
 function createWorkspaceDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'local-wokwi-workspace-'));
 }
@@ -1414,6 +1418,60 @@ function createRuntimeService(options = {}) {
   }
 
   /**
+   * Imports a user-provided ELF into the active workspace.
+   *
+   * User Firmware Mode still lets the visual netlist generate board.repl,
+   * manifests, UART/GPIO/I2C mappings, and run.resc. The only thing it skips is
+   * GCC compilation: Renode later loads this copied ELF through the same
+   * startSimulation() path used by generated demo firmware.
+   */
+  async function importUserFirmware(request = {}) {
+    const sourcePath = typeof request.filePath === 'string' ? request.filePath : null;
+    if (!sourcePath) {
+      return {
+        success: false,
+        message: 'No ELF file was selected.',
+      };
+    }
+
+    if (!fileExists(sourcePath)) {
+      return {
+        success: false,
+        message: `Selected firmware does not exist: ${sourcePath}`,
+      };
+    }
+
+    const sourceExtension = path.extname(sourcePath).toLowerCase();
+    if (sourceExtension !== '.elf') {
+      return {
+        success: false,
+        message: 'User Firmware Mode MVP currently supports .elf files only.',
+      };
+    }
+
+    const workspaceDir = request.workspaceDir || createWorkspaceDir();
+    const firmwareDir = path.join(workspaceDir, 'user-firmware');
+    ensureDirectory(firmwareDir);
+
+    const fileName = sanitizeFileName(path.basename(sourcePath));
+    const targetPath = path.join(firmwareDir, fileName);
+    await fs.promises.copyFile(sourcePath, targetPath);
+    const stat = await fs.promises.stat(targetPath);
+    state.activeWorkspaceDir = workspaceDir;
+
+    return {
+      success: true,
+      message: `User ELF imported: ${targetPath}`,
+      workspaceDir,
+      elfPath: targetPath,
+      sourcePath,
+      fileName,
+      sizeBytes: stat.size,
+      importedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
    * Starts Renode with the generated board.repl, run.resc, and compiled ELF.
    *
    * The method also creates the local bridge endpoints used by the UI: external
@@ -1438,7 +1496,7 @@ function createRuntimeService(options = {}) {
     if (!fileExists(request.elfPath)) {
       return {
         success: false,
-        message: 'Compiled ELF file was not found. Compile first.',
+        message: 'ELF file was not found. Compile generated firmware or import a user ELF first.',
       };
     }
 
@@ -1958,6 +2016,7 @@ function createRuntimeService(options = {}) {
     off: (...args) => emitter.off(...args),
     getTooling,
     compileFirmware,
+    importUserFirmware,
     startSimulation,
     stopSimulation,
     sendPeripheralEvent,

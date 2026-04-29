@@ -121,6 +121,19 @@ type CompileResult = {
   mapPath?: string;
   stdout?: string;
   stderr?: string;
+  source?: 'generated' | 'manual' | 'user-firmware';
+  sourcePath?: string;
+  fileName?: string;
+  sizeBytes?: number;
+  importedAt?: string;
+};
+
+type SelectUserFirmwareRequest = {
+  workspaceDir?: string;
+};
+
+type SelectUserFirmwareResult = CompileResult & {
+  canceled?: boolean;
 };
 
 type StartSimulationRequest = {
@@ -356,8 +369,15 @@ type LocalProjectDocument = {
     peripheralPositions: Record<string, { x: number; y: number }>;
   };
   code: {
-    mode: 'generated' | 'manual';
+    mode: 'generated' | 'manual' | 'user-firmware';
     mainSource: string;
+    userFirmware?: {
+      sourcePath?: string | null;
+      fileName?: string | null;
+      elfPath?: string | null;
+      importedAt?: string | null;
+      sizeBytes?: number | null;
+    } | null;
   };
 };
 
@@ -517,6 +537,7 @@ declare global {
     localWokwi?: {
       getTooling: () => Promise<ToolingReport>;
       compileFirmware: (request: CompileRequest) => Promise<CompileResult>;
+      selectUserFirmware: (request?: SelectUserFirmwareRequest) => Promise<SelectUserFirmwareResult>;
       startSimulation: (request: StartSimulationRequest) => Promise<StartSimulationResult>;
       stopSimulation: () => Promise<{ success: boolean; message: string }>;
       sendPeripheralEvent: (request: { type: 'button'; id: string; state: 0 | 1 }) => Promise<PeripheralEventResult>;

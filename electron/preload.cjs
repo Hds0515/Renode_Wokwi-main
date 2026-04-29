@@ -10,6 +10,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('localWokwi', {
   getTooling: () => ipcRenderer.invoke('local-wokwi:get-tooling'),
   compileFirmware: (request) => ipcRenderer.invoke('local-wokwi:compile', request),
+  selectUserFirmware: (request) => ipcRenderer.invoke('local-wokwi:select-user-firmware', request),
   startSimulation: (request) => ipcRenderer.invoke('local-wokwi:start-simulation', request),
   stopSimulation: () => ipcRenderer.invoke('local-wokwi:stop-simulation'),
   sendPeripheralEvent: (request) => ipcRenderer.invoke('local-wokwi:send-peripheral-event', request),

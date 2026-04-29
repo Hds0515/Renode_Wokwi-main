@@ -26,6 +26,10 @@ const PROJECT_FILE_FILTERS = [
   { name: 'Renode Wokwi Project (*.renode-wokwi.json)', extensions: ['json'] },
   { name: 'JSON', extensions: ['json'] },
 ];
+const USER_FIRMWARE_FILTERS = [
+  { name: 'ELF Firmware (*.elf)', extensions: ['elf'] },
+  { name: 'All files', extensions: ['*'] },
+];
 
 function ensureProjectFileExtension(filePath) {
   if (filePath.endsWith(PROJECT_FILE_EXTENSION) || filePath.endsWith('.json')) {
@@ -63,6 +67,33 @@ function createWindow() {
 
 ipcMain.handle('local-wokwi:get-tooling', async () => runtime.getTooling());
 ipcMain.handle('local-wokwi:compile', async (_event, request) => runtime.compileFirmware(request));
+ipcMain.handle('local-wokwi:select-user-firmware', async (_event, request = {}) => {
+  try {
+    const result = await dialog.showOpenDialog(runtimeWindow, {
+      title: 'Select User Firmware ELF',
+      properties: ['openFile'],
+      filters: USER_FIRMWARE_FILTERS,
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return {
+        success: false,
+        canceled: true,
+        message: 'Firmware import canceled.',
+      };
+    }
+
+    return runtime.importUserFirmware({
+      filePath: result.filePaths[0],
+      workspaceDir: request.workspaceDir,
+    });
+  } catch (error) {
+    return {
+      success: false,
+      message: `Firmware import failed: ${formatError(error)}`,
+    };
+  }
+});
 ipcMain.handle('local-wokwi:start-simulation', async (_event, request) => runtime.startSimulation(request));
 ipcMain.handle('local-wokwi:stop-simulation', async () => runtime.stopSimulation());
 ipcMain.handle('local-wokwi:send-peripheral-event', async (_event, request) => runtime.sendPeripheralEvent(request));

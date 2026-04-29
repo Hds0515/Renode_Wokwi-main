@@ -11,7 +11,8 @@
 -> React 维护 wiring 状态
 -> createNetlistFromWiring() 生成 CircuitNetlist
 -> compileNetlistToRenodeArtifacts() 生成 main.c / board.repl / run.resc / manifests
--> Electron compileFirmware() 调用 arm-none-eabi-gcc 生成 firmware.elf
+-> Generated Demo: Electron compileFirmware() 调用 arm-none-eabi-gcc 生成 firmware.elf
+-> User Firmware: Electron importUserFirmware() 复制用户 .elf 到当前 workspace
 -> Electron startSimulation() 启动 Renode 并执行 sysbus LoadELF
 -> Renode 通过 GPIO/UART/I2C/SPI/传感器事件回传状态
 -> App.tsx 根据 manifest 和 runtime registry 更新 LED、UART、逻辑分析仪、OLED、传感器面板
@@ -91,23 +92,25 @@ compileNetlistToRenodeArtifacts()
 - `generateRescPreview()`: 生成 run.resc 预览。
 - `buildPeripheralManifest()`: 生成 GPIO bridge manifest。
 
-当前项目仍默认自动生成 C 代码并编译 ELF。未来加入用户导入 ELF/HEX/BIN 时，这一段会变成可选路径，而不是消失。
+当前项目现在有两条固件路径。`Generated Demo` 会继续自动生成 C 代码并编译 ELF；`User Firmware` 会复用同一份 `.repl/.resc/manifest`，但跳过 GCC，直接导入用户已经编译好的 `.elf`。
 
 ### 问题三：ELF 在哪里编译，Renode 在哪里 LoadELF?
 
 入口在 `src/App.tsx`：
 
-- `compileFirmware`: 前端发起编译请求。
-- `startSimulation`: 前端发起仿真请求。
+- `compileFirmware`: Generated Demo / Manual C 模式下发起编译；User Firmware 模式下转为导入 `.elf`。
+- `importUserFirmware`: 打开文件选择器，把用户 `.elf` 导入当前 workspace。
+- `startSimulation`: 前端发起仿真请求，不关心 ELF 来自编译还是导入。
 
 真正执行在 `electron/runtime.cjs`：
 
 - `compileFirmware()`: 写入 `main.c/startup.c/linker.ld`，调用 `arm-none-eabi-gcc`，生成 `firmware.elf`。
+- `importUserFirmware()`: 校验 `.elf` 文件，把它复制到 `workspace/user-firmware/`，并把这个 ELF 作为当前 build artifact。
 - `startSimulation()`: 写入 `board.repl/run.resc`，启动 Renode 子进程。
-- `run.resc` 内部包含 `sysbus LoadELF @firmware.elf`。
+- `run.resc` 内部包含 `sysbus LoadELF @...`，这个路径既可以是自动编译出来的 ELF，也可以是用户导入的 ELF。
 - 同时创建 ExternalControlServer、UART socket terminal、GDB server、Transaction Broker Bridge。
 
-这就是为什么当前项目“看起来不需要用户上传 ELF”：因为它会自动生成 demo C 代码并编译出 ELF。Proteus 里用户上传 HEX，本项目未来也应该支持用户导入固件模式。
+这就是为什么项目以前“看起来不需要用户上传 ELF”：因为默认走自动生成 demo C 代码并编译出 ELF。现在可以切换到 `User Firmware`，它更接近 Proteus 的“加载用户固件再仿真”工作流；MVP 阶段先支持 `.elf`，后续再扩展 `.hex/.bin`。
 
 ### 问题四：Renode 的运行事件在哪里回到前端并更新可视化?
 
@@ -215,7 +218,7 @@ SI7021 的闭环是：
 - `DeviceRuntimePanelRenderer`: 根据 Device Package 的 `runtimePanel` 自动组合面板。
 - `ProtocolRuntimeRegistryPanel`: 展示按协议发现到的运行时设备。
 - `BusSensorRuntimePanel`: 根据 sensor package channel 自动渲染传感器滑块和读数。
-- `compileFirmware`: 把生成代码交给 Electron 编译。
+- `compileFirmware` / `importUserFirmware`: 准备 Renode 要加载的 ELF，前者编译生成 demo C，后者导入用户已有 `.elf`。
 - `startSimulation`: 把 Renode artifacts 和 manifests 交给 Electron 启动仿真。
 - `onSimulationEvent`: 接收 Electron/Renode 事件并更新可视化状态。
 
@@ -284,7 +287,7 @@ npm run smoke:i2c
 
 - 可视化连线到 Netlist/IR。
 - 自动生成 C 固件、`.repl`、`.resc`、manifest。
-- 本地编译 ELF 并启动 Renode。
+- 本地编译 Generated Demo ELF，或导入用户 `.elf`，再启动 Renode。
 - GPIO、UART、I2C 运行事件可视化。
 - SI7021 native Renode sensor 闭环。
 - SSD1306 transaction 到 framebuffer 预览。
@@ -292,7 +295,7 @@ npm run smoke:i2c
 
 仍建议优先补强：
 
-- User Firmware Mode，支持导入 `.elf/.hex/.bin`。
+- User Firmware Mode 后续扩展 `.hex/.bin`，并增加固件与板型/芯片的兼容性提示。
 - 更多 Renode native sensor package。
 - SPI runtime 和 SPI Flash/OLED 示例。
 - 更完善的 C# Broker plugin。
@@ -300,3 +303,33 @@ npm run smoke:i2c
 - 更像 Proteus/Wokwi 的元件属性面板和错误提示。
 
 读代码时始终抓住一句话：用户操作不直接变成 Renode 命令，而是先变成 Netlist 和 Package/Manifest，再由 Electron 和 Renode runtime 执行。
+
+
+
+
+
+**一、自动生成 demo 固件的控制逻辑依据什么**
+当前项目的 demo 固件不是写死“某个按键控制某个 LED”，而是根据这几类数据动态生成：
+
+1. `wiring / Netlist`
+用户在画布上把 Button、LED、OLED、SI7021 等外设连到哪个 MCU 引脚，先变成 `CircuitNetlist`，再生成 `main.c / board.repl / manifest`。
+源码入口：[src/lib/netlist.ts](F:/YL/Renode_Wokwi-main/src/lib/netlist.ts:770)
+
+2. 板型 schema
+不同板型决定 GPIO 寄存器模型、RCC 地址、可选引脚、USART/I2C 引脚、编译参数等。
+F4 / F1 板型定义在：[src/lib/boards.ts](F:/YL/Renode_Wokwi-main/src/lib/boards.ts:378)
+
+3. 外设 behavior
+输出类外设有三种控制方式：
+`Firmware GPIO`：demo 代码只配置 GPIO，不主动控制，留给用户固件控制。
+`Mirror Input`：demo 代码读取某个 Button，然后写 LED/Buzzer/RGB 输出。
+`Blink`：demo 代码按 tick 周期自动闪烁输出。
+
+核心生成逻辑在：[src/lib/firmware.ts](F:/YL/Renode_Wokwi-main/src/lib/firmware.ts:2887)
+
+4. Renode `.repl`
+`generateBoardRepl()` 会把 Button 变成 Renode 的 `Miscellaneous.Button`，把 LED 变成 `Miscellaneous.LED`，并映射到对应 `gpioPortX@n`。
+源码：[src/lib/firmware.ts](F:/YL/Renode_Wokwi-main/src/lib/firmware.ts:3031)
+
+所以：自动 demo 固件的“控制逻辑”来自用户连线 + 用户选择的外设控制方式 + 当前板型 schema。现在新增的 `User Firmware Mode` 会绕过自动生成 C 控制逻辑，只复用 `.repl/.resc/manifest`，真正控制逻辑由你导入的 ELF 决定。
+

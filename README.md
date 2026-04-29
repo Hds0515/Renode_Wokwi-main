@@ -34,6 +34,8 @@ It keeps the visual workflow from the original prototype, but moves execution in
 - bundled example projects that can be opened from the control panel
 - auto-generated Renode `.repl` and `.resc`
 - local ARM GCC compilation
+- User Firmware Mode for importing an existing `.elf` while still reusing the visual wiring generated `.repl`, `.resc`, manifests, and runtime panels
+- F1/F4 User Firmware Validation Pack v1 with CubeMX pin-contract hints and `examples/firmware-cubemx/` onboarding notes
 - local Renode startup
 - bidirectional GPIO interaction through Renode's built-in `ExternalControlServer`
 - live log and GPIO state visualization
@@ -69,6 +71,8 @@ The current MVP has one validated Renode-backed board plus two Renode-verified e
 - SSD1306 OLED preview fed by I2C transaction payloads
 - reusable Bus Sensor Runtime panel with configurable package channels, native Renode sensor control, generated I2C read/write timeline transactions, and native Renode sensor attachment in generated `.repl`
 - UART socket RX line buffering so firmware terminal output appears as complete lines in the transcript and Bus Transaction timeline
+- `Generated Demo` / `User Firmware` mode selector; the latter imports a user-provided `.elf` and loads it into Renode without forcing generated demo C code
+- CubeMX Contract panel in User Firmware Mode for the current F1/F4 wiring, covering Button -> LED, UART output, and SI7021 I2C read paths
 - live GPIO Monitor panel for pin state, last source, recent change time, and edge counts
 - live Logic Analyzer panel for input/output edge samples
 - local `arm-none-eabi-gcc` compilation with generated startup and linker files
@@ -85,7 +89,7 @@ The SI7021 path now has three layers: a reusable Sensor Package v1 declares the 
 
 - Windows
 - Node.js 16+
-- `arm-none-eabi-gcc` on `PATH`
+- `arm-none-eabi-gcc` on `PATH` for Generated Demo builds and smoke tests; User Firmware Mode can start from an existing `.elf`
 - optional: `arm-none-eabi-gdb` on `PATH` for the next debugging stage
 - optional: standalone `renode` on `PATH`
 
@@ -137,9 +141,10 @@ The helper launcher `scripts/run-local.ps1` will install dependencies automatica
 11. The app regenerates `main.c`, `board.repl`, and the Renode launch preview from that board and wiring.
 12. Use `Save`, `Save As`, or `Load` in the control panel to persist the board choice, wiring, behavior, power rails, and workbench layout.
 13. Or choose a bundled board-specific example in `Control -> Project -> Examples` and click `Open Example`.
-14. Click `Compile`, then `Start`.
-15. Press and hold the external button card in the board canvas and watch only the explicitly mirrored output cards update in real time.
-16. Open a board-specific `SSD1306 OLED over I2C` or `SI7021 sensor over I2C` example to verify the complex-bus path.
+14. Choose `Generated Demo` to compile the auto-generated firmware, or choose `User Firmware` and click `Import ELF` to load your own compiled `.elf`.
+15. Click `Compile` / `Import ELF`, then `Start`.
+16. Press and hold the external button card in the board canvas and watch only the explicitly mirrored output cards update in real time.
+17. Open a board-specific `SSD1306 OLED over I2C` or `SI7021 sensor over I2C` example to verify the complex-bus path.
 
 ## Project files
 
@@ -156,7 +161,7 @@ The desktop shell can save and load local `.renode-wokwi.json` files. A saved pr
 - `sensorPackages` v1 catalog metadata plus `sensorPackageSdk` v2 channel/control/data-flow metadata for reusable Renode-native sensors
 - Wokwi-like workbench card positions
 - collapsed/full pinout view state
-- generated/manual source mode and manual `main.c` content
+- generated/manual/user-firmware source mode, manual `main.c` content, and optional imported ELF metadata
 - a template catalog version and the template kinds used by this build
 
 The schema keeps the legacy `wiring` field for compatibility, but the Renode generation path now compiles through `src/lib/netlist.ts`. That gives future board templates and richer external devices one stable IR instead of letting UI state leak directly into `.repl` generation.
@@ -170,6 +175,8 @@ The `examples/` folder contains ready-to-load NUCLEO project files:
 - `multi-button-rgb.renode-wokwi.json`
 
 The desktop app also generates board-specific bundled examples from `src/lib/examples.ts`, so the example dropdown switches between NUCLEO, STM32F4, and STM32F1 projects with the board selector.
+
+For User Firmware Mode, see `examples/firmware-cubemx/`. Those notes describe the expected CubeMX target, exact F1/F4 GPIO/I2C/UART pins, minimal HAL snippets, and the visual result to verify after importing a CubeIDE-built `.elf`.
 
 ## Smoke test
 
@@ -243,6 +250,7 @@ npm run start
   - window bootstrap
   - toolchain detection
   - local compile pipeline
+  - user firmware `.elf` file picker and import bridge
   - Renode process management
   - Renode external-control connection management
   - runtime `signal` events for button injection and Renode LED polling, enriched by `signalManifest`
@@ -253,6 +261,7 @@ npm run start
   - TCP JSONL Transaction Broker Bridge for native C# plugins and external protocol tools
 - `electron/preload.cjs`
   - safe renderer API exposed as `window.localWokwi`
+  - compile/import/start IPC surface used by Generated Demo and User Firmware modes
   - local project save/load bridge
   - renderer-to-runtime `sendBusTransaction` and `setNativeSensor` bridges used by the SI7021 sensor panel
 - `electron/external-control.cjs`
@@ -268,6 +277,7 @@ npm run start
   - board selector plus common-pin-first wiring UX for the selected board
   - Wokwi-like endpoint terminal drag handles on single-pin and multi-endpoint devices
   - draggable peripherals, drag-in templates, grouped RGB devices, selectable wires, and endpoint terminal hotspots for more Wokwi-like placement
+  - Generated Demo / User Firmware mode selector
   - code editor
   - compile/run controls
   - live status/log rendering
@@ -310,6 +320,7 @@ npm run start
 ## What is real now
 
 - compile action calls local `arm-none-eabi-gcc`
+- User Firmware Mode imports an existing `.elf` into the runtime workspace and reuses the same `.repl/.resc/manifest` launch path
 - run action launches Renode as a child process
 - renderer no longer uses the old fake LED simulation loop
 - connector-pad selection regenerates both bare-metal firmware and Renode platform wiring

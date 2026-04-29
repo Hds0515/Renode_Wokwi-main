@@ -54,7 +54,15 @@ import {
   validateNetlist,
 } from './netlist';
 
-export type ProjectCodeMode = 'generated' | 'manual';
+export type ProjectCodeMode = 'generated' | 'manual' | 'user-firmware';
+
+export type ProjectUserFirmware = {
+  sourcePath?: string | null;
+  fileName?: string | null;
+  elfPath?: string | null;
+  importedAt?: string | null;
+  sizeBytes?: number | null;
+};
 
 export type ProjectPeripheralPosition = {
   x: number;
@@ -108,6 +116,7 @@ export type ProjectDocument = {
   code: {
     mode: ProjectCodeMode;
     mainSource: string;
+    userFirmware?: ProjectUserFirmware | null;
   };
 };
 
@@ -249,6 +258,28 @@ function normalizeProjectPositions(value: unknown, wiring: DemoWiring, warnings:
   });
 
   return positions;
+}
+
+function normalizeProjectCodeMode(value: unknown): ProjectCodeMode {
+  if (value === 'manual' || value === 'user-firmware') {
+    return value;
+  }
+  return 'generated';
+}
+
+function normalizeProjectUserFirmware(value: unknown): ProjectUserFirmware | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const sizeBytes = typeof value.sizeBytes === 'number' && Number.isFinite(value.sizeBytes) ? value.sizeBytes : null;
+  return {
+    sourcePath: normalizeNullableString(value.sourcePath),
+    fileName: normalizeNullableString(value.fileName),
+    elfPath: normalizeNullableString(value.elfPath),
+    importedAt: normalizeNullableString(value.importedAt),
+    sizeBytes,
+  };
 }
 
 function normalizeProjectWiring(value: unknown, board: BoardSchema, warnings: string[]): DemoWiring | null {
@@ -395,6 +426,7 @@ export function createProjectDocument(options: {
   peripheralPositions: Record<string, ProjectPeripheralPosition>;
   codeMode: ProjectCodeMode;
   mainSource: string;
+  userFirmware?: ProjectUserFirmware | null;
 }): ProjectDocument {
   const board = options.board ?? ACTIVE_BOARD_SCHEMA;
   const wiring = synchronizeWiringWires(options.wiring);
@@ -446,6 +478,7 @@ export function createProjectDocument(options: {
     code: {
       mode: options.codeMode,
       mainSource: options.mainSource,
+      userFirmware: options.userFirmware ?? null,
     },
   };
 }
@@ -484,7 +517,8 @@ export function normalizeLoadedProjectDocument(value: unknown): ProjectLoadResul
 
   const layout = isRecord(value.layout) ? value.layout : {};
   const code = isRecord(value.code) ? value.code : {};
-  const codeMode: ProjectCodeMode = code.mode === 'manual' ? 'manual' : 'generated';
+  const codeMode = normalizeProjectCodeMode(code.mode);
+  const userFirmware = normalizeProjectUserFirmware(code.userFirmware);
   const boardPads = board.connectors.all.flatMap((connector) => connector.pins);
   const mainSource = typeof code.mainSource === 'string' ? code.mainSource : generateDemoMainSource(wiring, board.runtime, boardPads);
 
@@ -536,6 +570,7 @@ export function normalizeLoadedProjectDocument(value: unknown): ProjectLoadResul
       code: {
         mode: codeMode,
         mainSource,
+        userFirmware,
       },
     },
     warnings,

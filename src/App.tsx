@@ -2,7 +2,7 @@
  * Main Electron renderer for the local Renode visualizer.
  *
  * This file owns the user workflow: board selection, visual wiring, generated
- * or manual firmware, compilation, Renode launch, runtime events, and result
+ * demo or imported user firmware, compilation/import, Renode launch, runtime events, and result
  * visualization. Lower-level conversion and runtime helpers live in src/lib.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -89,6 +89,7 @@ import {
 } from './lib/netlist';
 import {
   ProjectDocument,
+  ProjectUserFirmware,
   createProjectDocument,
   normalizeLoadedProjectDocument,
 } from './lib/project';
@@ -139,6 +140,8 @@ import {
 } from './lib/protocol-runtime-registry';
 import type { ProtocolRuntimeRegistry } from './lib/protocol-runtime-registry';
 import { ElectricalRuleIssue, evaluateElectricalRules } from './lib/electrical-rules';
+import { createCubeMxValidationPack } from './lib/cubemx-validation';
+import type { CubeMxValidationPack } from './lib/cubemx-validation';
 
 type ToolingStatus = {
   found: boolean;
@@ -160,6 +163,11 @@ type BuildResult = {
   mapPath?: string;
   stdout?: string;
   stderr?: string;
+  source?: CodeMode;
+  sourcePath?: string;
+  fileName?: string;
+  sizeBytes?: number;
+  importedAt?: string;
 };
 
 type RuntimeLog = {
@@ -194,7 +202,7 @@ type DebugState = {
   lastMessage: string;
 };
 
-type CodeMode = 'generated' | 'manual';
+type CodeMode = 'generated' | 'manual' | 'user-firmware';
 type EditorTab = 'code' | 'repl' | 'resc' | 'uart';
 type PeripheralPosition = {
   x: number;
@@ -225,6 +233,19 @@ const PAD_HOTSPOT_SIZE = DEFAULT_BOARD.visual.canvas.padHotspotSize;
 const PAD_HOVER_LABEL_WIDTH = DEFAULT_BOARD.visual.canvas.padHoverLabelWidth;
 const BOARD_TOP_VIEW_HEIGHT = DEFAULT_BOARD.visual.canvas.boardTopViewHeight;
 const LIBRARY_TEMPLATE_MIME = 'application/x-local-wokwi-peripheral';
+
+function formatBytes(bytes: number | null | undefined): string {
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes)) {
+    return 'unknown size';
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 const createLogEntry = (message: string, level: RuntimeLog['level'] = 'info'): RuntimeLog => ({
   id: Date.now() + Math.floor(Math.random() * 1000),
@@ -482,6 +503,83 @@ function StatusPill({ active, label }: { active: boolean; label: string }) {
       }`}
     >
       {label}
+    </div>
+  );
+}
+
+function CubeMxValidationPanel({ pack }: { pack: CubeMxValidationPack }) {
+  return (
+    <div className="mt-3 rounded-2xl border border-sky-500/20 bg-sky-500/5 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-[0.24em] text-sky-200/80">CubeMX Contract</div>
+          <div className="mt-1 text-xs leading-5 text-slate-300">
+            Target <span className="font-semibold text-white">{pack.cubeMxTarget}</span> with{' '}
+            <span className="font-semibold text-white">{pack.toolchain}</span>. Use the same pins in CubeMX that are wired on this canvas.
+          </div>
+        </div>
+        <span
+          className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
+            pack.supported
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+              : 'border-amber-500/30 bg-amber-500/10 text-amber-200'
+          }`}
+        >
+          {pack.family}
+        </span>
+      </div>
+
+      <div className="mt-3 grid gap-2">
+        {pack.scenarios.map((scenario) => (
+          <div
+            key={scenario.id}
+            className={`rounded-2xl border px-3 py-2 text-xs ${
+              scenario.ready ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-100' : 'border-slate-700 bg-slate-950/60 text-slate-400'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-white">{scenario.title}</span>
+              <span className="text-[10px] uppercase tracking-[0.18em]">{scenario.ready ? 'ready' : 'needs wiring'}</span>
+            </div>
+            <div className="mt-1">{scenario.summary}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-3 grid gap-2">
+        {pack.pinHints.length === 0 ? (
+          <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-400">
+            Wire a Button, LED, SI7021, or use the board UART to see exact CubeMX pin-mode hints here.
+          </div>
+        ) : (
+          pack.pinHints.slice(0, 10).map((hint) => (
+            <div key={hint.id} className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-300">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-semibold text-white">{hint.mcuPinId}</span>
+                <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] text-sky-200">{hint.role}</span>
+                <span className="text-slate-500">{hint.peripheralLabel}</span>
+              </div>
+              <div className="mt-1 text-slate-400">
+                {hint.cubeMxMode} / {hint.cubeMxPull} / {hint.cubeMxOutputType} / label {hint.recommendedUserLabel}
+              </div>
+              <div className="mt-1 font-mono text-[11px] text-slate-500">{hint.halSymbol}</div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {pack.warnings.length > 0 ? (
+        <div className="mt-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          {pack.warnings[0]}
+        </div>
+      ) : null}
+
+      <div className="mt-3 rounded-2xl border border-slate-800 bg-slate-950/70 p-3">
+        <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Minimal HAL loop</div>
+        <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-5 text-slate-300">
+          {pack.snippets.find((snippet) => snippet.id === 'button-led')?.source}
+        </pre>
+      </div>
     </div>
   );
 }
@@ -3996,6 +4094,7 @@ export default function App() {
   const [logicAnalyzerClock, setLogicAnalyzerClock] = useState(Date.now());
   const [codeMode, setCodeMode] = useState<CodeMode>('generated');
   const [code, setCode] = useState(DEFAULT_MAIN_SOURCE);
+  const [userFirmware, setUserFirmware] = useState<ProjectUserFirmware | null>(null);
   const [uartTranscript, setUartTranscript] = useState('UART terminal idle. Start Renode to attach the board UART socket.\n');
   const [uartInput, setUartInput] = useState('');
   const [codeDirty, setCodeDirty] = useState(true);
@@ -4102,6 +4201,28 @@ export default function App() {
   const generatedCode = renodeArtifacts.mainSource;
   const boardRepl = renodeArtifacts.boardRepl;
   const peripheralManifest = renodeArtifacts.peripheralManifest;
+  const firmwareModeLabel =
+    codeMode === 'user-firmware' ? 'User Firmware' : codeMode === 'manual' ? 'Manual C Source' : 'Generated Demo';
+  const cubeMxValidationPack = useMemo(() => createCubeMxValidationPack(selectedBoard, wiring), [selectedBoard, wiring]);
+  const userFirmwarePreview = useMemo(
+    () =>
+      [
+        '/*',
+        ' * User Firmware Mode',
+        ' *',
+        ' * The editor is read-only in this mode because Renode loads the imported',
+        ' * ELF directly. Visual wiring still generates board.repl, run.resc, GPIO',
+        ' * manifests, UART terminals, I2C/SPI bus manifests, and runtime panels.',
+        ' */',
+        '',
+        `// Board profile: ${selectedBoard.name}`,
+        `// Selected ELF: ${userFirmware?.fileName ?? 'none yet'}`,
+        `// Source path: ${userFirmware?.sourcePath ?? 'choose an .elf from the Firmware Mode panel'}`,
+        `// Workspace copy: ${userFirmware?.elfPath ?? 'not imported yet'}`,
+      ].join('\n'),
+    [selectedBoard.name, userFirmware?.elfPath, userFirmware?.fileName, userFirmware?.sourcePath]
+  );
+  const editorCodeValue = codeMode === 'user-firmware' ? userFirmwarePreview : code;
   const wiringRuleIssues = useMemo(() => validateWiringRules(wiring, selectedBoardPads), [selectedBoardPads, wiring]);
   const wiringRuleErrors = useMemo(() => wiringRuleIssues.filter((issue) => issue.severity === 'error'), [wiringRuleIssues]);
   const wiringRuleWarnings = useMemo(() => wiringRuleIssues.filter((issue) => issue.severity === 'warning'), [wiringRuleIssues]);
@@ -4163,6 +4284,7 @@ export default function App() {
       setWiring((current) => reconcileWiringForBoard(current, nextBoard));
       setShowFullPinout(false);
       setBuildResult(null);
+      setUserFirmware(null);
       setCodeDirty(true);
       setArmedPeripheralId(null);
       setButtonStates({});
@@ -4216,6 +4338,9 @@ export default function App() {
   }, [simulation.running]);
 
   useEffect(() => {
+    if (codeMode === 'user-firmware') {
+      return;
+    }
     setCodeDirty(true);
     if (codeMode === 'generated') {
       setCode(generatedCode);
@@ -4240,7 +4365,7 @@ export default function App() {
     }
 
     setProjectDirty(true);
-  }, [code, codeMode, peripheralPositions, selectedBoardId, showFullPinout, wiring]);
+  }, [code, codeMode, peripheralPositions, selectedBoardId, showFullPinout, userFirmware, wiring]);
 
   useEffect(() => {
     setPeripheralPositions((current) => {
@@ -4485,8 +4610,9 @@ export default function App() {
       peripheralPositions,
       codeMode,
       mainSource: codeMode === 'generated' ? generatedCode : code,
+      userFirmware: codeMode === 'user-firmware' ? userFirmware : null,
     }),
-    [code, codeMode, generatedCode, peripheralPositions, selectedBoard, showFullPinout, wiring]
+    [code, codeMode, generatedCode, peripheralPositions, selectedBoard, showFullPinout, userFirmware, wiring]
   );
 
   const applyProjectDocumentToWorkspace = useCallback(
@@ -4509,8 +4635,9 @@ export default function App() {
       setShowFullPinout(project.layout.showFullPinout);
       setPeripheralPositions(normalizePeripheralPositions(project.layout.peripheralPositions, project.wiring));
       setCodeMode(project.code.mode);
+      setUserFirmware(project.code.userFirmware ?? null);
       setCode(nextCode);
-      setCodeDirty(true);
+      setCodeDirty(project.code.mode !== 'user-firmware');
       setBuildResult(null);
       setArmedPeripheralId(null);
       setButtonStates({});
@@ -5051,23 +5178,81 @@ export default function App() {
   }, [busSensorDevices, signalDefinitions]);
 
   const useGeneratedDemoCode = useCallback(() => {
+    if (simulation.running) {
+      appendLog('Stop the simulation before switching firmware modes.', 'warn');
+      return;
+    }
     setCode(generatedCode);
     setCodeMode('generated');
+    setUserFirmware(null);
+    setBuildResult(null);
     setCodeDirty(true);
     appendLog(`Regenerated demo firmware from ${connectedButtons.length} button(s) and ${connectedLeds.length} output endpoint(s).`);
-  }, [appendLog, connectedButtons.length, connectedLeds.length, generatedCode]);
+  }, [appendLog, connectedButtons.length, connectedLeds.length, generatedCode, simulation.running]);
+
+  const importUserFirmware = useCallback(async (): Promise<BuildResult | null> => {
+    if (simulation.running) {
+      appendLog('Stop the simulation before importing another ELF.', 'warn');
+      return null;
+    }
+    if (!window.localWokwi) {
+      appendLog('Electron preload API is unavailable.', 'warn');
+      return null;
+    }
+
+    const result = await window.localWokwi.selectUserFirmware({
+      workspaceDir: buildResult?.source === 'user-firmware' ? buildResult.workspaceDir : undefined,
+    });
+
+    if (!result.success) {
+      if (!result.canceled) {
+        appendLog(result.message || 'User firmware import failed.', 'error');
+      }
+      return null;
+    }
+
+    const importedFirmware: ProjectUserFirmware = {
+      sourcePath: result.sourcePath ?? null,
+      fileName: result.fileName ?? null,
+      elfPath: result.elfPath ?? null,
+      importedAt: result.importedAt ?? null,
+      sizeBytes: result.sizeBytes ?? null,
+    };
+    const importedBuild: BuildResult = {
+      ...result,
+      source: 'user-firmware',
+    };
+
+    setUserFirmware(importedFirmware);
+    setCodeMode('user-firmware');
+    setBuildResult(importedBuild);
+    setCodeDirty(false);
+    if (result.workspaceDir) {
+      setSimulation((current) => ({
+        ...current,
+        workspaceDir: result.workspaceDir ?? current.workspaceDir,
+      }));
+    }
+    appendLog(`User ELF ready: ${result.fileName ?? result.elfPath} (${formatBytes(result.sizeBytes)}). Visual wiring will still regenerate Renode files.`);
+    return importedBuild;
+  }, [appendLog, buildResult?.source, buildResult?.workspaceDir, simulation.running]);
 
   /**
-   * Compiles the current code editor contents into firmware.elf.
+   * Prepares the firmware artifact used by Renode.
    *
    * In generated mode the editor mirrors the auto-generated demo firmware. In
-   * manual mode the user's code is compiled with the selected board toolchain
-   * settings, matching the future Proteus-like "load your firmware" workflow.
+   * manual mode the user's C code is compiled with the selected board toolchain
+   * settings. In User Firmware mode this switches to a file picker and imports
+   * an existing .elf without rebuilding it.
    */
   const compileFirmware = useCallback(async () => {
     if (!window.localWokwi) {
       appendLog('Electron preload API is unavailable.', 'warn');
       return null;
+    }
+
+    if (codeMode === 'user-firmware') {
+      return importUserFirmware();
     }
 
     if (blockingValidationErrors.length > 0) {
@@ -5095,7 +5280,11 @@ export default function App() {
     });
 
     setIsCompiling(false);
-    setBuildResult(result);
+    const nextBuildResult: BuildResult = {
+      ...result,
+      source: codeMode,
+    };
+    setBuildResult(nextBuildResult);
 
     if (result.success) {
       setCodeDirty(false);
@@ -5118,7 +5307,7 @@ export default function App() {
     }
 
     await refreshTooling();
-    return result;
+    return nextBuildResult;
   }, [
     appendLog,
     buildResult?.workspaceDir,
@@ -5127,6 +5316,7 @@ export default function App() {
     connectedButtons.length,
     connectedLeds.length,
     generatedCode,
+    importUserFirmware,
     peripheralManifest.length,
     refreshTooling,
     selectedBoard.runtime.compiler.gccArgs,
@@ -5138,8 +5328,9 @@ export default function App() {
   /**
    * Launches Renode for the current visual circuit.
    *
-   * If no ELF is ready, compilation runs first. The generated Renode artifacts,
-   * manifests, and board profile are then passed to Electron's runtime service.
+   * If no ELF is ready, generated/manual modes compile first; User Firmware
+   * mode asks for an imported ELF. The current visual netlist still generates
+   * Renode artifacts, manifests, and board profile data for every mode.
    */
   const startSimulation = useCallback(async () => {
     if (!window.localWokwi) {
@@ -5158,12 +5349,21 @@ export default function App() {
     }
 
     let compileResult = buildResult;
-    if (!compileResult?.success || !compileResult.elfPath || codeDirty) {
+    const buildMatchesMode =
+      codeMode === 'user-firmware'
+        ? compileResult?.source === 'user-firmware'
+        : compileResult?.source !== 'user-firmware';
+    if (!compileResult?.success || !compileResult.elfPath || codeDirty || !buildMatchesMode) {
       compileResult = await compileFirmware();
     }
 
     if (!compileResult?.success || !compileResult.elfPath || !compileResult.workspaceDir) {
-      appendLog('Simulation was not started because the build step did not produce a valid ELF.', 'error');
+      appendLog(
+        codeMode === 'user-firmware'
+          ? 'Simulation was not started because no valid user ELF is imported yet.'
+          : 'Simulation was not started because the build step did not produce a valid ELF.',
+        'error'
+      );
       return;
     }
 
@@ -5220,6 +5420,7 @@ export default function App() {
     boardRepl,
     buildResult,
     codeDirty,
+    codeMode,
     compileFirmware,
     peripheralManifest,
     hasRuntimeBusDevice,
@@ -5250,7 +5451,7 @@ export default function App() {
 
   const startDebugger = useCallback(async () => {
     if (!window.localWokwi || !buildResult?.elfPath) {
-      appendLog('Compile and start the simulation before attaching GDB.', 'warn');
+      appendLog('Compile/import firmware and start the simulation before attaching GDB.', 'warn');
       return;
     }
     const result = await window.localWokwi.startDebugging({
@@ -5309,7 +5510,7 @@ export default function App() {
                 <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-300">
                   Add external peripherals, arm a device, click a free board pad, and the workbench will regenerate{' '}
                   <span className="font-semibold text-white">main.c</span>, <span className="font-semibold text-white">board.repl</span>,
-                  compile the firmware, and keep the live Renode simulation synchronized with your wiring.
+                  compile or import firmware, and keep the live Renode simulation synchronized with your wiring.
                 </p>
               </div>
 
@@ -5396,7 +5597,7 @@ export default function App() {
               <div>
                 <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Control</div>
                 <div className="mt-1 text-sm text-slate-300">
-                  Build the current peripheral graph into a real ELF, then launch the local Renode runtime.
+                  Choose generated demo firmware or import your own ELF, then launch the local Renode runtime.
                 </div>
               </div>
               <div className="flex gap-2">
@@ -5409,8 +5610,8 @@ export default function App() {
                       : 'bg-cyan-500 text-slate-950 shadow-lg shadow-cyan-500/20 hover:bg-cyan-400'
                   }`}
                 >
-                  {isCompiling ? <LoaderCircle size={16} className="animate-spin" /> : <Save size={16} />}
-                  {isCompiling ? 'Compiling...' : 'Compile'}
+                  {isCompiling ? <LoaderCircle size={16} className="animate-spin" /> : codeMode === 'user-firmware' ? <FolderOpen size={16} /> : <Save size={16} />}
+                  {isCompiling ? 'Compiling...' : codeMode === 'user-firmware' ? 'Import ELF' : 'Compile'}
                 </button>
 
                 {simulation.running ? (
@@ -5563,6 +5764,76 @@ export default function App() {
                   ))
                 )}
               </div>
+            </div>
+
+            <div className="mt-4 rounded-3xl border border-slate-800 bg-slate-900/70 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Firmware Mode</div>
+                  <div className="mt-1 text-sm text-slate-300">
+                    Current mode: <span className="font-semibold text-white">{firmwareModeLabel}</span>. Visual wiring always generates Renode `.repl`, `.resc`, and runtime manifests.
+                  </div>
+                </div>
+                <span className="shrink-0 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-200">
+                  {codeMode === 'user-firmware' ? 'ELF import' : 'demo build'}
+                </span>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => useGeneratedDemoCode()}
+                  disabled={simulation.running}
+                  className={`rounded-2xl px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition ${
+                    codeMode !== 'user-firmware'
+                      ? 'border border-emerald-500/40 bg-emerald-500/15 text-emerald-100'
+                      : 'border border-slate-700 bg-slate-950/60 text-slate-300 hover:border-slate-500 hover:text-white'
+                  } disabled:cursor-not-allowed disabled:text-slate-500`}
+                >
+                  Generated Demo
+                </button>
+                <button
+                  onClick={() => {
+                    if (simulation.running) {
+                      appendLog('Stop the simulation before switching firmware modes.', 'warn');
+                      return;
+                    }
+                    setCodeMode('user-firmware');
+                    setBuildResult((current) => (current?.source === 'user-firmware' ? current : null));
+                    setCodeDirty(false);
+                    appendLog('User Firmware Mode selected. Import an .elf, then Start will reuse the current visual wiring and manifests.');
+                  }}
+                  disabled={simulation.running}
+                  className={`rounded-2xl px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition ${
+                    codeMode === 'user-firmware'
+                      ? 'border border-sky-500/40 bg-sky-500/15 text-sky-100'
+                      : 'border border-slate-700 bg-slate-950/60 text-slate-300 hover:border-slate-500 hover:text-white'
+                  } disabled:cursor-not-allowed disabled:text-slate-500`}
+                >
+                  User Firmware
+                </button>
+              </div>
+
+              {codeMode === 'user-firmware' ? (
+                <>
+                  <div className="mt-3 rounded-2xl border border-slate-800 bg-slate-950/60 p-3 text-xs text-slate-400">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate font-semibold text-white">{userFirmware?.fileName ?? 'No ELF imported yet'}</div>
+                        <div className="mt-1 break-all">{userFirmware?.sourcePath ?? 'Click Import ELF to choose firmware compiled outside this app.'}</div>
+                        {userFirmware?.sizeBytes ? <div className="mt-1 text-slate-500">{formatBytes(userFirmware.sizeBytes)}</div> : null}
+                      </div>
+                      <button
+                        onClick={() => void importUserFirmware()}
+                        disabled={simulation.running}
+                        className="shrink-0 rounded-2xl bg-sky-500 px-3 py-2 text-xs font-medium text-slate-950 transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+                      >
+                        Import ELF
+                      </button>
+                    </div>
+                  </div>
+                  <CubeMxValidationPanel pack={cubeMxValidationPack} />
+                </>
+              ) : null}
             </div>
 
             <div className="mt-4 rounded-3xl border border-slate-800 bg-slate-900/70 p-3">
@@ -5729,7 +6000,7 @@ export default function App() {
             <div className="mt-4 grid gap-2 text-sm text-slate-300">
               <div className="rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2">
                 <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Build artifact</div>
-                <div className="mt-1 break-all">{buildResult?.elfPath || 'No ELF generated yet'}</div>
+                <div className="mt-1 break-all">{buildResult?.elfPath || (codeMode === 'user-firmware' ? 'No user ELF imported yet' : 'No ELF generated yet')}</div>
               </div>
               <div className="rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2">
                 <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Connected peripherals</div>
@@ -5864,7 +6135,7 @@ export default function App() {
                   }`}
                 >
                   <FileCode2 size={14} />
-                  main.c
+                  {codeMode === 'user-firmware' ? 'firmware.elf' : 'main.c'}
                 </button>
                 <button
                   onClick={() => setActiveTab('repl')}
@@ -5911,7 +6182,17 @@ export default function App() {
                   </button>
                 ) : null}
 
-                {codeDirty ? (
+                {codeMode === 'user-firmware' && buildResult?.success ? (
+                  <>
+                    <CheckCircle2 size={13} />
+                    imported ELF is current
+                  </>
+                ) : codeMode === 'user-firmware' ? (
+                  <>
+                    <TriangleAlert size={13} />
+                    import an ELF before start
+                  </>
+                ) : codeDirty ? (
                   <>
                     <TriangleAlert size={13} />
                     source or wiring changed since last build
@@ -5931,12 +6212,15 @@ export default function App() {
                   height="100%"
                   defaultLanguage="c"
                   theme="vs-dark"
-                  value={code}
+                  value={editorCodeValue}
                   onMount={(editor, monaco) => {
                     codeEditorRef.current = editor;
                     monacoRef.current = monaco;
                   }}
                   onChange={(value) => {
+                    if (codeMode === 'user-firmware') {
+                      return;
+                    }
                     const nextValue = value || '';
                     setCode(nextValue);
                     setCodeDirty(true);
@@ -5948,7 +6232,7 @@ export default function App() {
                     fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
                     glyphMargin: true,
                     scrollBeyondLastLine: false,
-                    readOnly: simulation.running,
+                    readOnly: simulation.running || codeMode === 'user-firmware',
                     padding: { top: 16 },
                   }}
                 />
