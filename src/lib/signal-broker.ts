@@ -22,6 +22,10 @@ export type SignalDefinition = {
   direction: SignalDirection;
   netId: string;
   componentId: string;
+  componentKind: string;
+  devicePackageKind: string | null;
+  devicePackageSchemaVersion: number | null;
+  renodeBackendType: string | null;
   pinId: string;
   peripheralId: string;
   endpointId: string | null;
@@ -38,6 +42,10 @@ export type RuntimeSignalManifestEntry = {
   direction: SignalDirection;
   netId: string;
   componentId: string;
+  componentKind: string;
+  devicePackageKind: string | null;
+  devicePackageSchemaVersion: number | null;
+  renodeBackendType: string | null;
   pinId: string;
   endpointId: string | null;
   padId: string | null;
@@ -113,6 +121,10 @@ export function createSignalDefinitionsFromNetlist(netlist: CircuitNetlist): Sig
         direction: pin.direction === 'input' ? 'input' : 'output',
         netId: net.id,
         componentId: component.id,
+        componentKind: component.kind,
+        devicePackageKind: component.metadata?.devicePackage?.kind ?? component.devicePackageKind ?? pin.devicePackageKind ?? null,
+        devicePackageSchemaVersion: component.metadata?.devicePackage?.schemaVersion ?? null,
+        renodeBackendType: component.metadata?.devicePackage?.renodeBackend.type ?? pin.renodeBackendType ?? net.metadata?.renodeBackendType ?? null,
         pinId: pin.id,
         peripheralId: componentConnection.peripheralId,
         endpointId: componentConnection.endpointId ?? null,
@@ -141,6 +153,10 @@ export function createRuntimeSignalManifest(
     direction: definition.direction,
     netId: definition.netId,
     componentId: definition.componentId,
+    componentKind: definition.componentKind,
+    devicePackageKind: definition.devicePackageKind,
+    devicePackageSchemaVersion: definition.devicePackageSchemaVersion,
+    renodeBackendType: definition.renodeBackendType,
     pinId: definition.pinId,
     endpointId: definition.endpointId,
     padId: definition.padId,

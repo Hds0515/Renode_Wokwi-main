@@ -236,7 +236,14 @@ export type DemoBoardPin = {
 };
 
 export type DemoPeripheralKind = 'button' | 'led' | 'i2c';
-export type DemoPeripheralTemplateKind = 'button' | 'led' | 'buzzer' | 'rgb-led' | 'ssd1306-oled' | 'si7021-sensor';
+export type DemoPeripheralTemplateKind =
+  | 'button'
+  | 'led'
+  | 'buzzer'
+  | 'rgb-led'
+  | 'ssd1306-oled'
+  | 'si7021-sensor'
+  | 'bmp180-sensor';
 
 export type DemoPeripheralTemplateEndpointDefinition = {
   id: string;
@@ -537,6 +544,40 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
         label: 'SDA',
         kind: 'i2c',
         accentColor: '#10b981',
+        defaultSignalLabel: 'SDA',
+        direction: 'bidirectional',
+        requiredCapabilities: ['gpio', 'i2c-sda'],
+      },
+    ],
+  },
+  {
+    kind: 'bmp180-sensor',
+    title: 'BMP180 Sensor',
+    subtitle: 'I2C pressure/temperature',
+    description: 'A Renode BMP180-compatible I2C sensor endpoint with adjustable temperature and pressure readings.',
+    labelPrefix: 'BMP180',
+    accentColor: '#f97316',
+    category: 'sensor',
+    behavior: {
+      role: 'i2c-sensor',
+      powerRequired: false,
+      defaultController: null,
+    },
+    endpoints: [
+      {
+        id: 'scl',
+        label: 'SCL',
+        kind: 'i2c',
+        accentColor: '#fb923c',
+        defaultSignalLabel: 'SCL',
+        direction: 'bidirectional',
+        requiredCapabilities: ['gpio', 'i2c-scl'],
+      },
+      {
+        id: 'sda',
+        label: 'SDA',
+        kind: 'i2c',
+        accentColor: '#f97316',
         defaultSignalLabel: 'SDA',
         direction: 'bidirectional',
         requiredCapabilities: ['gpio', 'i2c-sda'],
@@ -2430,7 +2471,17 @@ static void demo_i2c_poll(uint32_t demo_tick) {
   const bus = binding.runtimeBus;
   if (!bus) {
     return `static void demo_i2c_init(void) {
-    demo_uart_write_string("SI7021 is wired, but this board profile has no native I2C runtime metadata for ${cString(binding.busName)}.\\r\\n");
+    demo_uart_write_string("${cString(binding.sensorPackage.title)} is wired, but this board profile has no native I2C runtime metadata for ${cString(binding.busName)}.\\r\\n");
+}
+
+static void demo_i2c_poll(uint32_t demo_tick) {
+    (void)demo_tick;
+}`;
+  }
+
+  if (binding.sensorPackage.kind !== 'si7021-sensor') {
+    return `static void demo_i2c_init(void) {
+    demo_uart_write_string("${cString(binding.sensorPackage.title)} native Renode peripheral attached on ${cString(bus.displayName)} address ${cString(formatHex(binding.firmwareAddress))}. Use User Firmware mode for a device-specific I2C driver.\\r\\n");
 }
 
 static void demo_i2c_poll(uint32_t demo_tick) {

@@ -37,6 +37,8 @@ packages/devices/*
 src/lib/device-package-types.ts
 src/lib/device-package-compiler.ts
 src/lib/device-packages.ts
+src/lib/device-package-native-runtime.ts
+src/lib/device-package-renode-backend-compiler.ts
 src/lib/component-packs.ts
 src/lib/sensor-packages.ts
 
@@ -48,6 +50,8 @@ src/lib/device-runtime-registry.ts
 src/lib/bus-sensor-runtime.ts
 src/lib/ssd1306.ts
 src/lib/si70xx.ts
+src/lib/bmp180.ts
+src/lib/renode-native-peripheral-catalog.ts
 
 本地执行层
 electron/main.cjs
@@ -71,8 +75,8 @@ const circuitNetlist = useMemo(() => createNetlistFromWiring(wiring, selectedBoa
 
 - `createNetlistFromWiring()`: 把 UI 的 `DemoWiring` 转成统一 `CircuitNetlist`。
 - `createBoardComponent()`: 把开发板可见引脚变成 board component。
-- `createComponentInstanceFromDevice()`: 把 LED、按钮、OLED、SI7021 等工作区元件变成 component。
-- `signalNets`: 把 GPIO/I2C 端点连接到 MCU pad。
+- `createComponentInstanceFromDevice()`: 把 LED、按钮、OLED、SI7021、BMP180 等工作区元件变成 package-native component，并写入 `devicePackageKind`、pin role、protocol、Renode backend。
+- `signalNets`: 把 GPIO/I2C/SPI/UART 端点连接到 MCU pad，并把 net 的 protocol/backend metadata 保留下来。
 
 注意：当前项目不再生成外部 VCC/GND 可视化连线，也不会把 VCC/GND 作为项目保存信息写进 Netlist/IR。真正会影响 Renode 仿真的仍然是 GPIO/I2C/UART/SPI 等数字协议连接。
 
@@ -84,14 +88,15 @@ const circuitNetlist = useMemo(() => createNetlistFromWiring(wiring, selectedBoa
 compileNetlistToRenodeArtifacts()
 ```
 
-它会把 `CircuitNetlist` 临时转回兼容的 wiring 结构，然后调用 `src/lib/firmware.ts` 里的生成器：
+它会先从 `CircuitNetlist` 生成 package-native 的 `devicePackageManifest`，然后调用 `Device Package Renode Backend Compiler v1` 生成 `board.repl` 和结构化 backend artifacts。生成 demo 固件时，仍会把 Netlist 临时转回兼容的 wiring 结构，调用 `src/lib/firmware.ts` 里的 C 代码生成器：
 
 - `generateDemoMainSource()`: 生成默认 demo C 固件。
-- `generateBoardRepl()`: 生成 board.repl，挂载 GPIO、native Renode sensor、I2C 外设等。
+- `compileDevicePackageRenodeBackends()`: 根据 `renodeBackend.type` 生成 `board.repl`、signal/native/bus/virtual backend descriptors 和诊断信息。
 - `generateRescPreview()`: 生成 run.resc 预览。
 - `buildPeripheralManifest()`: 生成 GPIO bridge manifest。
+- `createRenodeDevicePackageManifest()`: 生成 Renode/插件可直接消费的 Device Package backend/protocol/pin manifest。
 
-当前项目现在有两条固件路径。`Generated Demo` 会继续自动生成 C 代码并编译 ELF；`User Firmware` 会复用同一份 `.repl/.resc/manifest`，但跳过 GCC，直接导入用户已经编译好的 `.elf`。
+当前项目现在有两条固件路径。`Generated Demo` 会继续自动生成 C 代码并编译 ELF；`User Firmware` 会复用同一份 `.repl/.resc/manifest`，但跳过 GCC，直接导入用户已经编译好的 `.elf`。注意：现阶段 `main.c` 仍通过兼容 wiring bridge 调用旧生成器，`.repl` 已经由 package-native backend compiler 生成。
 
 ### 问题三：ELF 在哪里编译，Renode 在哪里 LoadELF?
 
@@ -139,6 +144,7 @@ window.localWokwi.onSimulationEvent(...)
 现在推荐从独立包开始读：
 
 - `packages/devices/si7021/index.ts`
+- `packages/devices/bmp180/index.ts`
 - `packages/devices/ssd1306/index.ts`
 - `packages/devices/uart-terminal/index.ts`
 
@@ -148,7 +154,7 @@ window.localWokwi.onSimulationEvent(...)
 - `pins`: 元件暴露哪些 Renode 相关端点，比如 SIG、SCL、SDA、TX、RX。
 - `electricalRules`: 历史字段名仍然保留，但当前只建议表达数字仿真规则，比如引脚方向、总线成对关系、输出冲突；不要用它做 VCC/GND/电阻的 SPICE 式校验。
 - `protocol`: 主协议和 transaction model，比如 `i2c`、`framebuffer-i2c`。
-- `renodeBackend`: 使用 signal broker、bus transaction broker、native Renode sensor，还是 virtual UART terminal。
+- `renodeBackend`: 使用 signal broker、bus transaction broker、native Renode sensor/peripheral，还是 virtual UART terminal。
 - `runtimePanel`: UI 应该组合哪些运行时面板和事件解析器。
 - `exampleFirmware`: 默认 demo 固件需要什么驱动。
 - `validationFixture`: 用哪个示例项目或 smoke test 验证这个包可复用。
@@ -161,6 +167,30 @@ window.localWokwi.onSimulationEvent(...)
 
 运行时 catalog 入口在 `src/lib/device-packages.ts`。
 
+UI 主路径入口在 `src/lib/device-package-native-runtime.ts`：
+
+- `getDevicePackageLibraryItems()`: 元件库卡片从 Device Package 生成。
+- `createPeripheralsFromDevicePackage()`: 用户拖入/点击元件时，从 package 创建当前兼容的 workbench peripheral。
+- `getDevicePackagePinForPeripheral()`: 画布端点、拖线标题、引脚能力提示从 package pin 读取。
+- `countDevicePackageInstances()`: 侧边栏元件计数按 package kind 统计，不再写死 Button/LED/OLED/SI7021。
+
+Netlist/Renode 主路径入口在 `src/lib/netlist.ts`：
+
+- `createComponentInstanceFromDevice()`: 根据 Device Package pins 生成 component pins，不再根据旧 component package pins 生成。
+- `createRenodeDevicePackageManifest()`: 汇总 component、pins、nets、protocol、Renode backend，形成后端可读的 package-native manifest。
+- `compileNetlistToRenodeArtifacts()`: 调用 `compileDevicePackageRenodeBackends()`，把 package-native backend artifacts 和 `board.repl` 一起交给 Electron。
+- `validateNetlist()`: 使用 Device Package pins 校验缺失端点和 pad capability。
+- `createWiringFromNetlist()`: 保留兼容出口，把 package-native Netlist 转成当前 `firmware.ts` 仍需要的 `DemoPeripheral`。
+
+Renode Backend Compiler 入口在 `src/lib/device-package-renode-backend-compiler.ts`：
+
+- `signal-broker`: 生成 `Miscellaneous.Button` / `Miscellaneous.LED` 这类 GPIO `.repl` 片段和 Signal Broker descriptors。
+- `renode-native-sensor` / `renode-native-peripheral`: 生成 Renode native peripheral，例如 `Sensors.SI70xx @ i2c1 0x40` 或 `Sensors.BMP180 @ i2c1 0x77`。
+- `bus-transaction-broker`: 生成 broker-only backend descriptor，例如当前 SSD1306，`.repl` 里只保留说明性片段。
+- `virtual-uart-terminal`: 生成虚拟仪器 descriptor，实际 UART socket terminal 由 runtime `.resc` 连接。
+
+注意：当前 `main.c` 生成器仍然消费兼容的 `DemoPeripheral` 结构，所以 runtime 会在内部使用 legacy template 作为桥。关键变化是：`App.tsx`、Netlist、Signal/Bus manifest 和 `board.repl` 都已经开始走 Device Package metadata。
+
 ## 5. Protocol Runtime Registry 应该怎么读
 
 `src/lib/protocol-runtime-registry.ts` 是后续扩展外设生态的关键。它解决的问题是：不要让 OLED、传感器、UART、SPI Flash 分别扫描 manifest，而是先按协议统一发现运行时设备。
@@ -168,7 +198,7 @@ window.localWokwi.onSimulationEvent(...)
 输入：
 
 - `RuntimeBusManifestEntry[]`: 来自 `createRuntimeBusManifest()`，负责 UART/I2C/SPI。
-- `SignalDefinition[]`: 来自 `createSignalDefinitionsFromNetlist()`，负责 GPIO。
+- `SignalDefinition[]`: 来自 `createSignalDefinitionsFromNetlist()`，负责 GPIO，并携带 `devicePackageKind` / `renodeBackendType`。
 - `BoardSchema`: 当前板型信息。
 
 输出：
@@ -190,10 +220,13 @@ window.localWokwi.onSimulationEvent(...)
 传感器相关文件：
 
 - `src/lib/sensor-packages.ts`: 传感器 SDK 元数据，例如 SI7021 的 Renode 类型、地址、通道、属性名。
+- `src/lib/renode-native-peripheral-catalog.ts`: Renode 原生外设 catalog，把 `si70xx`、`bmp180` 这类条目映射到真实 Renode 类型、默认地址、monitor 属性和源码参考。
 - `src/lib/bus-sensor-runtime.ts`: 通用传感器运行时状态和控制逻辑，不直接写死某一个传感器协议。
 - `src/lib/sensor-protocol-codecs.ts`: 传感器协议 codec registry，负责按 package 中声明的 codec 找到对应解析器。
 - `src/lib/si70xx.ts`: SI70xx 协议 codec 的底层工具，负责命令、raw 数据、温湿度转换。
+- `src/lib/bmp180.ts`: BMP180 协议 helper，当前用于 runtime transaction 读数和验证。
 - `packages/devices/si7021/index.ts`: SI7021 作为可拖拽 Device Package 的声明。
+- `packages/devices/bmp180/index.ts`: BMP180 作为第二个 Renode-native sensor package，验证 package 不再只服务 SI7021。
 
 SI7021 的闭环是：
 
@@ -209,6 +242,20 @@ SI7021 的闭环是：
 
 如果你添加 Renode 已支持的传感器，优先复用 native Renode peripheral。如果 Renode 没有，就需要写 C# peripheral 或先写 broker/codec 原型。
 
+BMP180 的闭环目前是：
+
+```text
+用户拖入 BMP180 并连接 SCL/SDA
+-> Netlist 发现 I2C sensor
+-> Renode Native Peripheral Catalog 提供 Sensors.BMP180、0x77、Temperature/UncompensatedPressure
+-> board.repl 挂载 Sensors.BMP180
+-> Bus Sensor Runtime 根据 Sensor Package SDK 渲染通道控制和读数
+-> User Firmware 通过 MCU I2C 驱动读取 BMP180
+-> 前端通过 UART/timeline/sensor runtime 可视化
+```
+
+注意：BMP180 的生成 demo 固件暂时只提示“已挂载 native peripheral”，不生成完整 BMP180 校准/补偿算法；这一步更适合在 User Firmware Mode 用 CubeMX/HAL 或裸机驱动验证。
+
 ## 7. 前端应该怎么修改
 
 主要区域在 `src/App.tsx`：
@@ -216,6 +263,7 @@ SI7021 的闭环是：
 - 顶部 import：能看到 UI 依赖哪些 schema 和 runtime helper。
 - `WiringWorkbench`: 板图、元件、端点、拖线手势。
 - `DeviceRuntimePanelRenderer`: 根据 Device Package 的 `runtimePanel` 自动组合面板。
+- `PeripheralLibraryCard`: 从 `Device Package Native Runtime v1` 读取 library item 和 package metadata。
 - `ProtocolRuntimeRegistryPanel`: 展示按协议发现到的运行时设备。
 - `BusSensorRuntimePanel`: 根据 sensor package channel 自动渲染传感器滑块和读数。
 - `compileFirmware` / `importUserFirmware`: 准备 Renode 要加载的 ELF，前者编译生成 demo C，后者导入用户已有 `.elf`。
@@ -228,14 +276,15 @@ SI7021 的闭环是：
 
 新增一个 I2C 传感器时：
 
-1. 在 `packages/devices/<sensor>/index.ts` 添加 Device Package。
-2. 在 `src/lib/sensor-packages.ts` 添加 sensor package 和 channel 元数据。
-3. 如果协议与 SI70xx 不同，在 `src/lib/<codec>.ts` 或 `src/lib/sensor-protocol-codecs.ts` 添加 codec，并注册到 `SENSOR_PROTOCOL_CODECS`。
-4. 不要在 `src/lib/bus-sensor-runtime.ts` 写新的传感器分支；它应该通过 codec registry 自动调用对应的 transaction decode。
-5. 确认 `src/lib/runtime-timeline.ts` 能把它加入 runtime bus manifest。
-6. 如果要 MCU 真正读到数据，在 `src/lib/firmware.ts` 生成对应固件读写逻辑。
-7. 如果 Renode 已支持该传感器，在 `.repl` 中挂 native peripheral。
-8. 如果 Renode 不支持，准备 C# peripheral 或 broker-based MVP。
+1. 先在 `src/lib/renode-native-peripheral-catalog.ts` 添加 Renode 原生条目，记录 `renodeType`、默认地址、monitor 属性和源码/Robot 参考。
+2. 在 `src/lib/sensor-packages.ts` 添加 sensor package 和 channel 元数据，尽量从 catalog 复用 native metadata。
+3. 在 `packages/devices/<sensor>/index.ts` 添加 Device Package。
+4. 如果协议与 SI70xx/BMP180 不同，在 `src/lib/<codec>.ts` 或 `src/lib/sensor-protocol-codecs.ts` 添加 codec，并注册到 `SENSOR_PROTOCOL_CODECS`。
+5. 不要在 `src/lib/bus-sensor-runtime.ts` 写新的传感器分支；它应该通过 codec registry 自动调用对应的 transaction decode。
+6. 确认 `src/lib/runtime-timeline.ts` 能把它加入 runtime bus manifest。
+7. 如果要 MCU 真正读到数据，在 `src/lib/firmware.ts` 生成对应固件读写逻辑，或优先用 User Firmware Mode 上传 `.elf`。
+8. 如果 Renode 已支持该传感器，在 `.repl` 中挂 native peripheral。
+9. 如果 Renode 不支持，准备 C# peripheral 或 broker-based MVP。
 9. 给 `scripts/validate-device-packages.cjs`、`scripts/validate-netlist.cjs` 或 smoke script 加验证。
 
 新增一个 SPI 器件时：
@@ -256,8 +305,8 @@ SI7021 的闭环是：
 
 验证脚本在 `scripts/`：
 
-- `validate-device-packages.cjs`: 校验 Device Package 是否能完整描述 visual、pins、Renode backend、runtime panel、event parser、sensor SDK 和 protocol codec。
-- `validate-netlist.cjs`: 校验 Netlist/IR、组件包、传感器包、Device Package、Protocol Runtime Registry、示例项目。
+- `validate-device-packages.cjs`: 校验 Device Package 是否能完整描述 visual、pins、Renode backend、runtime panel、event parser、sensor SDK、Renode native catalog 和 protocol codec。
+- `validate-netlist.cjs`: 校验 Netlist/IR、组件包、传感器包、Device Package、package-native Renode manifest、Renode Backend Compiler、Protocol Runtime Registry、示例项目，并额外合成 BMP180 I2C fixture 验证 `Sensors.BMP180` 生成链路。
 - `validate-boards.cjs`: 校验板型 schema、Renode platform path、编译和启动链路。
 - `smoke-si7021-native.cjs`: 验证 SI7021 native Renode sensor 闭环。
 - `smoke-i2c-demo.cjs`: 验证 SSD1306 I2C transaction 和 OLED framebuffer。
@@ -292,13 +341,14 @@ npm run smoke:i2c
 - 本地编译 Generated Demo ELF，或导入用户 `.elf`，再启动 Renode。
 - GPIO、UART、I2C 运行事件可视化。
 - SI7021 native Renode sensor 闭环。
+- BMP180 native Renode peripheral catalog/package 验证链路。
 - SSD1306 transaction 到 framebuffer 预览。
 - Device Package Compiler 和 Protocol Runtime Registry。
 
 仍建议优先补强：
 
 - User Firmware Mode 后续扩展 `.hex/.bin`，并增加固件与板型/芯片的兼容性提示。
-- 更多 Renode native sensor package。
+- 更多 Renode native sensor package，并逐步给每个传感器补 User Firmware 示例。
 - SPI runtime 和 SPI Flash/OLED 示例。
 - 更完善的 C# Broker plugin。
 - GDB 源码级调试 UI。
@@ -314,7 +364,7 @@ npm run smoke:i2c
 当前项目的 demo 固件不是写死“某个按键控制某个 LED”，而是根据这几类数据动态生成：
 
 1. `wiring / Netlist`
-用户在画布上把 Button、LED、OLED、SI7021 等外设连到哪个 MCU 引脚，先变成 `CircuitNetlist`，再生成 `main.c / board.repl / manifest`。
+用户在画布上把 Button、LED、OLED、SI7021、BMP180 等外设连到哪个 MCU 引脚，先变成 `CircuitNetlist`，再生成 `main.c / board.repl / manifest`。
 源码入口：[src/lib/netlist.ts](F:/YL/Renode_Wokwi-main/src/lib/netlist.ts:770)
 
 2. 板型 schema

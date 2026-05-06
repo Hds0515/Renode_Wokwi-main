@@ -27,7 +27,7 @@ export const DEVICE_PACKAGE_CATALOG = compileDevicePackageCatalog({
 
 export const DEVICE_PACKAGES = DEVICE_PACKAGE_CATALOG.packages;
 export const DEVICE_PACKAGE_LIBRARY_ITEMS = DEVICE_PACKAGES.filter(
-  (devicePackage) => devicePackage.visual.library.visible && devicePackage.legacy.componentPackageKind
+  (devicePackage) => devicePackage.visual.library.visible && devicePackage.visual.library.draggable
 ).sort((left, right) => left.visual.library.order - right.visual.library.order);
 
 const DEVICE_PACKAGE_MAP = new Map<DevicePackageKind, DevicePackage>(

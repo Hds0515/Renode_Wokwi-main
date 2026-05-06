@@ -12,10 +12,11 @@ import {
   DevicePackageKind,
   DeviceRuntimeEventParser,
   DeviceRuntimePanelKind,
+  findDevicePackage,
   getDevicePackage,
-  getDevicePackageForTemplate,
 } from './device-packages';
 import type { CircuitNetlist } from './netlist';
+import { getNetlistComponentDevicePackageKind } from './netlist';
 import type { RuntimeBusManifestEntry, RuntimeBusDeviceManifestEntry } from './runtime-timeline';
 
 export const DEVICE_RUNTIME_REGISTRY_SCHEMA_VERSION = 1;
@@ -103,7 +104,10 @@ export function buildDeviceRuntimeRegistryManifest(options: {
       return [];
     }
 
-    const devicePackage = getDevicePackageForTemplate(component.kind);
+    const devicePackage = findDevicePackage(getNetlistComponentDevicePackageKind(component));
+    if (!devicePackage) {
+      return [];
+    }
     const busDevice = findBusDevice(options.busManifest, component.id);
     return [
       createEntry({

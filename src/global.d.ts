@@ -140,6 +140,7 @@ type StartSimulationRequest = {
   workspaceDir?: string;
   elfPath: string;
   boardRepl: string;
+  renodeBackendArtifacts?: unknown;
   peripheralManifest?: Array<{
     id: string;
     kind: 'button' | 'led';
@@ -182,6 +183,7 @@ type StartSimulationResult = {
   bridgePort?: number;
   transactionBrokerPort?: number;
   transactionBrokerManifestPath?: string;
+  renodeBackendManifestPath?: string | null;
   monitorPort?: number;
   uartPeripheralName?: string | null;
   uartPort?: number | null;
@@ -483,6 +485,7 @@ type RuntimeEvent =
       gdbPort?: number;
       bridgePort?: number;
       transactionBrokerPort?: number;
+      renodeBackendManifestPath?: string | null;
       monitorPort?: number;
       uartPeripheralName?: string | null;
       uartPort?: number | null;

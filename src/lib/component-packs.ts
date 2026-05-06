@@ -15,7 +15,7 @@ import {
   DemoPeripheralTemplateDefinition,
   DemoPeripheralTemplateKind,
 } from './firmware';
-import { getSensorPackage } from './sensor-packages';
+import { getSensorPackage, isSensorPackageKind } from './sensor-packages';
 import type { SensorPackageKind } from './sensor-packages';
 
 export const COMPONENT_PACKAGE_SCHEMA_VERSION = 1;
@@ -53,7 +53,7 @@ export type ComponentPackageRuntimeBinding = {
 } | {
   type: 'renode-i2c-broker';
   address: number;
-  model: 'ssd1306' | 'si7021';
+  model: 'ssd1306' | 'si7021' | 'bmp180';
   sensorPackage?: SensorPackageKind;
 };
 
@@ -170,12 +170,12 @@ function createRuntimeBinding(template: DemoPeripheralTemplateDefinition): Compo
     };
   }
 
-  if (template.kind === 'si7021-sensor') {
-    const sensorPackage = getSensorPackage('si7021-sensor');
+  if (isSensorPackageKind(template.kind)) {
+    const sensorPackage = getSensorPackage(template.kind);
     return {
       type: 'renode-i2c-broker',
       address: sensorPackage.native.defaultAddress,
-      model: 'si7021',
+      model: template.kind === 'bmp180-sensor' ? 'bmp180' : 'si7021',
       sensorPackage: sensorPackage.kind,
     };
   }
@@ -219,8 +219,8 @@ function createComponentPackage(template: DemoPeripheralTemplateDefinition): Com
     powerPins: [],
     visual: {
       accentColor: template.accentColor,
-      defaultWidth: template.kind === 'rgb-led' || template.kind === 'ssd1306-oled' || template.kind === 'si7021-sensor' ? 168 : 138,
-      defaultHeight: template.kind === 'rgb-led' || template.kind === 'ssd1306-oled' || template.kind === 'si7021-sensor' ? 104 : 86,
+      defaultWidth: template.kind === 'rgb-led' || template.kind === 'ssd1306-oled' || template.category === 'sensor' ? 168 : 138,
+      defaultHeight: template.kind === 'rgb-led' || template.kind === 'ssd1306-oled' || template.category === 'sensor' ? 104 : 86,
     },
     runtime: createRuntimeBinding(template),
   };
@@ -243,7 +243,7 @@ function getResultPanels(componentPackage: ComponentPackage): readonly Component
     return ['i2c-framebuffer', 'bus-transactions'];
   }
 
-  if (componentPackage.kind === 'si7021-sensor') {
+  if (componentPackage.category === 'sensor') {
     return ['sensor-control', 'bus-transactions'];
   }
 
@@ -340,7 +340,7 @@ function createComponentPackageSdk(componentPackage: ComponentPackage): Componen
       requiresPower: false,
       protocols,
       observable: resultPanels.some((panel) => panel !== 'gpio-control'),
-      controllable: componentPackage.category === 'input' || componentPackage.kind === 'si7021-sensor',
+      controllable: componentPackage.category === 'input' || componentPackage.category === 'sensor',
       resultPanels,
     },
   };

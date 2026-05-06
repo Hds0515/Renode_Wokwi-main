@@ -39,6 +39,19 @@ const {
   findSensorProtocolCodec,
 } = require('../src/lib/sensor-protocol-codecs.ts');
 const { SENSOR_PACKAGE_SDKS } = require('../src/lib/sensor-packages.ts');
+const {
+  RENODE_NATIVE_PERIPHERAL_CATALOG_SCHEMA_VERSION,
+  RENODE_NATIVE_PERIPHERAL_CATALOG,
+  getRenodeNativePeripheralCatalogEntry,
+} = require('../src/lib/renode-native-peripheral-catalog.ts');
+const {
+  DEVICE_PACKAGE_NATIVE_RUNTIME_SCHEMA_VERSION,
+  countDevicePackageInstances,
+  createPeripheralsFromDevicePackage,
+  getDevicePackageLibraryItems,
+  getDevicePackagePinForPeripheral,
+  getDevicePackageRequirementSummary,
+} = require('../src/lib/device-package-native-runtime.ts');
 
 function assert(condition, message) {
   if (!condition) {
@@ -52,6 +65,12 @@ function validateRepresentativeDevices() {
   assert(si7021.renodeBackend.type === 'renode-native-sensor', 'SI7021 must use the native Renode sensor backend.');
   assert(si7021.runtimePanel.controls.includes('sensor-control'), 'SI7021 must expose generic sensor controls.');
 
+  const bmp180 = getSensorDevicePackage('bmp180-sensor');
+  assert(bmp180.validationFixture.representative === 'i2c-sensor', 'BMP180 must represent the I2C sensor fixture.');
+  assert(bmp180.renodeBackend.type === 'renode-native-peripheral', 'BMP180 must use the generic native Renode peripheral backend.');
+  assert(bmp180.renodeBackend.nativeCatalogId === 'bmp180', 'BMP180 must reference the native peripheral catalog.');
+  assert(bmp180.runtimePanel.eventParsers.includes('i2c-bmp180-measurement'), 'BMP180 must register its reusable protocol parser.');
+
   const ssd1306 = getDevicePackage('ssd1306-oled');
   assert(ssd1306.validationFixture.representative === 'i2c-display', 'SSD1306 must represent the I2C display fixture.');
   assert(ssd1306.renodeBackend.type === 'bus-transaction-broker', 'SSD1306 must use the bus transaction broker backend.');
@@ -63,9 +82,23 @@ function validateRepresentativeDevices() {
   assert(uart.runtimePanel.eventParsers.includes('uart-line-buffer'), 'UART Terminal must parse UART line buffers.');
 }
 
+function validateRenodeNativePeripheralCatalog() {
+  assert(RENODE_NATIVE_PERIPHERAL_CATALOG_SCHEMA_VERSION === 1, 'Renode Native Peripheral Catalog should use schema v1.');
+  assert(RENODE_NATIVE_PERIPHERAL_CATALOG.entries.length >= 2, 'Expected SI70xx and BMP180 native peripheral catalog entries.');
+
+  const bmp180 = getRenodeNativePeripheralCatalogEntry('bmp180');
+  assert(bmp180.renodeType === 'Sensors.BMP180', 'BMP180 catalog entry should map to Renode Sensors.BMP180.');
+  assert(bmp180.defaultAddress === 0x77, 'BMP180 catalog entry should use I2C address 0x77.');
+  assert(
+    bmp180.control.channels.some((channel) => channel.renodeProperty === 'Temperature') &&
+      bmp180.control.channels.some((channel) => channel.renodeProperty === 'UncompensatedPressure'),
+    'BMP180 catalog entry should expose Renode Temperature and UncompensatedPressure controls.'
+  );
+}
+
 function validateSensorProtocolCodecRegistry() {
   assert(SENSOR_PROTOCOL_CODEC_REGISTRY_SCHEMA_VERSION === 1, 'Sensor Protocol Codec Registry should use schema v1.');
-  assert(SENSOR_PROTOCOL_CODECS.length >= 1, 'Expected at least one reusable sensor protocol codec.');
+  assert(SENSOR_PROTOCOL_CODECS.length >= 2, 'Expected SI70xx and BMP180 reusable sensor protocol codecs.');
 
   SENSOR_PACKAGE_SDKS.forEach((sensorPackage) => {
     const codec = findSensorProtocolCodec(sensorPackage.busRuntime.transactionCodec);
@@ -76,6 +109,30 @@ function validateSensorProtocolCodecRegistry() {
         `${sensorPackage.kind}.${channel.id} is not supported by codec ${codec.id}.`
       );
     });
+  });
+}
+
+function validateDevicePackageNativeRuntime() {
+  assert(DEVICE_PACKAGE_NATIVE_RUNTIME_SCHEMA_VERSION === 1, 'Device Package Native Runtime should use schema v1.');
+  const libraryItems = getDevicePackageLibraryItems();
+  assert(libraryItems.length > 0, 'Device Package Native Runtime should expose visible library items.');
+
+  libraryItems.forEach((item) => {
+    assert(item.schemaVersion === DEVICE_PACKAGE_NATIVE_RUNTIME_SCHEMA_VERSION, `${item.packageKind} library item schema mismatch.`);
+    assert(item.endpointCount > 0, `${item.packageKind} should expose at least one connectable endpoint.`);
+    assert(item.requirementSummary === getDevicePackageRequirementSummary(item.packageKind), `${item.packageKind} requirement summary should be package-driven.`);
+    assert(item.canInstantiate, `${item.packageKind} should be instantiable through the native runtime compatibility bridge.`);
+
+    const peripherals = createPeripheralsFromDevicePackage(item.packageKind, 1);
+    assert(peripherals.length === item.endpointCount, `${item.packageKind} should create one peripheral per connectable endpoint.`);
+    peripherals.forEach((peripheral) => {
+      const pin = getDevicePackagePinForPeripheral(peripheral);
+      assert(pin, `${item.packageKind}.${peripheral.endpointId} should round-trip to a Device Package pin.`);
+      assert(pin.terminal.connectable, `${item.packageKind}.${pin.id} should stay connectable.`);
+    });
+
+    const wiring = { peripherals };
+    assert(countDevicePackageInstances(wiring, item.packageKind) === 1, `${item.packageKind} instance counting should be package-driven.`);
   });
 }
 
@@ -94,7 +151,9 @@ function main() {
   assert(report.errorCount === 0, `Device Package conformance failed with ${report.errorCount} error(s).`);
 
   validateRepresentativeDevices();
+  validateRenodeNativePeripheralCatalog();
   validateSensorProtocolCodecRegistry();
+  validateDevicePackageNativeRuntime();
   console.log(
     `Device Package conformance completed: ${report.packageCount} package(s), ${SENSOR_PROTOCOL_CODECS.length} sensor protocol codec(s), ${report.warningCount} warning(s).`
   );

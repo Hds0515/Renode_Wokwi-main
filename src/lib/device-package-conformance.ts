@@ -134,7 +134,7 @@ function validateBackend(devicePackage: DevicePackage, issues: DevicePackageConf
     assertPackage(issues, devicePackage, devicePackage.runtimePanel.eventParsers.includes('uart-line-buffer'), 'runtime-parser-missing', 'UART terminal must parse UART line events.');
   }
 
-  if (devicePackage.renodeBackend.type === 'renode-native-sensor') {
+  if (devicePackage.renodeBackend.type === 'renode-native-sensor' || devicePackage.renodeBackend.type === 'renode-native-peripheral') {
     assertPackage(issues, devicePackage, devicePackage.renodeBackend.manifest === 'runtime-bus-manifest', 'backend-manifest-mismatch', 'Native sensors must emit runtime-bus-manifest.');
     assertPackage(issues, devicePackage, Boolean(devicePackage.renodeBackend.nativeRenodeType), 'backend-incomplete', 'Native sensors must declare the Renode peripheral type.');
     assertPackage(issues, devicePackage, isSensorPackageKind(devicePackage.renodeBackend.sensorPackage), 'sensor-sdk-mismatch', 'Native sensor backend must reference a known sensor package.');

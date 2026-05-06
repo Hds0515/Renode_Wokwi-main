@@ -47,8 +47,6 @@ import {
   DemoWorkbenchDevice,
   DemoWiring,
   buildWorkbenchDevices,
-  countPeripheralTemplateInstances,
-  createPeripheralTemplate,
   createDefaultPeripheralBehavior,
   describePad,
   formatPadCapabilities,
@@ -59,18 +57,31 @@ import {
   getPeripheralBehavior,
   getPeripheralController,
   getPeripheralControllerLabel,
-  getPeripheralTemplateDefinition,
   getPeripheralTemplateKind,
   getWiringWires,
   getWorkbenchDeviceId,
-  isDemoPeripheralTemplateKind,
   resolveSelectablePad,
   synchronizeWiringWires,
   validateWiringRules,
 } from './lib/firmware';
 import { ACTIVE_BOARD_SCHEMA, BOARD_SCHEMAS, BoardSchema, getBoardSchema } from './lib/boards';
-import { COMPONENT_PACKAGE_CATALOG_VERSION, getComponentPackageSdkPin } from './lib/component-packs';
-import { DEVICE_PACKAGE_LIBRARY_ITEMS, getDevicePackageForTemplate } from './lib/device-packages';
+import {
+  DEVICE_PACKAGE_CATALOG_VERSION,
+  getDevicePackage,
+  getDevicePackageForTemplate,
+} from './lib/device-packages';
+import type { DevicePackage, DevicePackageKind } from './lib/device-packages';
+import {
+  countDevicePackageInstances,
+  createPeripheralsFromDevicePackage,
+  findDevicePackageKind,
+  getDevicePackageForPeripheral,
+  getDevicePackageForWorkbenchDevice,
+  getDevicePackageLibraryItems,
+  getDevicePackagePinForPeripheral,
+  getDevicePackageRequirementSummary,
+  getWorkbenchDeviceIdFromPackagePeripherals,
+} from './lib/device-package-native-runtime';
 import { buildDeviceRuntimeRegistryManifest } from './lib/device-runtime-registry';
 import type { DeviceRuntimeRegistryManifest } from './lib/device-runtime-registry';
 import {
@@ -225,7 +236,8 @@ const PERIPHERAL_ROW_GAP = DEFAULT_BOARD.visual.canvas.peripheralRowGap;
 const PAD_HOTSPOT_SIZE = DEFAULT_BOARD.visual.canvas.padHotspotSize;
 const PAD_HOVER_LABEL_WIDTH = DEFAULT_BOARD.visual.canvas.padHoverLabelWidth;
 const BOARD_TOP_VIEW_HEIGHT = DEFAULT_BOARD.visual.canvas.boardTopViewHeight;
-const LIBRARY_TEMPLATE_MIME = 'application/x-local-wokwi-peripheral';
+const LIBRARY_DEVICE_PACKAGE_MIME = 'application/x-renode-wokwi-device-package';
+const DEVICE_PACKAGE_LIBRARY_ITEMS = getDevicePackageLibraryItems();
 
 function formatBytes(bytes: number | null | undefined): string {
   if (typeof bytes !== 'number' || !Number.isFinite(bytes)) {
@@ -251,8 +263,8 @@ function getCanvasHeightForPeripheralCount(count: number) {
   return BOARD_CANVAS_BASE_HEIGHT + Math.max(0, rows - 1) * (PERIPHERAL_CARD_HEIGHT + PERIPHERAL_ROW_GAP);
 }
 
-function parseLibraryTemplateKind(rawValue: string | null | undefined): DemoPeripheralTemplateKind | null {
-  return isDemoPeripheralTemplateKind(rawValue) ? rawValue : null;
+function parseLibraryDevicePackageKind(rawValue: string | null | undefined): DevicePackageKind | null {
+  return findDevicePackageKind(rawValue);
 }
 
 function getBoardPads(board: BoardSchema): DemoBoardPad[] {
@@ -353,53 +365,51 @@ function getDeviceEndpointAnchor(position: PeripheralPosition, endpointIndex: nu
   };
 }
 
-function getTemplatePalette(templateKind: DemoPeripheralTemplateKind) {
-  const definition = getPeripheralTemplateDefinition(templateKind);
-
-  if (templateKind === 'button') {
+function getDevicePackagePalette(devicePackage: DevicePackage) {
+  if (devicePackage.visual.icon === 'button') {
     return {
-      title: definition.title,
-      subtitle: definition.subtitle,
+      title: devicePackage.title,
+      subtitle: devicePackage.subtitle,
       accent: 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-100 hover:bg-fuchsia-500/20',
       ghost: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700',
       icon: ToggleLeft,
     };
   }
 
-  if (templateKind === 'buzzer') {
+  if (devicePackage.visual.icon === 'buzzer') {
     return {
-      title: definition.title,
-      subtitle: definition.subtitle,
+      title: devicePackage.title,
+      subtitle: devicePackage.subtitle,
       accent: 'border-teal-500/40 bg-teal-500/10 text-teal-100 hover:bg-teal-500/20',
       ghost: 'border-teal-200 bg-teal-50 text-teal-700',
       icon: Wrench,
     };
   }
 
-  if (templateKind === 'rgb-led') {
+  if (devicePackage.visual.icon === 'rgb-led') {
     return {
-      title: definition.title,
-      subtitle: definition.subtitle,
+      title: devicePackage.title,
+      subtitle: devicePackage.subtitle,
       accent: 'border-cyan-500/40 bg-cyan-500/10 text-cyan-100 hover:bg-cyan-500/20',
       ghost: 'border-cyan-200 bg-cyan-50 text-cyan-700',
       icon: Cpu,
     };
   }
 
-  if (templateKind === 'ssd1306-oled') {
+  if (devicePackage.visual.icon === 'oled') {
     return {
-      title: definition.title,
-      subtitle: definition.subtitle,
+      title: devicePackage.title,
+      subtitle: devicePackage.subtitle,
       accent: 'border-sky-500/40 bg-sky-500/10 text-sky-100 hover:bg-sky-500/20',
       ghost: 'border-sky-200 bg-sky-50 text-sky-700',
       icon: Terminal,
     };
   }
 
-  if (templateKind === 'si7021-sensor') {
+  if (devicePackage.visual.icon === 'sensor') {
     return {
-      title: definition.title,
-      subtitle: definition.subtitle,
+      title: devicePackage.title,
+      subtitle: devicePackage.subtitle,
       accent: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/20',
       ghost: 'border-emerald-200 bg-emerald-50 text-emerald-700',
       icon: RefreshCcw,
@@ -407,12 +417,16 @@ function getTemplatePalette(templateKind: DemoPeripheralTemplateKind) {
   }
 
   return {
-    title: definition.title,
-    subtitle: definition.subtitle,
+    title: devicePackage.title,
+    subtitle: devicePackage.subtitle,
     accent: 'border-amber-500/40 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20',
     ghost: 'border-amber-200 bg-amber-50 text-amber-700',
     icon: Lightbulb,
   };
+}
+
+function getTemplatePalette(templateKind: DemoPeripheralTemplateKind) {
+  return getDevicePackagePalette(getDevicePackageForTemplate(templateKind));
 }
 
 function getRgbDeviceGlow(device: DemoWorkbenchDevice, ledStates: Record<string, boolean>) {
@@ -565,11 +579,7 @@ function getRuleIssueTone(issue: Pick<DemoWiringRuleIssue | CircuitNetlistIssue 
 }
 
 function getTemplateRequirementSummary(templateKind: DemoPeripheralTemplateKind): string {
-  const devicePackage = getDevicePackageForTemplate(templateKind);
-  return devicePackage.pins
-    .filter((pin) => pin.terminal.connectable && pin.netKind !== 'power' && pin.netKind !== 'ground')
-    .map((pin) => `${pin.label}: ${pin.requiredPadCapabilities.join(' + ')}`)
-    .join(' / ');
+  return getDevicePackageRequirementSummary(getDevicePackageForTemplate(templateKind).kind);
 }
 
 function buildLogicAnalyzerPoints(options: {
@@ -1354,7 +1364,7 @@ function DeviceRuntimePanelRenderer({
 }
 
 function getPeripheralSdkEndpoint(peripheral: DemoPeripheral) {
-  return getComponentPackageSdkPin(getPeripheralTemplateKind(peripheral), peripheral.endpointId ?? 'signal');
+  return getDevicePackagePinForPeripheral(peripheral);
 }
 
 function getPeripheralEndpointLabelText(peripheral: DemoPeripheral) {
@@ -2022,17 +2032,17 @@ function PeripheralRackCard({
 }
 
 function PeripheralLibraryCard({
-  kind,
+  devicePackage,
   disabled,
   onAdd,
   onDragStateChange,
 }: {
-  kind: DemoPeripheralTemplateKind;
+  devicePackage: DevicePackage;
   disabled: boolean;
   onAdd: () => void;
-  onDragStateChange: (kind: DemoPeripheralTemplateKind | null) => void;
+  onDragStateChange: (kind: DevicePackageKind | null) => void;
 }) {
-  const palette = getTemplatePalette(kind);
+  const palette = getDevicePackagePalette(devicePackage);
   const Icon = palette.icon;
 
   return (
@@ -2044,9 +2054,9 @@ function PeripheralLibraryCard({
           return;
         }
         event.dataTransfer.effectAllowed = 'copy';
-        event.dataTransfer.setData(LIBRARY_TEMPLATE_MIME, kind);
-        event.dataTransfer.setData('text/plain', kind);
-        onDragStateChange(kind);
+        event.dataTransfer.setData(LIBRARY_DEVICE_PACKAGE_MIME, devicePackage.kind);
+        event.dataTransfer.setData('text/plain', devicePackage.kind);
+        onDragStateChange(devicePackage.kind);
       }}
       onDragEnd={() => onDragStateChange(null)}
       className={`rounded-[28px] border px-4 py-4 transition ${
@@ -2072,7 +2082,7 @@ function PeripheralLibraryCard({
       </div>
 
       <div className="mt-2 rounded-2xl border border-current/15 bg-black/10 px-3 py-2 text-[10px] uppercase tracking-[0.16em] text-current/65">
-        Needs {getTemplateRequirementSummary(kind)}
+        Needs {getDevicePackageRequirementSummary(devicePackage.kind)}
       </div>
 
       <button
@@ -2114,12 +2124,12 @@ function BoardTopView({
   peripheralPositions: Record<string, PeripheralPosition>;
   visiblePads: DemoBoardPad[];
   armedPeripheralId: string | null;
-  libraryDragKind: DemoPeripheralTemplateKind | null;
+  libraryDragKind: DevicePackageKind | null;
   workbenchDevices: DemoWorkbenchDevice[];
   simulationRunning: boolean;
   onAssignPad: (pad: DemoBoardPad) => void;
   onAssignPadToPeripheral: (peripheralId: string, pad: DemoBoardPad) => void;
-  onCreatePeripheral: (kind: DemoPeripheralTemplateKind, position: PeripheralPosition) => void;
+  onCreatePeripheral: (kind: DevicePackageKind, position: PeripheralPosition) => void;
   onBeginWiring: (peripheralId: string) => void;
   onDisconnectPeripheral: (peripheralId: string) => void;
   onMovePeripheral: (peripheralId: string, position: PeripheralPosition) => void;
@@ -2403,7 +2413,7 @@ function BoardTopView({
 
   const handleLibraryDragOver = useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
-      const droppedKind = libraryDragKind ?? parseLibraryTemplateKind(event.dataTransfer.getData(LIBRARY_TEMPLATE_MIME));
+      const droppedKind = libraryDragKind ?? parseLibraryDevicePackageKind(event.dataTransfer.getData(LIBRARY_DEVICE_PACKAGE_MIME));
       if (!droppedKind || simulationRunning) {
         return;
       }
@@ -2430,7 +2440,7 @@ function BoardTopView({
 
   const handleLibraryDrop = useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
-      const droppedKind = libraryDragKind ?? parseLibraryTemplateKind(event.dataTransfer.getData(LIBRARY_TEMPLATE_MIME));
+      const droppedKind = libraryDragKind ?? parseLibraryDevicePackageKind(event.dataTransfer.getData(LIBRARY_DEVICE_PACKAGE_MIME));
       if (!droppedKind || simulationRunning) {
         return;
       }
@@ -2858,7 +2868,8 @@ function BoardTopView({
 
           {workbenchDevices.map((device, index) => {
             const frame = resolveCanvasPosition(device.id, index);
-            const palette = getTemplatePalette(device.templateKind);
+            const devicePackage = getDevicePackageForWorkbenchDevice(device);
+            const palette = getDevicePackagePalette(devicePackage);
             const isMultiEndpoint = device.members.length > 1;
 
             if (device.templateKind === 'ssd1306-oled') {
@@ -2945,7 +2956,7 @@ function BoardTopView({
               );
             }
 
-            if (device.templateKind === 'si7021-sensor') {
+            if (devicePackage.category === 'sensor') {
               return (
                 <div
                   key={device.id}
@@ -2999,13 +3010,14 @@ function BoardTopView({
                   <div className="mt-3 rounded-[18px] border border-emerald-300 bg-white p-3 shadow-inner">
                     <div className="flex items-center justify-between gap-3">
                       <div className="grid h-14 w-14 place-items-center rounded-2xl border border-emerald-200 bg-emerald-100 text-[11px] font-bold text-emerald-700">
-                        SI7021
+                        {devicePackage.renodeBackend.model.toUpperCase()}
                       </div>
                       <div className="flex-1">
                         <div className="h-2 rounded-full bg-gradient-to-r from-emerald-300 via-teal-300 to-sky-300" />
                         <div className="mt-2 grid grid-cols-2 gap-2 text-center text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                          <div className="rounded-full bg-emerald-100 px-2 py-1">Temp</div>
-                          <div className="rounded-full bg-teal-100 px-2 py-1">RH</div>
+                          {(devicePackage.kind === 'bmp180-sensor' ? ['Temp', 'Press'] : ['Temp', 'RH']).map((label) => (
+                            <div key={label} className="rounded-full bg-emerald-100 px-2 py-1">{label}</div>
+                          ))}
                         </div>
                       </div>
                     </div>
@@ -3014,7 +3026,10 @@ function BoardTopView({
                   <div className="mt-3">
                     <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">{palette.title}</div>
                     <div className="mt-1 text-sm font-semibold">{device.label}</div>
-                    <div className="mt-1 text-xs text-slate-600">Address 0x40, SI70xx-compatible temperature/humidity reads.</div>
+                    <div className="mt-1 text-xs text-slate-600">
+                      Address 0x{(devicePackage.renodeBackend.address ?? devicePackage.protocol.defaultAddress ?? 0).toString(16).toUpperCase()},{' '}
+                      {devicePackage.renodeBackend.nativeRenodeType ?? 'Renode native sensor'}.
+                    </div>
                   </div>
 
                   <div className="mt-3 grid gap-2">
@@ -3130,7 +3145,7 @@ function BoardTopView({
             const active = isButton ? buttonStates[peripheral.id] : ledStates[peripheral.id];
             const controllerLabel = peripheral.kind === 'led' ? getPeripheralControllerLabel(peripheral, wiring) : null;
             const endpointLabel = getPeripheralEndpointLabelText(peripheral);
-            const endpointColor = getPeripheralSdkEndpoint(peripheral)?.accentColor ?? '#22d3ee';
+            const endpointColor = peripheral.accentColor ?? getDevicePackageForPeripheral(peripheral).visual.accentColor ?? '#22d3ee';
             const baseTone = isButton
               ? active
                 ? 'border-fuchsia-300 bg-fuchsia-500/90 text-white'
@@ -3227,7 +3242,7 @@ function BoardTopView({
 
           {libraryDragKind && libraryPreviewPosition ? (
             <div
-              className={`pointer-events-none absolute rounded-[24px] border border-dashed px-4 py-3 opacity-80 ${getTemplatePalette(libraryDragKind).ghost}`}
+              className={`pointer-events-none absolute rounded-[24px] border border-dashed px-4 py-3 opacity-80 ${getDevicePackagePalette(getDevicePackage(libraryDragKind)).ghost}`}
               style={{
                 left: libraryPreviewPosition.x,
                 top: libraryPreviewPosition.y,
@@ -3236,7 +3251,7 @@ function BoardTopView({
               }}
             >
               <div className="text-[11px] uppercase tracking-[0.2em]">Preview</div>
-              <div className="mt-1 text-sm font-semibold">{getTemplatePalette(libraryDragKind).title} Template</div>
+              <div className="mt-1 text-sm font-semibold">{getDevicePackagePalette(getDevicePackage(libraryDragKind)).title} Package</div>
               <div className="mt-2 text-xs">Release here to drop a new part into the workbench.</div>
             </div>
           ) : null}
@@ -3286,7 +3301,7 @@ function WiringWorkbench({
   peripheralPositions: Record<string, PeripheralPosition>;
   onAssign: (pad: DemoBoardPad) => void;
   onAssignPeripheralToPad: (peripheralId: string, pad: DemoBoardPad) => void;
-  onAddPeripheral: (kind: DemoPeripheralTemplateKind, position?: PeripheralPosition) => void;
+  onAddPeripheral: (kind: DevicePackageKind, position?: PeripheralPosition) => void;
   onBeginWiring: (peripheralId: string) => void;
   onArmPeripheral: (peripheralId: string) => void;
   onDisconnectPeripheral: (peripheralId: string) => void;
@@ -3301,20 +3316,18 @@ function WiringWorkbench({
   const buttons = getPeripheralsByKind(wiring, 'button');
   const leds = getPeripheralsByKind(wiring, 'led');
   const workbenchDevices = useMemo(() => buildWorkbenchDevices(wiring), [wiring]);
-  const [libraryDragKind, setLibraryDragKind] = useState<DemoPeripheralTemplateKind | null>(null);
+  const [libraryDragKind, setLibraryDragKind] = useState<DevicePackageKind | null>(null);
   const workbenchConnectors = useMemo(() => buildWorkbenchConnectorGroups(wiring, showFullPinout, board), [board, wiring, showFullPinout]);
   const boardPads = useMemo(() => getBoardPads(board), [board]);
   const hiddenPadCount = Math.max(0, board.connectors.selectablePads.length - workbenchConnectors.visibleSelectablePads);
   const deviceCounts = useMemo(
-    () => ({
-      button: workbenchDevices.filter((device) => device.templateKind === 'button').length,
-      led: workbenchDevices.filter((device) => device.templateKind === 'led').length,
-      buzzer: workbenchDevices.filter((device) => device.templateKind === 'buzzer').length,
-      rgb: workbenchDevices.filter((device) => device.templateKind === 'rgb-led').length,
-      oled: workbenchDevices.filter((device) => device.templateKind === 'ssd1306-oled').length,
-      sensor: workbenchDevices.filter((device) => device.templateKind === 'si7021-sensor').length,
-    }),
-    [workbenchDevices]
+    () =>
+      DEVICE_PACKAGE_LIBRARY_ITEMS.map((libraryItem) => ({
+        packageKind: libraryItem.packageKind,
+        title: libraryItem.title,
+        count: countDevicePackageInstances(wiring, libraryItem.packageKind),
+      })),
+    [wiring]
   );
   const visibleCanvasPads = useMemo(
     () =>
@@ -3334,17 +3347,14 @@ function WiringWorkbench({
           </div>
 
           <div className="mt-5 grid gap-3">
-            {DEVICE_PACKAGE_LIBRARY_ITEMS.map((devicePackage) => {
-              const templateKind = devicePackage.legacy.componentPackageKind;
-              if (!templateKind) {
-                return null;
-              }
+            {DEVICE_PACKAGE_LIBRARY_ITEMS.map((libraryItem) => {
+              const devicePackage = getDevicePackage(libraryItem.packageKind);
               return (
-              <div key={devicePackage.kind}>
+              <div key={libraryItem.packageKind}>
                 <PeripheralLibraryCard
-                  kind={templateKind}
-                  disabled={workbenchDevices.length >= MAX_PERIPHERALS || simulationRunning}
-                  onAdd={() => onAddPeripheral(templateKind)}
+                  devicePackage={devicePackage}
+                  disabled={workbenchDevices.length >= MAX_PERIPHERALS || simulationRunning || !libraryItem.canInstantiate}
+                  onAdd={() => onAddPeripheral(libraryItem.packageKind)}
                   onDragStateChange={setLibraryDragKind}
                 />
               </div>
@@ -3372,30 +3382,12 @@ function WiringWorkbench({
           <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-sm text-slate-300">
             <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Device Count</div>
             <div className="mt-2 grid grid-cols-2 gap-2">
-              <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
-                <div className="text-xs text-slate-500">Buttons</div>
-                <div className="mt-1 text-lg font-semibold text-white">{deviceCounts.button}</div>
-              </div>
-              <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
-                <div className="text-xs text-slate-500">LEDs</div>
-                <div className="mt-1 text-lg font-semibold text-white">{deviceCounts.led}</div>
-              </div>
-              <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
-                <div className="text-xs text-slate-500">Buzzers</div>
-                <div className="mt-1 text-lg font-semibold text-white">{deviceCounts.buzzer}</div>
-              </div>
-              <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
-                <div className="text-xs text-slate-500">RGB LEDs</div>
-                <div className="mt-1 text-lg font-semibold text-white">{deviceCounts.rgb}</div>
-              </div>
-              <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
-                <div className="text-xs text-slate-500">OLEDs</div>
-                <div className="mt-1 text-lg font-semibold text-white">{deviceCounts.oled}</div>
-              </div>
-              <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
-                <div className="text-xs text-slate-500">Sensors</div>
-                <div className="mt-1 text-lg font-semibold text-white">{deviceCounts.sensor}</div>
-              </div>
+              {deviceCounts.map((item) => (
+                <div key={item.packageKind} className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                  <div className="truncate text-xs text-slate-500">{item.title}</div>
+                  <div className="mt-1 text-lg font-semibold text-white">{item.count}</div>
+                </div>
+              ))}
               <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
                 <div className="text-xs text-slate-500">Free Pads</div>
                 <div className="mt-1 text-lg font-semibold text-white">
@@ -3489,6 +3481,7 @@ function WiringWorkbench({
 
         <div className="mt-5 grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
           {workbenchDevices.map((device) => {
+            const devicePackage = getDevicePackageForWorkbenchDevice(device);
             if (device.members.length === 1) {
               const peripheral = device.members[0];
               return (
@@ -3559,12 +3552,12 @@ function WiringWorkbench({
               );
             }
 
-            if (device.templateKind === 'si7021-sensor') {
+            if (devicePackage.category === 'sensor') {
               return (
                 <div key={device.id} className="rounded-[26px] border border-emerald-500/40 bg-emerald-500/10 p-4 text-emerald-50">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <div className="text-xs uppercase tracking-[0.22em] text-emerald-100/80">SI7021 Sensor</div>
+                      <div className="text-xs uppercase tracking-[0.22em] text-emerald-100/80">{devicePackage.title}</div>
                       <div className="mt-1 text-lg font-semibold">{device.label}</div>
                     </div>
                     <button
@@ -3577,7 +3570,8 @@ function WiringWorkbench({
                   </div>
 
                   <div className="mt-3 rounded-2xl border border-emerald-200/20 bg-black/30 px-3 py-3 text-sm text-emerald-50/90">
-                    Wire SCL and SDA to matching I2C-capable pads. Generated board.repl attaches Renode SI70xx, and generated firmware reads it through MCU I2C at address 0x40.
+                    Wire SCL and SDA to matching I2C-capable pads. Generated board.repl attaches {devicePackage.renodeBackend.nativeRenodeType ?? devicePackage.renodeBackend.model} at
+                    {' '}0x{(devicePackage.renodeBackend.address ?? devicePackage.protocol.defaultAddress ?? 0).toString(16).toUpperCase()}.
                   </div>
 
                   <div className="mt-3 space-y-3">
@@ -3933,6 +3927,7 @@ export default function App() {
   const generatedCode = renodeArtifacts.mainSource;
   const boardRepl = renodeArtifacts.boardRepl;
   const peripheralManifest = renodeArtifacts.peripheralManifest;
+  const renodeBackendArtifacts = renodeArtifacts.renodeBackendArtifacts;
   const firmwareModeLabel =
     codeMode === 'user-firmware' ? 'User Firmware' : codeMode === 'manual' ? 'Manual C Source' : 'Generated Demo';
   const cubeMxValidationPack = useMemo(() => createCubeMxValidationPack(selectedBoard, wiring), [selectedBoard, wiring]);
@@ -4492,7 +4487,7 @@ export default function App() {
   }, [appendLog, applyProjectDocumentToWorkspace, selectedBoard.id, selectedExampleId, simulation.running]);
 
   const addPeripheral = useCallback(
-    (templateKind: DemoPeripheralTemplateKind, preferredPosition?: PeripheralPosition) => {
+    (devicePackageKind: DevicePackageKind, preferredPosition?: PeripheralPosition) => {
       if (simulation.running) {
         appendLog('Stop the simulation before adding or removing external peripherals.', 'warn');
         return;
@@ -4503,9 +4498,15 @@ export default function App() {
         return;
       }
 
-      const ordinal = countPeripheralTemplateInstances(wiring, templateKind) + 1;
-      const nextPeripherals = createPeripheralTemplate(templateKind, ordinal);
-      const deviceId = getWorkbenchDeviceId(nextPeripherals[0]);
+      let nextPeripherals: DemoPeripheral[];
+      try {
+        const ordinal = countDevicePackageInstances(wiring, devicePackageKind) + 1;
+        nextPeripherals = createPeripheralsFromDevicePackage(devicePackageKind, ordinal);
+      } catch (error) {
+        appendLog(error instanceof Error ? error.message : 'Device package cannot be added to the canvas yet.', 'warn');
+        return;
+      }
+      const deviceId = getWorkbenchDeviceIdFromPackagePeripherals(nextPeripherals);
 
       setWiring((current) => ({
         peripherals: [...current.peripherals, ...nextPeripherals],
@@ -4518,9 +4519,9 @@ export default function App() {
         ),
       }));
       setArmedPeripheralId(nextPeripherals[0].id);
-      appendLog(`${nextPeripherals[0].groupLabel ?? nextPeripherals[0].label} added. Drag its endpoint terminal onto a free board hotspot to place it.`);
+      appendLog(`${nextPeripherals[0].groupLabel ?? nextPeripherals[0].label} added from Device Package ${devicePackageKind}. Drag its endpoint terminal onto a free board hotspot to place it.`);
     },
-    [appendLog, simulation.running, workbenchDevices.length]
+    [appendLog, simulation.running, wiring, workbenchDevices.length]
   );
 
   const assignPadToPeripheral = useCallback(
@@ -5093,6 +5094,7 @@ export default function App() {
       elfPath: compileResult.elfPath,
       boardRepl,
       peripheralManifest,
+      renodeBackendArtifacts,
       signalManifest: runtimeSignalManifest,
       busManifest: runtimeBusManifest,
       bridgePort: simulation.bridgePort,
@@ -5137,6 +5139,7 @@ export default function App() {
     codeMode,
     compileFirmware,
     peripheralManifest,
+    renodeBackendArtifacts,
     hasRuntimeBusDevice,
     hasSsd1306Device,
     hasBusSensorDevice,
@@ -5644,7 +5647,7 @@ export default function App() {
                 </div>
                 <div className="flex shrink-0 gap-2 text-[10px] font-semibold uppercase tracking-[0.18em]">
                   <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-cyan-200">
-                    pkg v{COMPONENT_PACKAGE_CATALOG_VERSION}
+                    device pkg v{DEVICE_PACKAGE_CATALOG_VERSION}
                   </span>
                   <span className="rounded-full border border-slate-700 bg-slate-950 px-2 py-1 text-slate-300">
                     {netlistWarnings.length} warnings
@@ -5674,7 +5677,7 @@ export default function App() {
               <div className="mt-3 grid gap-2">
                 {netlistIssues.length === 0 ? (
                   <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
-                    IR validation passed: component packages, board pads, GPIO nets, and Renode compile artifacts are aligned.
+                    IR validation passed: Device Packages, board pads, GPIO/I2C nets, and Renode compile artifacts are aligned.
                   </div>
                 ) : (
                   netlistIssues.slice(0, 4).map((issue) => (

@@ -432,6 +432,15 @@ function createRuntimeService(options = {}) {
     return manifestPath;
   }
 
+  function writeRenodeBackendArtifacts(workspaceDir, renodeBackendArtifacts) {
+    if (!renodeBackendArtifacts || typeof renodeBackendArtifacts !== 'object') {
+      return null;
+    }
+    const manifestPath = path.join(workspaceDir, 'local-wokwi-renode-backends.json');
+    fs.writeFileSync(manifestPath, `${JSON.stringify(renodeBackendArtifacts, null, 2)}\n`, 'utf8');
+    return manifestPath;
+  }
+
   function stopTransactionBrokerServer() {
     if (state.transactionBrokerServer) {
       try {
@@ -1537,6 +1546,7 @@ function createRuntimeService(options = {}) {
       log(`Transaction Broker Bridge port ${requestedTransactionBrokerPort} was unavailable, using ${transactionBrokerPort}.`, 'warn');
     }
     const transactionBrokerManifestPath = writeBrokerManifest(workspaceDir, transactionBrokerPort, state.busManifestEntries);
+    const renodeBackendManifestPath = writeRenodeBackendArtifacts(workspaceDir, request.renodeBackendArtifacts);
 
     const rescContent = [
       `$name?="${machineName}"`,
@@ -1607,6 +1617,7 @@ function createRuntimeService(options = {}) {
         uartPort,
         transactionBrokerPort,
         transactionBrokerManifestPath,
+        renodeBackendManifestPath,
       });
 
       return {
@@ -1622,6 +1633,7 @@ function createRuntimeService(options = {}) {
         uartPort,
         transactionBrokerPort,
         transactionBrokerManifestPath,
+        renodeBackendManifestPath,
         uartReady,
         bridgeReady,
       };

@@ -10,6 +10,13 @@
 import type { RuntimeBusTimelineEvent } from './runtime-timeline';
 import type { SensorChannelKind, SensorTransactionCodec } from './sensor-packages';
 import {
+  BMP180_DEFAULT_ADDRESS,
+  Bmp180State,
+  applyBmp180Transaction,
+  createBmp180MeasurementTransactions,
+  createBmp180State,
+} from './bmp180';
+import {
   SI7021_DEFAULT_ADDRESS,
   Si70xxMeasurementKind,
   Si70xxState,
@@ -72,6 +79,13 @@ function asSi70xxState(state: unknown | null, address: number): Si70xxState {
   return createSi70xxState(address || SI7021_DEFAULT_ADDRESS);
 }
 
+function asBmp180State(state: unknown | null, address: number): Bmp180State {
+  if (state && typeof state === 'object' && (state as Bmp180State).model === 'BMP180') {
+    return state as Bmp180State;
+  }
+  return createBmp180State(address || BMP180_DEFAULT_ADDRESS);
+}
+
 export const SI70XX_SENSOR_PROTOCOL_CODEC: SensorProtocolCodec = {
   id: 'si70xx-compatible',
   protocol: 'i2c',
@@ -108,7 +122,46 @@ export const SI70XX_SENSOR_PROTOCOL_CODEC: SensorProtocolCodec = {
   },
 };
 
-export const SENSOR_PROTOCOL_CODECS = [SI70XX_SENSOR_PROTOCOL_CODEC] as const satisfies readonly SensorProtocolCodec[];
+export const BMP180_SENSOR_PROTOCOL_CODEC: SensorProtocolCodec = {
+  id: 'bmp180-compatible',
+  protocol: 'i2c',
+  family: 'Bosch BMP180',
+  description: 'Decodes simplified BMP180 temperature and uncompensated pressure command/read transactions.',
+  supportedChannels: ['temperature', 'pressure'],
+  createInitialState: (address) => createBmp180State(address || BMP180_DEFAULT_ADDRESS),
+  applyEvent: ({ state, address, event }) => {
+    const next = applyBmp180Transaction(asBmp180State(state, address), event);
+    return {
+      state: next,
+      readings: {
+        temperature: next.lastReadTemperatureC,
+        pressure: next.lastReadPressureRaw,
+      },
+      transactionCount: next.transactionCount,
+      updatedAtVirtualTimeNs: next.updatedAtVirtualTimeNs,
+    };
+  },
+  createReadTransactions: ({ busId, busLabel, componentId, address, channelId, channels }) => {
+    if (channelId !== 'temperature' && channelId !== 'pressure') {
+      return [];
+    }
+
+    return createBmp180MeasurementTransactions({
+      busId,
+      busLabel,
+      componentId,
+      address,
+      temperatureC: channels.temperature?.configuredValue ?? 24,
+      pressureRaw: channels.pressure?.configuredValue ?? 700,
+      kind: channelId,
+    });
+  },
+};
+
+export const SENSOR_PROTOCOL_CODECS = [
+  SI70XX_SENSOR_PROTOCOL_CODEC,
+  BMP180_SENSOR_PROTOCOL_CODEC,
+] as const satisfies readonly SensorProtocolCodec[];
 
 const SENSOR_PROTOCOL_CODEC_MAP = new Map<SensorTransactionCodec, SensorProtocolCodec>(
   SENSOR_PROTOCOL_CODECS.map((codec) => [codec.id, codec])

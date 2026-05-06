@@ -10,9 +10,6 @@ import { BoardSchema } from './boards';
 import {
   COMPONENT_PACKAGE_CATALOG_VERSION,
   COMPONENT_PACKAGE_SCHEMA_VERSION,
-  ComponentPackagePin,
-  getComponentPackage,
-  getComponentPackagePin,
 } from './component-packs';
 import {
   DEFAULT_BRIDGE_PORT,
@@ -22,6 +19,7 @@ import {
   DemoPinFunctionKind,
   DemoPinFunctionMux,
   DemoPeripheral,
+  DemoPeripheralKind,
   DemoPeripheralManifestEntry,
   DemoPeripheralTemplateKind,
   DemoWiring,
@@ -29,7 +27,6 @@ import {
   buildPeripheralManifest,
   buildWorkbenchDevices,
   createDefaultPeripheralBehavior,
-  generateBoardRepl,
   generateDemoMainSource,
   generateRescPreview,
   getPadCapabilities,
@@ -44,15 +41,29 @@ import {
 import {
   DEVICE_PACKAGE_CATALOG_VERSION,
   DEVICE_PACKAGE_SCHEMA_VERSION,
+  DevicePackage,
+  DevicePackageKind,
+  DevicePackagePin,
+  DevicePackageProtocol,
+  DevicePackageRenodeBackend,
+  findDevicePackage,
   getDevicePackageForTemplate,
 } from './device-packages';
+import { compileDevicePackageRenodeBackends } from './device-package-renode-backend-compiler';
+import type { DevicePackageRenodeBackendCompilerArtifacts } from './device-package-renode-backend-compiler';
 
 export const NETLIST_SCHEMA_VERSION = 1;
 
-export type CircuitComponentKind = 'board' | DemoPeripheralTemplateKind;
+export type CircuitComponentKind = 'board' | DevicePackageKind | string;
 export type CircuitPinDirection = 'input' | 'output' | 'bidirectional';
-export type CircuitPinRole = 'board-pad' | 'component-gpio' | 'component-i2c';
-export type CircuitNetKind = 'gpio' | 'i2c';
+export type CircuitPinRole =
+  | 'board-pad'
+  | 'component-gpio'
+  | 'component-i2c'
+  | 'component-spi'
+  | 'component-uart'
+  | 'component-virtual';
+export type CircuitNetKind = 'gpio' | 'i2c' | 'spi' | 'uart' | 'virtual';
 
 export type CircuitBoardTarget = {
   id: string;
@@ -68,6 +79,11 @@ export type CircuitComponentPin = {
   direction: CircuitPinDirection;
   requiredPadCapabilities: readonly DemoPadCapability[];
   capabilities: readonly DemoPadCapability[];
+  netKind?: CircuitNetKind | null;
+  protocols?: readonly DevicePackageProtocol[];
+  devicePackageKind?: string | null;
+  devicePackagePinRole?: string | null;
+  renodeBackendType?: string | null;
   endpointId?: string | null;
   padId?: string | null;
   mcuPinId?: string | null;
@@ -79,6 +95,7 @@ export type CircuitComponentPin = {
 export type CircuitComponentInstance = {
   id: string;
   kind: CircuitComponentKind;
+  devicePackageKind?: DevicePackageKind | string;
   label: string;
   packageVersion?: number;
   devicePackageVersion?: number;
@@ -91,6 +108,11 @@ export type CircuitComponentInstance = {
       schemaVersion: typeof DEVICE_PACKAGE_SCHEMA_VERSION;
       catalogVersion: typeof DEVICE_PACKAGE_CATALOG_VERSION;
       kind: string;
+      title: string;
+      version: string;
+      compilerSource: DevicePackage['compiler']['source'];
+      protocol: DevicePackage['protocol'];
+      renodeBackend: DevicePackageRenodeBackend;
       runtimePanels: readonly string[];
       eventParsers: readonly string[];
     };
@@ -122,6 +144,12 @@ export type CircuitNet = {
     pinFunctionId?: string | null;
     pinFunctionKind?: DemoPinFunctionKind | null;
     busId?: string | null;
+    devicePackageKind?: string | null;
+    devicePackagePinId?: string | null;
+    protocol?: DevicePackageProtocol | null;
+    protocols?: readonly DevicePackageProtocol[];
+    renodeBackendType?: DevicePackageRenodeBackend['type'] | null;
+    renodeBackendModel?: string | null;
   };
 };
 
@@ -180,7 +208,32 @@ export type NetlistRenodeArtifacts = {
   mainSource: string;
   boardRepl: string;
   peripheralManifest: DemoPeripheralManifestEntry[];
+  devicePackageManifest: NetlistRenodeDevicePackageBinding[];
+  renodeBackendArtifacts: DevicePackageRenodeBackendCompilerArtifacts;
   rescPreview: string;
+};
+
+export type NetlistRenodeDevicePackageBinding = {
+  schemaVersion: typeof NETLIST_SCHEMA_VERSION;
+  componentId: string;
+  label: string;
+  devicePackageKind: string;
+  devicePackageSchemaVersion: number;
+  protocol: DevicePackage['protocol'];
+  renodeBackend: DevicePackageRenodeBackend;
+  pins: Array<{
+    pinId: string;
+    pinLabel: string;
+    pinRole: string | null;
+    direction: CircuitPinDirection | null;
+    netKind: CircuitNetKind | null;
+    protocols: readonly DevicePackageProtocol[];
+    netId: string | null;
+    peripheralId: string | null;
+    padId: string | null;
+    mcuPinId: string | null;
+    busId: string | null;
+  }>;
 };
 
 function getBoardPads(board: BoardSchema): DemoBoardPad[] {
@@ -193,6 +246,85 @@ function clonePeripheral(peripheral: DemoPeripheral): DemoPeripheral {
     ...peripheral,
     behavior: peripheral.behavior ?? createDefaultPeripheralBehavior(templateKind),
     power: undefined,
+  };
+}
+
+function getDevicePackageForComponentKind(kind: CircuitComponentKind | string | null | undefined): DevicePackage | null {
+  if (kind === 'board') {
+    return null;
+  }
+  const directPackage = findDevicePackage(kind);
+  if (directPackage) {
+    return directPackage;
+  }
+  return isDemoPeripheralTemplateKind(kind) ? getDevicePackageForTemplate(kind) : null;
+}
+
+function getDevicePackageForNetlistComponent(component: CircuitComponentInstance): DevicePackage | null {
+  return (
+    getDevicePackageForComponentKind(component.metadata?.devicePackage?.kind) ??
+    getDevicePackageForComponentKind(component.devicePackageKind) ??
+    getDevicePackageForComponentKind(component.kind)
+  );
+}
+
+export function getNetlistComponentDevicePackageKind(component: CircuitComponentInstance): string | null {
+  return getDevicePackageForNetlistComponent(component)?.kind ?? component.metadata?.devicePackage?.kind ?? component.devicePackageKind ?? null;
+}
+
+function getCircuitPinRoleForDevicePin(pin: DevicePackagePin): CircuitPinRole {
+  if (pin.netKind === 'i2c' || pin.role === 'i2c-scl' || pin.role === 'i2c-sda') {
+    return 'component-i2c';
+  }
+  if (pin.netKind === 'spi' || pin.role.startsWith('spi-')) {
+    return 'component-spi';
+  }
+  if (pin.netKind === 'uart' || pin.role.startsWith('uart-')) {
+    return 'component-uart';
+  }
+  if (pin.netKind === 'virtual' || pin.role === 'virtual-terminal') {
+    return 'component-virtual';
+  }
+  return 'component-gpio';
+}
+
+function getCircuitNetKindForDevicePin(pin: DevicePackagePin): CircuitNetKind {
+  return pin.netKind === 'power' || pin.netKind === 'ground' ? 'virtual' : pin.netKind;
+}
+
+function isComponentPinRole(role: CircuitPinRole): boolean {
+  return role !== 'board-pad';
+}
+
+function getEndpointKindForDevicePin(devicePackage: DevicePackage, pin: DevicePackagePin): DemoPeripheralKind {
+  if (pin.netKind === 'i2c' || pin.protocols.includes('i2c')) {
+    return 'i2c';
+  }
+  if (devicePackage.category === 'input') {
+    return 'button';
+  }
+  return 'led';
+}
+
+function getLegacyTemplateKindForDevicePackage(devicePackage: DevicePackage): DemoPeripheralTemplateKind | null {
+  if (isDemoPeripheralTemplateKind(devicePackage.legacy.componentPackageKind)) {
+    return devicePackage.legacy.componentPackageKind;
+  }
+  return isDemoPeripheralTemplateKind(devicePackage.kind) ? devicePackage.kind : null;
+}
+
+function getDevicePackageMetadata(devicePackage: DevicePackage): NonNullable<CircuitComponentInstance['metadata']>['devicePackage'] {
+  return {
+    schemaVersion: DEVICE_PACKAGE_SCHEMA_VERSION,
+    catalogVersion: DEVICE_PACKAGE_CATALOG_VERSION,
+    kind: devicePackage.kind,
+    title: devicePackage.title,
+    version: devicePackage.version,
+    compilerSource: devicePackage.compiler.source,
+    protocol: devicePackage.protocol,
+    renodeBackend: devicePackage.renodeBackend,
+    runtimePanels: [...devicePackage.runtimePanel.controls, ...devicePackage.runtimePanel.visualizers],
+    eventParsers: devicePackage.runtimePanel.eventParsers,
   };
 }
 
@@ -223,63 +355,66 @@ function createBoardComponent(board: BoardSchema, exposedPadIds: ReadonlySet<str
   };
 }
 
-function findMemberForPackagePin(members: readonly DemoPeripheral[], pin: ComponentPackagePin): DemoPeripheral | null {
+function findMemberForPackagePin(members: readonly DemoPeripheral[], pin: DevicePackagePin): DemoPeripheral | null {
   return (
     members.find((member) => (member.endpointId ?? 'signal') === pin.id) ??
-    members.find((member) => member.kind === pin.legacyPeripheralKind) ??
+    members.find(
+      (member) => member.kind === getEndpointKindForDevicePin(getDevicePackageForTemplate(getPeripheralTemplateKind(member)), pin)
+    ) ??
     members[0] ??
     null
   );
 }
 
 function createComponentInstanceFromDevice(device: ReturnType<typeof buildWorkbenchDevices>[number]): CircuitComponentInstance {
-  const componentPackage = getComponentPackage(device.templateKind);
   const devicePackage = getDevicePackageForTemplate(device.templateKind);
   const sourceBindings: Record<string, string | null> = {};
 
-  const signalPins = componentPackage.pins.map((pin): CircuitComponentPin => {
-    const member = findMemberForPackagePin(device.members, pin);
-    if (member) {
-      sourceBindings[pin.id] = member.sourcePeripheralId ?? null;
-    }
+  const signalPins = devicePackage.pins
+    .filter((pin) => pin.terminal.connectable)
+    .map((pin): CircuitComponentPin => {
+      const member = findMemberForPackagePin(device.members, pin);
+      if (member) {
+        sourceBindings[pin.id] = member.sourcePeripheralId ?? null;
+      }
 
-    return {
-      id: pin.id,
-      label: pin.label,
-      role: pin.role === 'gpio-signal' ? 'component-gpio' : 'component-i2c',
-      direction: pin.direction,
-      requiredPadCapabilities: pin.requiredPadCapabilities,
-      capabilities: [],
-      endpointId: pin.id,
-      padId: member?.padId ?? null,
-      mcuPinId: null,
-      selectable: true,
-      accentColor: pin.accentColor,
-    };
-  });
+      return {
+        id: pin.id,
+        label: pin.label,
+        role: getCircuitPinRoleForDevicePin(pin),
+        direction: pin.direction,
+        requiredPadCapabilities: pin.requiredPadCapabilities,
+        capabilities: [],
+        netKind: getCircuitNetKindForDevicePin(pin),
+        protocols: pin.protocols,
+        devicePackageKind: devicePackage.kind,
+        devicePackagePinRole: pin.role,
+        renodeBackendType: devicePackage.renodeBackend.type,
+        endpointId: pin.id,
+        padId: member?.padId ?? null,
+        mcuPinId: null,
+        selectable: true,
+        accentColor: devicePackage.visual.accentColor,
+      };
+    });
 
   return {
     id: device.id,
-    kind: device.templateKind,
+    kind: devicePackage.kind,
+    devicePackageKind: devicePackage.kind,
     label: device.label,
     packageVersion: COMPONENT_PACKAGE_CATALOG_VERSION,
     devicePackageVersion: DEVICE_PACKAGE_CATALOG_VERSION,
     pins: signalPins,
     properties: {
-      category: componentPackage.category,
-      pinCount: componentPackage.pins.length,
+      category: devicePackage.category,
+      pinCount: signalPins.length,
       powerRequired: false,
     },
     metadata: {
       legacyPeripherals: device.members.map((member) => clonePeripheral(member)),
       sourceBindings,
-      devicePackage: {
-        schemaVersion: DEVICE_PACKAGE_SCHEMA_VERSION,
-        catalogVersion: DEVICE_PACKAGE_CATALOG_VERSION,
-        kind: devicePackage.kind,
-        runtimePanels: [...devicePackage.runtimePanel.controls, ...devicePackage.runtimePanel.visualizers],
-        eventParsers: devicePackage.runtimePanel.eventParsers,
-      },
+      devicePackage: getDevicePackageMetadata(devicePackage),
     },
   };
 }
@@ -314,19 +449,26 @@ export function createNetlistFromWiring(wiring: DemoWiring, board: BoardSchema):
       const pad = padById.get(padId) ?? null;
       const componentId = getWorkbenchDeviceId(peripheral);
       const endpoint = getPeripheralEndpointDefinition(peripheral);
+      const devicePackage = getDevicePackageForTemplate(getPeripheralTemplateKind(peripheral));
+      const devicePackagePin =
+        devicePackage.pins.find((pin) => pin.id === endpointId) ??
+        devicePackage.pins.find((pin) => pin.terminal.connectable) ??
+        null;
+      const componentRole = devicePackagePin ? getCircuitPinRoleForDevicePin(devicePackagePin) : peripheral.kind === 'i2c' ? 'component-i2c' : 'component-gpio';
+      const netKind = devicePackagePin ? getCircuitNetKindForDevicePin(devicePackagePin) : peripheral.kind === 'i2c' ? 'i2c' : 'gpio';
       const pinFunction = pad ? resolvePinFunctionForEndpoint(pad, endpoint) : null;
 
       return {
         // One routed endpoint becomes one logical net. Multi-endpoint devices
         // such as RGB LEDs, OLEDs, and sensors therefore produce multiple nets.
         id: `net:${peripheral.id}:${endpointId}`,
-        kind: peripheral.kind === 'i2c' ? 'i2c' : 'gpio',
+        kind: netKind,
         label: `${peripheral.label} ${peripheral.endpointLabel ?? endpointId}`,
         connections: [
           {
             componentId,
             pinId: endpointId,
-            role: peripheral.kind === 'i2c' ? 'component-i2c' : 'component-gpio',
+            role: componentRole,
             peripheralId: peripheral.id,
             endpointId,
           },
@@ -348,6 +490,12 @@ export function createNetlistFromWiring(wiring: DemoWiring, board: BoardSchema):
           pinFunctionId: pinFunction?.id ?? null,
           pinFunctionKind: pinFunction?.kind ?? null,
           busId: pinFunction?.bus.id ?? null,
+          devicePackageKind: devicePackage.kind,
+          devicePackagePinId: devicePackagePin?.id ?? endpointId,
+          protocol: devicePackagePin?.protocols[0] ?? devicePackage.protocol.primary,
+          protocols: devicePackagePin?.protocols ?? devicePackage.protocol.buses,
+          renodeBackendType: devicePackage.renodeBackend.type,
+          renodeBackendModel: devicePackage.renodeBackend.model,
         },
       };
     });
@@ -394,28 +542,30 @@ export function createWiringFromNetlist(netlist: CircuitNetlist): DemoWiring {
         peripheralById.set(cloned.id, cloned);
       });
 
-      if (legacyPeripherals.length === 0 && isDemoPeripheralTemplateKind(component.kind)) {
-        const templateKind = component.kind;
-        const componentPackage = getComponentPackage(templateKind);
-        componentPackage.pins.forEach((pin, index) => {
+      const devicePackage = getDevicePackageForNetlistComponent(component);
+      const templateKind = devicePackage ? getLegacyTemplateKindForDevicePackage(devicePackage) : null;
+      if (legacyPeripherals.length === 0 && devicePackage && templateKind) {
+        const connectablePins = devicePackage.pins.filter((pin) => pin.terminal.connectable);
+        connectablePins.forEach((pin, index) => {
+          const behavior = createDefaultPeripheralBehavior(templateKind);
           const peripheral: DemoPeripheral = {
-            id: componentPackage.pins.length === 1 ? component.id : `${component.id}-${pin.id}`,
-            kind: pin.legacyPeripheralKind,
+            id: connectablePins.length === 1 ? component.id : `${component.id}-${pin.id}`,
+            kind: getEndpointKindForDevicePin(devicePackage, pin),
             label: component.label,
             padId: null,
             sourcePeripheralId: null,
             behavior: {
-              ...componentPackage.behavior,
-              controller: componentPackage.behavior.controller ? { ...componentPackage.behavior.controller } : null,
+              ...behavior,
+              controller: behavior.controller ? { ...behavior.controller } : null,
               powerRequired: false,
             },
             power: undefined,
             templateKind,
-            groupId: componentPackage.pins.length === 1 ? null : component.id,
-            groupLabel: componentPackage.pins.length === 1 ? null : component.label,
+            groupId: connectablePins.length === 1 ? null : component.id,
+            groupLabel: connectablePins.length === 1 ? null : component.label,
             endpointId: pin.id,
             endpointLabel: pin.label,
-            accentColor: pin.accentColor,
+            accentColor: devicePackage.visual.accentColor,
           };
           if (peripheralById.has(peripheral.id)) {
             peripheral.id = `${peripheral.id}-${index + 1}`;
@@ -428,7 +578,7 @@ export function createWiringFromNetlist(netlist: CircuitNetlist): DemoWiring {
 
   netlist.nets.forEach((net) => {
     const componentConnection = net.connections.find(
-      (connection) => connection.role === 'component-gpio' || connection.role === 'component-i2c'
+      (connection) => isComponentPinRole(connection.role)
     );
     const peripheralId = net.metadata?.peripheralId ?? componentConnection?.peripheralId ?? null;
     const padId =
@@ -494,30 +644,32 @@ export function validateNetlist(netlist: CircuitNetlist, board: BoardSchema): Ci
     if (component.kind === 'board') {
       return;
     }
-    if (!isDemoPeripheralTemplateKind(component.kind)) {
+    const devicePackage = getDevicePackageForNetlistComponent(component);
+    if (!devicePackage) {
       pushIssue(issues, {
         id: `unknown-component-package:${component.id}:${component.kind}`,
         severity: 'error',
         code: 'unknown-component-package',
         componentId: component.id,
-        message: `${component.label} references unknown component package "${component.kind}".`,
+        message: `${component.label} references unknown device package "${component.kind}".`,
       });
       return;
     }
 
-    const componentPackage = getComponentPackage(component.kind);
-    componentPackage.pins.forEach((pin) => {
-      if (!component.pins.some((componentPin) => componentPin.id === pin.id)) {
-        pushIssue(issues, {
-          id: `unknown-pin:${component.id}:${pin.id}`,
-          severity: 'error',
-          code: 'unknown-pin',
-          componentId: component.id,
-          pinId: pin.id,
-          message: `${component.label} is missing package pin "${pin.id}".`,
-        });
-      }
-    });
+    devicePackage.pins
+      .filter((pin) => pin.terminal.connectable)
+      .forEach((pin) => {
+        if (!component.pins.some((componentPin) => componentPin.id === pin.id)) {
+          pushIssue(issues, {
+            id: `unknown-pin:${component.id}:${pin.id}`,
+            severity: 'error',
+            code: 'unknown-pin',
+            componentId: component.id,
+            pinId: pin.id,
+            message: `${component.label} is missing package pin "${pin.id}".`,
+          });
+        }
+      });
   });
 
   const padNetIds = new Map<string, string>();
@@ -550,9 +702,7 @@ export function validateNetlist(netlist: CircuitNetlist, board: BoardSchema): Ci
     });
 
     const boardConnection = net.connections.find((connection) => connection.role === 'board-pad');
-    const componentConnection = net.connections.find(
-      (connection) => connection.role === 'component-gpio' || connection.role === 'component-i2c'
-    );
+    const componentConnection = net.connections.find((connection) => isComponentPinRole(connection.role));
 
     if (!boardConnection || !componentConnection) {
       return;
@@ -597,11 +747,12 @@ export function validateNetlist(netlist: CircuitNetlist, board: BoardSchema): Ci
     padNetIds.set(padId, net.id);
 
     const component = componentById.get(componentConnection.componentId);
-    if (!component || component.kind === 'board' || !isDemoPeripheralTemplateKind(component.kind)) {
+    if (!component || component.kind === 'board') {
       return;
     }
 
-    const packagePin = getComponentPackagePin(component.kind, componentConnection.pinId);
+    const devicePackage = getDevicePackageForNetlistComponent(component);
+    const packagePin = devicePackage?.pins.find((pin) => pin.id === componentConnection.pinId) ?? null;
     if (!packagePin) {
       pushIssue(issues, {
         id: `unknown-pin:${component.id}:${componentConnection.pinId}`,
@@ -610,7 +761,7 @@ export function validateNetlist(netlist: CircuitNetlist, board: BoardSchema): Ci
         componentId: component.id,
         pinId: componentConnection.pinId,
         netId: net.id,
-        message: `${component.label} package ${component.kind} does not expose pin "${componentConnection.pinId}".`,
+        message: `${component.label} device package ${component.kind} does not expose pin "${componentConnection.pinId}".`,
       });
       return;
     }
@@ -657,6 +808,56 @@ export function summarizeNetlist(netlist: CircuitNetlist): NetlistSummary {
   };
 }
 
+export function createRenodeDevicePackageManifest(netlist: CircuitNetlist): NetlistRenodeDevicePackageBinding[] {
+  // This manifest is the package-native handoff from Netlist to Renode-facing
+  // tooling. Current .repl generation still uses legacy wiring for compatibility,
+  // but new brokers/plugins can consume this structure without knowing old
+  // button/led/i2c template names.
+  return netlist.components
+    .filter((component) => component.kind !== 'board')
+    .flatMap((component): NetlistRenodeDevicePackageBinding[] => {
+      const devicePackage = getDevicePackageForNetlistComponent(component);
+      if (!devicePackage) {
+        return [];
+      }
+
+      return [
+        {
+          schemaVersion: NETLIST_SCHEMA_VERSION,
+          componentId: component.id,
+          label: component.label,
+          devicePackageKind: devicePackage.kind,
+          devicePackageSchemaVersion: devicePackage.schemaVersion,
+          protocol: devicePackage.protocol,
+          renodeBackend: devicePackage.renodeBackend,
+          pins: component.pins
+            .filter((pin) => pin.role !== 'board-pad')
+            .map((pin) => {
+              const net =
+                netlist.nets.find((candidate) =>
+                  candidate.connections.some((connection) => connection.componentId === component.id && connection.pinId === pin.id)
+                ) ?? null;
+              const componentConnection =
+                net?.connections.find((connection) => connection.componentId === component.id && connection.pinId === pin.id) ?? null;
+              return {
+                pinId: pin.id,
+                pinLabel: pin.label,
+                pinRole: pin.devicePackagePinRole ?? null,
+                direction: pin.direction ?? null,
+                netKind: pin.netKind ?? net?.kind ?? null,
+                protocols: pin.protocols ?? net?.metadata?.protocols ?? [],
+                netId: net?.id ?? null,
+                peripheralId: componentConnection?.peripheralId ?? net?.metadata?.peripheralId ?? null,
+                padId: net?.metadata?.padId ?? null,
+                mcuPinId: net?.metadata?.mcuPinId ?? null,
+                busId: net?.metadata?.busId ?? null,
+              };
+            }),
+        },
+      ];
+    });
+}
+
 /**
  * Compiles the canonical Netlist/IR into all generated runtime artifacts.
  *
@@ -677,12 +878,19 @@ export function compileNetlistToRenodeArtifacts(options: {
   // conversion here isolates that compatibility layer from the rest of the app.
   const boardPads = getBoardPads(options.board);
   const wiring = createWiringFromNetlist(options.netlist);
+  const devicePackageManifest = createRenodeDevicePackageManifest(options.netlist);
+  const renodeBackendArtifacts = compileDevicePackageRenodeBackends({
+    board: options.board,
+    devicePackageManifest,
+  });
 
   return {
     wiring,
     mainSource: generateDemoMainSource(wiring, options.board.runtime, boardPads),
-    boardRepl: generateBoardRepl(wiring, options.board.runtime, boardPads),
+    boardRepl: renodeBackendArtifacts.boardRepl,
     peripheralManifest: buildPeripheralManifest(wiring, options.board.runtime, boardPads),
+    devicePackageManifest,
+    renodeBackendArtifacts,
     rescPreview: generateRescPreview({
       elfPath: options.elfPath ?? null,
       gdbPort: options.gdbPort ?? DEFAULT_GDB_PORT,

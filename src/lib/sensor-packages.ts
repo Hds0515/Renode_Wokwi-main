@@ -5,17 +5,20 @@
  * metadata, Renode-native peripheral metadata, and UI/runtime control channels.
  * SI7021/SI70xx is the first concrete package and the pattern for new sensors.
  */
+import { getRenodeNativePeripheralCatalogEntry } from './renode-native-peripheral-catalog';
+import type { RenodeNativePeripheralCatalogId } from './renode-native-peripheral-catalog';
+
 export const SENSOR_PACKAGE_SCHEMA_VERSION = 1;
 export const SENSOR_PACKAGE_CATALOG_VERSION = 1;
 export const SENSOR_PACKAGE_SDK_SCHEMA_VERSION = 2;
 export const SENSOR_PACKAGE_SDK_CATALOG_VERSION = 1;
 
-export type SensorPackageKind = 'si7021-sensor';
+export type SensorPackageKind = 'si7021-sensor' | 'bmp180-sensor';
 export type SensorBusProtocol = 'i2c';
 export type SensorChannelKind = string;
-export type SensorChannelUnit = 'celsius' | 'percent-rh';
+export type SensorChannelUnit = 'celsius' | 'percent-rh' | 'pascal' | 'raw';
 export type SensorControlTransport = 'renode-monitor-property';
-export type SensorTransactionCodec = 'si70xx-compatible' | (string & {});
+export type SensorTransactionCodec = 'si70xx-compatible' | 'bmp180-compatible' | (string & {});
 
 export type SensorPackageChannel = {
   id: SensorChannelKind;
@@ -30,6 +33,7 @@ export type SensorPackageChannel = {
 
 export type NativeRenodeSensorBinding = {
   type: 'renode-native-sensor';
+  nativeCatalogId: RenodeNativePeripheralCatalogId;
   renodeType: string;
   modelProperty: string | null;
   modelValue: string | null;
@@ -113,7 +117,7 @@ export type SensorPackageSdk = {
     responseByteLength: number;
   };
   ui: {
-    packageIcon: 'temperature-humidity';
+    packageIcon: 'temperature-humidity' | 'pressure-temperature';
     controlPanel: 'sensor-control';
     resultPanels: readonly ['bus-transactions', 'uart-terminal'];
   };
@@ -129,28 +133,29 @@ function sanitizeRenodeIdentifier(value: string): string {
   return value.replace(/[^a-z0-9_]+/gi, '_');
 }
 
-const SI7021_CHANNELS = [
-  {
-    id: 'temperature',
-    label: 'Temperature',
-    unit: 'celsius',
-    minimum: -40,
-    maximum: 85,
-    defaultValue: 24,
-    step: 0.5,
-    renodeProperty: 'Temperature',
-  },
-  {
-    id: 'humidity',
-    label: 'Humidity',
-    unit: 'percent-rh',
-    minimum: 0,
-    maximum: 100,
-    defaultValue: 45,
-    step: 0.5,
-    renodeProperty: 'Humidity',
-  },
-] as const satisfies readonly SensorPackageChannel[];
+function createNativeBindingFromCatalog(id: RenodeNativePeripheralCatalogId): NativeRenodeSensorBinding {
+  const entry = getRenodeNativePeripheralCatalogEntry(id);
+  return {
+    type: 'renode-native-sensor',
+    nativeCatalogId: entry.id,
+    renodeType: entry.renodeType,
+    modelProperty: entry.modelProperty,
+    modelValue: entry.modelValue,
+    busProtocol: entry.protocol,
+    addressMode: 'seven-bit',
+    defaultAddress: entry.defaultAddress,
+    propertyPath: entry.propertyPath,
+    control: entry.control,
+  };
+}
+
+function getSensorTransactionCodec(sensorPackage: SensorPackage): SensorTransactionCodec {
+  return sensorPackage.kind === 'bmp180-sensor' ? 'bmp180-compatible' : 'si70xx-compatible';
+}
+
+function getSensorResponseByteLength(sensorPackage: SensorPackage): number {
+  return sensorPackage.kind === 'bmp180-sensor' ? 3 : 2;
+}
 
 export const SENSOR_PACKAGES = [
   {
@@ -160,29 +165,28 @@ export const SENSOR_PACKAGES = [
     subtitle: 'Renode native SI70xx over I2C',
     description:
       'A reusable sensor package that maps the visual SI7021 component to Renode Sensors.SI70xx, MCU I2C firmware reads, and runtime monitor property control.',
-    native: {
-      type: 'renode-native-sensor',
-      renodeType: 'Sensors.SI70xx',
-      modelProperty: 'model',
-      modelValue: 'Model.SI7021',
-      busProtocol: 'i2c',
-      addressMode: 'seven-bit',
-      defaultAddress: 0x40,
-      propertyPath: {
-        root: 'sysbus',
-        busPlaceholder: '${busName}',
-        peripheralNamePrefix: 'si7021Sensor',
-      },
-      control: {
-        transport: 'renode-monitor-property',
-        channels: SI7021_CHANNELS,
-      },
-    },
+    native: createNativeBindingFromCatalog('si70xx'),
     firmware: {
       address: 0x40,
       readCommands: {
         temperature: 0xf3,
         humidity: 0xf5,
+      },
+    },
+  },
+  {
+    schemaVersion: SENSOR_PACKAGE_SCHEMA_VERSION,
+    kind: 'bmp180-sensor',
+    title: 'BMP180 Pressure / Temperature Sensor',
+    subtitle: 'Renode native BMP180 over I2C',
+    description:
+      'A reusable sensor package that maps the visual BMP180 component to Renode Sensors.BMP180, MCU I2C wiring, and runtime monitor property control.',
+    native: createNativeBindingFromCatalog('bmp180'),
+    firmware: {
+      address: 0x77,
+      readCommands: {
+        temperature: 0xf4,
+        pressure: 0xf4,
       },
     },
   },
@@ -250,12 +254,12 @@ function createSensorPackageSdk(sensorPackage: SensorPackage): SensorPackageSdk 
       manifest: 'runtime-bus-manifest',
     },
     busRuntime: {
-      transactionCodec: 'si70xx-compatible',
+      transactionCodec: getSensorTransactionCodec(sensorPackage),
       readCommands: sensorPackage.firmware.readCommands,
-      responseByteLength: 2,
+      responseByteLength: getSensorResponseByteLength(sensorPackage),
     },
     ui: {
-      packageIcon: 'temperature-humidity',
+      packageIcon: sensorPackage.kind === 'bmp180-sensor' ? 'pressure-temperature' : 'temperature-humidity',
       controlPanel: 'sensor-control',
       resultPanels: ['bus-transactions', 'uart-terminal'],
     },

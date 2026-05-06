@@ -260,6 +260,7 @@ function createUartInstrumentDevice(entry: RuntimeBusManifestEntry): ProtocolRun
  * selected through the same runtime-panel mechanism as I2C/SPI/UART devices.
  */
 function createGpioSignalDevice(signal: SignalDefinition): ProtocolRuntimeDevice {
+  const devicePackage = findDevicePackage(signal.devicePackageKind);
   return {
     schemaVersion: PROTOCOL_RUNTIME_REGISTRY_SCHEMA_VERSION,
     id: signal.id,
@@ -268,18 +269,18 @@ function createGpioSignalDevice(signal: SignalDefinition): ProtocolRuntimeDevice
     source: 'runtime-signal-manifest',
     label: signal.label,
     componentId: signal.componentId,
-    componentKind: null,
-    devicePackageKind: null,
-    devicePackageSchemaVersion: null,
-    backendType: 'signal-broker',
+    componentKind: signal.componentKind,
+    devicePackageKind: devicePackage?.kind ?? signal.devicePackageKind,
+    devicePackageSchemaVersion: signal.devicePackageSchemaVersion,
+    backendType: (devicePackage?.renodeBackend.type ?? signal.renodeBackendType ?? 'signal-broker') as ProtocolRuntimeBackend,
     busId: signal.netId,
     busLabel: signal.netId,
     busStatus: 'active',
     renodePeripheralName: null,
     address: null,
-    model: signal.direction,
-    runtimePanels: ['gpio-monitor', 'logic-analyzer', 'runtime-timeline'],
-    eventParsers: ['gpio-level'],
+    model: devicePackage?.renodeBackend.model ?? signal.direction,
+    runtimePanels: getRuntimePanels(devicePackage, ['gpio-monitor', 'logic-analyzer', 'runtime-timeline']),
+    eventParsers: devicePackage?.runtimePanel.eventParsers ?? ['gpio-level'],
     signal,
   };
 }

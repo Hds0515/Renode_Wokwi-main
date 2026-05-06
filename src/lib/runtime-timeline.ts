@@ -6,9 +6,9 @@
  * analysis, bus transaction views, OLED previews, and sensor controls.
  */
 import type { BoardSchema } from './boards';
-import { getDevicePackageForTemplate } from './device-packages';
-import type { DemoPeripheralTemplateKind } from './firmware';
-import type { CircuitNetlist } from './netlist';
+import { findDevicePackage } from './device-packages';
+import type { CircuitComponentInstance, CircuitNetlist } from './netlist';
+import { getNetlistComponentDevicePackageKind } from './netlist';
 import type { SignalDirection, SignalLevel, SignalSampleSource } from './signal-broker';
 import {
   buildRenodeSensorPath,
@@ -322,13 +322,14 @@ function collectI2cDevicesFromNetlist(board: BoardSchema, netlist: CircuitNetlis
       if (component.kind === 'board') {
         return false;
       }
-      const templateKind = component.kind as DemoPeripheralTemplateKind;
-      const devicePackage = getDevicePackageForTemplate(templateKind);
-      return devicePackage.protocol.primary === 'i2c' && devicePackage.renodeBackend.manifest === 'runtime-bus-manifest';
+      const devicePackage = findDevicePackage(getNetlistComponentDevicePackageKind(component as CircuitComponentInstance));
+      return Boolean(devicePackage && devicePackage.protocol.primary === 'i2c' && devicePackage.renodeBackend.manifest === 'runtime-bus-manifest');
     })
     .forEach((component) => {
-      const templateKind = component.kind as DemoPeripheralTemplateKind;
-      const devicePackage = getDevicePackageForTemplate(templateKind);
+      const devicePackage = findDevicePackage(getNetlistComponentDevicePackageKind(component as CircuitComponentInstance));
+      if (!devicePackage) {
+        return;
+      }
       if (devicePackage.protocol.primary !== 'i2c' || devicePackage.renodeBackend.manifest !== 'runtime-bus-manifest') {
         return;
       }

@@ -20,7 +20,7 @@ export const DEVICE_PACKAGE_SCHEMA_VERSION = 3;
 export const DEVICE_PACKAGE_CATALOG_VERSION = 1;
 export const DEVICE_PACKAGE_COMPILER_VERSION = 1;
 
-export type DevicePackageKind = DemoPeripheralTemplateKind | 'uart-terminal';
+export type DevicePackageKind = DemoPeripheralTemplateKind | 'uart-terminal' | (string & {});
 export type DevicePackageCategory = 'input' | 'output' | 'grouped-output' | 'display' | 'sensor' | 'instrument';
 export type DevicePackageProtocol = ComponentPackageProtocol | 'ground' | 'uart' | 'spi' | 'virtual';
 export type DevicePackagePinRole =
@@ -48,6 +48,7 @@ export type DeviceRuntimeEventParser =
   | 'gpio-level'
   | 'i2c-ssd1306-framebuffer'
   | 'i2c-si70xx-measurement'
+  | 'i2c-bmp180-measurement'
   | 'uart-line-buffer'
   | 'bus-transaction';
 
@@ -106,12 +107,13 @@ export type DevicePackageProtocolModel = {
 };
 
 export type DevicePackageRenodeBackend = {
-  type: 'signal-broker' | 'bus-transaction-broker' | 'renode-native-sensor' | 'virtual-uart-terminal';
+  type: 'signal-broker' | 'bus-transaction-broker' | 'renode-native-sensor' | 'renode-native-peripheral' | 'virtual-uart-terminal';
   manifest: 'runtime-signal-manifest' | 'runtime-bus-manifest' | 'board-runtime';
   model: string;
   address?: number;
   replPeripheral?: string;
   nativeRenodeType?: string;
+  nativeCatalogId?: string;
   nativeControlTransport?: 'renode-monitor-property';
   sensorPackage?: SensorPackageKind;
 };

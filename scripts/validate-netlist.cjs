@@ -98,6 +98,14 @@ const {
   validateDevicePackageCatalogConformance,
 } = require('../src/lib/device-package-conformance.ts');
 const {
+  DEVICE_PACKAGE_RENODE_BACKEND_COMPILER_SCHEMA_VERSION,
+} = require('../src/lib/device-package-renode-backend-compiler.ts');
+const {
+  RENODE_NATIVE_PERIPHERAL_CATALOG_SCHEMA_VERSION,
+  RENODE_NATIVE_PERIPHERAL_CATALOG,
+  getRenodeNativePeripheralCatalogEntry,
+} = require('../src/lib/renode-native-peripheral-catalog.ts');
+const {
   findSensorProtocolCodec,
 } = require('../src/lib/sensor-protocol-codecs.ts');
 const {
@@ -106,7 +114,7 @@ const {
   getProtocolRuntimeDevicesByModel,
   getProtocolRuntimeSensorDevices,
 } = require('../src/lib/protocol-runtime-registry.ts');
-const { validateWiringRules } = require('../src/lib/firmware.ts');
+const { createPeripheralTemplate, validateWiringRules } = require('../src/lib/firmware.ts');
 
 function connectedPairs(wiring) {
   return wiring.peripherals
@@ -160,7 +168,9 @@ function validateSensorPackages() {
   assert(SENSOR_PACKAGE_SDK_SCHEMA_VERSION === 2, 'Expected Sensor Package SDK schema v2.');
   assert(SENSOR_PACKAGE_SDK_CATALOG_VERSION === 1, 'Expected Sensor Package SDK catalog v1.');
   assert(SENSOR_PACKAGE_SDKS.length === SENSOR_PACKAGES.length, 'Sensor Package SDK should mirror the v1 package catalog.');
-  assert(SENSOR_PACKAGES.length >= 1, 'Expected at least one reusable sensor package.');
+  assert(SENSOR_PACKAGES.length >= 2, 'Expected SI7021 and BMP180 reusable sensor packages.');
+  assert(RENODE_NATIVE_PERIPHERAL_CATALOG_SCHEMA_VERSION === 1, 'Expected Renode Native Peripheral Catalog schema v1.');
+  assert(RENODE_NATIVE_PERIPHERAL_CATALOG.entries.length >= 2, 'Expected at least two native Renode peripheral catalog entries.');
   const si7021 = getSensorPackage('si7021-sensor');
   const si7021Sdk = getSensorPackageSdk('si7021-sensor');
   assert(si7021.native.renodeType === 'Sensors.SI70xx', 'SI7021 package should map to Renode Sensors.SI70xx.');
@@ -175,6 +185,15 @@ function validateSensorPackages() {
       si7021.native.control.channels.some((channel) => channel.renodeProperty === 'Humidity'),
     'SI7021 package should expose Renode native Temperature and Humidity controls.'
   );
+
+  const bmp180 = getSensorPackage('bmp180-sensor');
+  const bmp180Sdk = getSensorPackageSdk('bmp180-sensor');
+  const bmp180Catalog = getRenodeNativePeripheralCatalogEntry('bmp180');
+  assert(bmp180.native.nativeCatalogId === 'bmp180', 'BMP180 package should reference the native Renode catalog entry.');
+  assert(bmp180.native.renodeType === 'Sensors.BMP180', 'BMP180 package should map to Renode Sensors.BMP180.');
+  assert(bmp180.native.defaultAddress === 0x77, 'BMP180 package should use I2C address 0x77.');
+  assert(bmp180Sdk.busRuntime.transactionCodec === 'bmp180-compatible', 'BMP180 SDK should resolve the BMP180 protocol codec.');
+  assert(bmp180Catalog.control.channels.some((channel) => channel.renodeProperty === 'UncompensatedPressure'), 'BMP180 catalog should expose pressure control.');
 }
 
 function validateDevicePackages() {
@@ -182,7 +201,7 @@ function validateDevicePackages() {
   assert(DEVICE_PACKAGE_CATALOG_VERSION === 1, 'Expected unified Device Package catalog v1.');
   assert(DEVICE_PACKAGE_COMPILER_VERSION === 1, 'Expected Device Package Compiler v1.');
   assert(DEVICE_PACKAGE_CATALOG.compilerVersion === DEVICE_PACKAGE_COMPILER_VERSION, 'Device Package catalog should be compiled by compiler v1.');
-  assert(DEVICE_PACKAGE_SOURCES.length === 3, 'Expected SI7021, SSD1306, and UART Terminal independent device package sources.');
+  assert(DEVICE_PACKAGE_SOURCES.length === 4, 'Expected SI7021, BMP180, SSD1306, and UART Terminal independent device package sources.');
   assert(DEVICE_PACKAGES.length >= COMPONENT_PACKAGE_SDKS.length + 1, 'Device Package catalog should include component SDKs plus virtual instruments.');
   assert(DEVICE_PACKAGE_LIBRARY_ITEMS.length === COMPONENT_PACKAGE_SDKS.length, 'Visible library should be driven by component-backed Device Packages.');
 
@@ -204,6 +223,14 @@ function validateDevicePackages() {
   assert(si7021.compiler.packagePath === 'packages/devices/si7021', 'SI7021 package path should point to packages/devices/si7021.');
   assert(si7021.renodeBackend.type === 'renode-native-sensor', 'SI7021 Device Package should use Renode native sensor backend.');
   assert(si7021.runtimePanel.eventParsers.includes('i2c-si70xx-measurement'), 'SI7021 Device Package should register SI70xx event parser.');
+
+  const bmp180 = getSensorDevicePackage('bmp180-sensor');
+  assert(bmp180.kind === 'bmp180-sensor', 'BMP180 should be represented by a unified Device Package.');
+  assert(bmp180.compiler.source === 'independent-package', 'BMP180 should be compiled from an independent device package.');
+  assert(bmp180.compiler.packagePath === 'packages/devices/bmp180', 'BMP180 package path should point to packages/devices/bmp180.');
+  assert(bmp180.renodeBackend.type === 'renode-native-peripheral', 'BMP180 Device Package should use the generic Renode native peripheral backend.');
+  assert(bmp180.renodeBackend.nativeCatalogId === 'bmp180', 'BMP180 Device Package should reference the native peripheral catalog.');
+  assert(bmp180.runtimePanel.eventParsers.includes('i2c-bmp180-measurement'), 'BMP180 Device Package should register BMP180 event parser.');
 
   const oled = getDevicePackage('ssd1306-oled');
   assert(oled.compiler.source === 'independent-package', 'SSD1306 should be compiled from an independent device package.');
@@ -295,6 +322,44 @@ function validateProjectExample(example) {
 
   const summary = summarizeNetlist(project.netlist);
   assert(summary.netCount > 0, `${example.id} should contain at least one GPIO net.`);
+  const devicePackageComponents = project.netlist.components.filter((component) => component.kind !== 'board');
+  assert(
+    artifacts.devicePackageManifest.length === devicePackageComponents.length,
+    `${example.id} Renode Device Package manifest should mirror package-backed components.`
+  );
+  devicePackageComponents.forEach((component) => {
+    assert(component.devicePackageKind, `${example.id} component ${component.id} should carry package-native kind metadata.`);
+    assert(component.metadata?.devicePackage?.renodeBackend, `${example.id} component ${component.id} should carry package-native Renode backend metadata.`);
+    assert(
+      component.metadata.devicePackage.kind === component.devicePackageKind,
+      `${example.id} component ${component.id} package metadata should match the component package kind.`
+    );
+    component.pins.forEach((pin) => {
+      assert(pin.devicePackageKind === component.devicePackageKind, `${example.id} ${component.id}.${pin.id} should carry Device Package pin metadata.`);
+      assert(pin.netKind && Array.isArray(pin.protocols), `${example.id} ${component.id}.${pin.id} should expose net/protocol metadata.`);
+      assert(pin.renodeBackendType, `${example.id} ${component.id}.${pin.id} should expose Renode backend type metadata.`);
+    });
+  });
+  artifacts.devicePackageManifest.forEach((entry) => {
+    assert(entry.renodeBackend?.type, `${example.id} Renode Device Package manifest entry ${entry.componentId} is missing backend type.`);
+    assert(entry.protocol?.primary, `${example.id} Renode Device Package manifest entry ${entry.componentId} is missing protocol metadata.`);
+    assert(entry.pins.length > 0, `${example.id} Renode Device Package manifest entry ${entry.componentId} should expose pins.`);
+    entry.pins.forEach((pin) => {
+      assert(pin.direction, `${example.id} Renode Device Package manifest pin ${entry.componentId}.${pin.pinId} should expose endpoint direction.`);
+    });
+  });
+  assert(
+    artifacts.renodeBackendArtifacts.schemaVersion === DEVICE_PACKAGE_RENODE_BACKEND_COMPILER_SCHEMA_VERSION,
+    `${example.id} Device Package Renode Backend Compiler schema mismatch.`
+  );
+  assert(
+    artifacts.boardRepl === artifacts.renodeBackendArtifacts.boardRepl,
+    `${example.id} board.repl should be emitted by the Device Package Renode Backend Compiler.`
+  );
+  assert(
+    artifacts.renodeBackendArtifacts.summary.componentCount === devicePackageComponents.length,
+    `${example.id} backend compiler component count should match package-backed components.`
+  );
 
   const signalDefinitions = createSignalDefinitionsFromNetlist(project.netlist);
   const signalManifest = createRuntimeSignalManifest(signalDefinitions);
@@ -332,8 +397,14 @@ function validateProjectExample(example) {
   signalManifest.forEach((entry) => {
     assert(entry.schemaVersion === 2, `${example.id} runtime signal manifest entry ${entry.id} should use schema v2.`);
     assert(entry.netId && entry.componentId && entry.pinId, `${example.id} runtime signal manifest entry ${entry.id} is incomplete.`);
+    assert(entry.devicePackageKind, `${example.id} runtime signal manifest entry ${entry.id} should carry Device Package metadata.`);
+    assert(entry.renodeBackendType === 'signal-broker', `${example.id} runtime signal manifest entry ${entry.id} should use the package-native Signal Broker backend.`);
   });
   const gpioNetCount = project.netlist.nets.filter((net) => net.kind === 'gpio').length;
+  assert(
+    artifacts.renodeBackendArtifacts.summary.signalBrokerCount === signalManifest.length,
+    `${example.id} backend compiler Signal Broker count should match runtime signal manifest.`
+  );
   assert(signalSummary.signalCount === gpioNetCount, `${example.id} signal count should match GPIO net count.`);
   if (gpioNetCount > 0) {
     assert(signalSummary.inputCount > 0, `${example.id} should expose at least one input signal.`);
@@ -356,6 +427,10 @@ function validateProjectExample(example) {
   };
   if (project.netlist.components.some((component) => component.kind === 'ssd1306-oled')) {
     assert(
+      artifacts.renodeBackendArtifacts.summary.busTransactionBrokerCount > 0,
+      `${example.id} backend compiler should route SSD1306 through the Bus Transaction Broker.`
+    );
+    assert(
       getProtocolRuntimeDevicesByModel(protocolRuntimeRegistry, 'ssd1306', 'i2c').length > 0,
       `${example.id} Protocol Runtime Registry should expose SSD1306 as an I2C display device.`
     );
@@ -365,6 +440,10 @@ function validateProjectExample(example) {
     );
   }
   if (project.netlist.components.some((component) => component.kind === 'si7021-sensor')) {
+    assert(
+      artifacts.renodeBackendArtifacts.summary.nativePeripheralCount > 0,
+      `${example.id} backend compiler should emit SI7021 as a native Renode peripheral.`
+    );
     assert(
       getProtocolRuntimeSensorDevices(protocolRuntimeRegistry).some((device) => device.model === 'si7021'),
       `${example.id} Protocol Runtime Registry should expose SI7021 as an I2C sensor device.`
@@ -538,6 +617,96 @@ function validateProjectExample(example) {
   );
 }
 
+function validateBmp180NativePackageFixture() {
+  const board = BOARD_SCHEMAS.find((candidate) => candidate.id === 'nucleo-h753zi');
+  assert(board, 'BMP180 fixture needs the NUCLEO-H753ZI board schema.');
+
+  const peripherals = createPeripheralTemplate('bmp180-sensor', 1).map((peripheral) => ({
+    ...peripheral,
+    padId: peripheral.endpointId === 'scl' ? 'CN9-6' : 'CN9-5',
+  }));
+  const wiring = { peripherals };
+  const netlist = createNetlistFromWiring(wiring, board);
+  const artifacts = compileNetlistToRenodeArtifacts({ netlist, board });
+
+  assert(artifacts.boardRepl.includes('Sensors.BMP180'), 'BMP180 fixture should emit Sensors.BMP180 in board.repl.');
+  assert(artifacts.boardRepl.includes('0x77'), 'BMP180 fixture should attach at I2C address 0x77.');
+  assert(
+    artifacts.renodeBackendArtifacts.nativePeripheralBackends.some((backend) => backend.nativeCatalogId === 'bmp180'),
+    'BMP180 fixture should produce a native peripheral backend descriptor.'
+  );
+
+  const busManifest = createRuntimeBusManifest(board, netlist);
+  const protocolRuntimeRegistry = createProtocolRuntimeRegistry({ board, busManifest });
+  const bmp180ProtocolDevice = getProtocolRuntimeSensorDevices(protocolRuntimeRegistry).find((device) => device.model === 'bmp180');
+  assert(bmp180ProtocolDevice, 'BMP180 fixture should appear in the Protocol Runtime Registry as an I2C sensor.');
+  assert(bmp180ProtocolDevice.nativeRenodeName.startsWith('bmp180Sensor__'), 'BMP180 fixture should expose a catalog-derived native Renode name.');
+
+  const busSensorDevices = getBusSensorRuntimeDevices(busManifest);
+  const runtimeSensorDevice = busSensorDevices.find((device) => device.model === 'bmp180');
+  assert(runtimeSensorDevice, 'BMP180 fixture should be discoverable by Bus Sensor Runtime.');
+  assert(runtimeSensorDevice.channels.some((channel) => channel.id === 'pressure'), 'BMP180 fixture should expose the pressure channel.');
+
+  const initialSensorState = createBusSensorRuntimeState(busSensorDevices);
+  const configuredSensorState = updateBusSensorChannelConfiguration(
+    initialSensorState,
+    runtimeSensorDevice.id,
+    'pressure',
+    900
+  );
+  const runtimeTransactions = createBusSensorReadTransactions(
+    runtimeSensorDevice,
+    configuredSensorState.devices[runtimeSensorDevice.id],
+    'pressure'
+  );
+  assert(runtimeTransactions.length === 3, 'BMP180 Bus Sensor Runtime should create command, register-pointer, and read transactions.');
+
+  const timelineClock = {
+    schemaVersion: 1,
+    sequence: 1,
+    wallTimeMs: 1010,
+    virtualTimeNs: 10000000,
+    virtualTimeMs: 10,
+    elapsedWallMs: 10,
+    syncMode: 'host-estimated',
+    timeScale: 1,
+    paused: false,
+  };
+  const runtimeDecoded = runtimeTransactions.reduce(
+    (state, transaction, index) =>
+      applyBusSensorRuntimeEvent(
+        state,
+        {
+          schemaVersion: 1,
+          id: `bmp180-fixture:${index}`,
+          protocol: 'i2c',
+          kind: 'bus-transaction',
+          source: 'ui',
+          clock: { ...timelineClock, sequence: index + 1, virtualTimeNs: 10000000 + index * 1000000, virtualTimeMs: 10 + index },
+          summary: 'validation BMP180 transaction',
+          busId: transaction.busId,
+          busLabel: transaction.busLabel,
+          renodePeripheralName: transaction.peripheralName,
+          direction: transaction.direction,
+          status: transaction.status,
+          address: transaction.address,
+          payload: {
+            bytes: transaction.data,
+            text: null,
+            bitLength: transaction.data.length * 8,
+            truncated: false,
+          },
+        },
+        busSensorDevices
+      ),
+    configuredSensorState
+  );
+  assert(
+    runtimeDecoded.devices[runtimeSensorDevice.id].channels.pressure.lastReadValue === 900,
+    'BMP180 Bus Sensor Runtime should decode pressure transactions through the reusable codec.'
+  );
+}
+
 function main() {
   validateComponentPackages();
   validateSensorPackages();
@@ -547,6 +716,7 @@ function main() {
     assert(examples.length > 0, `${board.name} has no bundled examples.`);
   });
   EXAMPLE_PROJECTS.forEach((example) => validateProjectExample(example));
+  validateBmp180NativePackageFixture();
   console.log('Netlist, component package, sensor package, and device package validation completed successfully.');
 }
 

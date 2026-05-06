@@ -40,13 +40,14 @@ const DEVICE_LIBRARY_ORDER: Record<DemoPeripheralTemplateKind, number> = {
   'rgb-led': 40,
   'ssd1306-oled': 100,
   'si7021-sensor': 200,
+  'bmp180-sensor': 210,
 };
 
 function iconForComponent(kind: DemoPeripheralTemplateKind): DevicePackage['visual']['icon'] {
   if (kind === 'ssd1306-oled') {
     return 'oled';
   }
-  if (kind === 'si7021-sensor') {
+  if (kind === 'si7021-sensor' || kind === 'bmp180-sensor') {
     return 'sensor';
   }
   return kind;
@@ -56,7 +57,7 @@ function groupForComponent(kind: DemoPeripheralTemplateKind): DevicePackage['vis
   if (kind === 'ssd1306-oled') {
     return 'Bus Displays';
   }
-  if (kind === 'si7021-sensor') {
+  if (kind === 'si7021-sensor' || kind === 'bmp180-sensor') {
     return 'Sensors';
   }
   return 'GPIO';
@@ -108,7 +109,11 @@ function getComponentBackend(componentPackage: ComponentPackageSdk, sensorSdk: S
 
 function getComponentEventParsers(componentPackage: ComponentPackageSdk, sensorSdk: SensorPackageSdk | null): readonly DeviceRuntimeEventParser[] {
   if (sensorSdk) {
-    return ['bus-transaction', 'i2c-si70xx-measurement', 'uart-line-buffer'];
+    return [
+      'bus-transaction',
+      sensorSdk.kind === 'bmp180-sensor' ? 'i2c-bmp180-measurement' : 'i2c-si70xx-measurement',
+      'uart-line-buffer',
+    ];
   }
   if (componentPackage.kind === 'ssd1306-oled') {
     return ['bus-transaction', 'i2c-ssd1306-framebuffer'];
@@ -169,7 +174,7 @@ function getComponentValidation(componentPackage: ComponentPackageSdk, sensorSdk
       representative: 'i2c-sensor',
       expectedManifest: 'runtime-bus-manifest',
       expectedPanels: ['sensor-control', 'bus-transactions', 'uart-terminal'],
-      smokeExampleId: 'nucleo-h753zi-si7021-sensor',
+      smokeExampleId: componentPackage.kind === 'si7021-sensor' ? 'nucleo-h753zi-si7021-sensor' : null,
     };
   }
   if (componentPackage.kind === 'ssd1306-oled') {
