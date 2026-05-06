@@ -238,6 +238,8 @@ const PAD_HOVER_LABEL_WIDTH = DEFAULT_BOARD.visual.canvas.padHoverLabelWidth;
 const BOARD_TOP_VIEW_HEIGHT = DEFAULT_BOARD.visual.canvas.boardTopViewHeight;
 const LIBRARY_DEVICE_PACKAGE_MIME = 'application/x-renode-wokwi-device-package';
 const DEVICE_PACKAGE_LIBRARY_ITEMS = getDevicePackageLibraryItems();
+const PROTEUS_GRID_BACKGROUND =
+  'linear-gradient(rgba(92,88,65,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(92,88,65,0.08) 1px, transparent 1px)';
 
 function formatBytes(bytes: number | null | undefined): string {
   if (typeof bytes !== 'number' || !Number.isFinite(bytes)) {
@@ -453,6 +455,325 @@ function getRgbDeviceGlow(device: DemoWorkbenchDevice, ledStates: Record<string,
     background: `conic-gradient(${activeColors.join(', ')})`,
     glow: `0 0 22px ${activeColors[0]}66`,
   };
+}
+
+function getProteusPinLabel(pad: DemoBoardPad) {
+  const pinId = pad.mcuPinId ?? pad.pinLabel;
+  const signal = (pad.signalName ?? '').toUpperCase();
+  if (pinId === 'PA0' && signal.includes('WKUP')) {
+    return 'PA0-WKUP';
+  }
+  if (pinId === 'PC13') {
+    return signal.includes('RTC') ? 'PC13_RTC' : 'PC13';
+  }
+  if (pinId === 'PC14') {
+    return 'PC14-OSC32_IN';
+  }
+  if (pinId === 'PC15') {
+    return 'PC15-OSC32_OUT';
+  }
+  return pinId;
+}
+
+function ProteusMcuSymbolPreview({
+  board,
+  visiblePads,
+  wiring,
+  hoveredPadId,
+  armedPeripheralId,
+}: {
+  board: BoardSchema;
+  visiblePads: DemoBoardPad[];
+  wiring: DemoWiring;
+  hoveredPadId: string | null;
+  armedPeripheralId: string | null;
+}) {
+  const boardTitle = board.family === 'stm32f1' ? 'STM32F103RBTx' : board.family === 'stm32f4' ? 'STM32F407VGTx' : 'STM32H753ZI';
+  const connectedPadIds = new Set(wiring.peripherals.map((peripheral) => peripheral.padId).filter(Boolean));
+  const displayPads = visiblePads.filter((pad) => pad.selectable && pad.mcuPinId && pad.role !== 'power' && pad.role !== 'ground');
+  const placements = displayPads
+    .map((pad) => ({ pad, anchor: getPadAnchor(pad, board) }))
+    .sort((left, right) => left.anchor.y - right.anchor.y || left.anchor.x - right.anchor.x);
+  const left = placements.filter((placement) => placement.anchor.x < BOARD_CANVAS_WIDTH / 2);
+  const right = placements.filter((placement) => placement.anchor.x >= BOARD_CANVAS_WIDTH / 2);
+  const frame = {
+    x: 224,
+    y: 34,
+    width: 312,
+    height: 268,
+  };
+  const clampPinY = (y: number) => Math.max(frame.y + 36, Math.min(frame.y + frame.height - 26, y));
+  const pinTone = (pad: DemoBoardPad) =>
+    hoveredPadId === pad.id
+      ? '#06b6d4'
+      : connectedPadIds.has(pad.id)
+        ? '#0ea5e9'
+        : armedPeripheralId
+          ? '#f59e0b'
+          : '#8b0000';
+
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-[320px]">
+      <div
+        className="absolute rounded-[3px] border-2 shadow-[0_16px_30px_rgba(71,33,12,0.15)]"
+        style={{
+          left: frame.x,
+          top: frame.y,
+          width: frame.width,
+          height: frame.height,
+          borderColor: '#8b0000',
+          background: 'linear-gradient(180deg, #d1d0b5, #c6c4a6)',
+        }}
+      >
+        <div className="absolute left-3 top-2 text-[17px] font-semibold text-slate-950">U1</div>
+        <div className="absolute right-3 top-3 text-[9px] font-semibold uppercase tracking-[0.24em] text-slate-600">Renode MCU</div>
+        <div className="absolute bottom-3 left-3 text-[15px] font-semibold text-slate-950">{boardTitle}</div>
+        <div className="absolute bottom-3 right-3 max-w-[110px] text-right text-[8px] leading-3 text-slate-600">{board.runtime.renodePlatformPath}</div>
+        <div className="absolute left-1/2 top-1/2 h-16 w-16 -translate-x-1/2 -translate-y-1/2 rounded-xl bg-slate-950 shadow-inner" />
+      </div>
+
+      {left.map(({ pad, anchor }) => {
+        const top = clampPinY(anchor.y);
+        const tone = pinTone(pad);
+        const lineWidth = Math.max(10, frame.x - anchor.x);
+        return (
+          <div key={pad.id} className="absolute left-0" style={{ top }}>
+            <div className="absolute top-[-7px] w-7 text-right text-[11px] text-slate-950" style={{ left: Math.max(4, anchor.x - 32) }}>
+              {pad.pinNumber}
+            </div>
+            <div className="absolute top-0 h-[2px]" style={{ left: anchor.x, width: lineWidth, background: tone }} />
+            <div className="absolute top-[-7px] w-[132px] text-[11px] leading-none text-slate-950" style={{ left: frame.x + 10 }}>
+              {getProteusPinLabel(pad)}
+            </div>
+          </div>
+        );
+      })}
+
+      {right.map(({ pad, anchor }) => {
+        const top = clampPinY(anchor.y);
+        const tone = pinTone(pad);
+        const lineWidth = Math.max(10, anchor.x - (frame.x + frame.width));
+        return (
+          <div key={pad.id} className="absolute left-0" style={{ top }}>
+            <div className="absolute top-0 h-[2px]" style={{ left: frame.x + frame.width, width: lineWidth, background: tone }} />
+            <div className="absolute top-[-7px] w-[132px] text-right text-[11px] leading-none text-slate-950" style={{ left: frame.x + frame.width - 142 }}>
+              {getProteusPinLabel(pad)}
+            </div>
+            <div className="absolute top-[-7px] w-7 text-left text-[11px] text-slate-950" style={{ left: anchor.x + 8 }}>
+              {pad.pinNumber}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ProteusPinHeader({ labels, tone = '#facc15' }: { labels: readonly string[]; tone?: string }) {
+  return (
+    <div className="flex items-center justify-center gap-1">
+      {labels.map((label) => (
+        <div key={label} className="grid gap-1 text-center text-[8px] font-bold uppercase tracking-[0.12em] text-slate-500">
+          <div className="grid h-5 w-5 place-items-center rounded-md border border-slate-700 bg-slate-950 shadow-inner">
+            <div className="h-2.5 w-2.5 rounded-full border border-yellow-200" style={{ backgroundColor: tone }} />
+          </div>
+          <span>{label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ProteusOledGraphic({ live = false }: { live?: boolean }) {
+  return (
+    <div className="rounded-[18px] border border-sky-300 bg-[#0f766e] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_10px_24px_rgba(15,23,42,0.18)]">
+      <div className="flex items-center justify-between px-1 pb-1">
+        <div className="h-2 w-2 rounded-full border border-sky-100 bg-sky-900" />
+        <div className="text-[8px] font-black uppercase tracking-[0.18em] text-sky-50/90">OLED 128x64</div>
+        <div className="h-2 w-2 rounded-full border border-sky-100 bg-sky-900" />
+      </div>
+      <div className="rounded-xl border border-slate-950 bg-slate-950 p-2 shadow-inner">
+        <div className="grid gap-[1px]" style={{ gridTemplateColumns: 'repeat(20, minmax(0, 1fr))' }}>
+          {Array.from({ length: 100 }).map((_, pixel) => {
+            const lit = live ? pixel % 7 === 0 || Math.floor(pixel / 20) === 2 : (pixel + Math.floor(pixel / 20)) % 9 === 0;
+            return <div key={pixel} className={`h-1 rounded-[1px] ${lit ? 'bg-cyan-300 shadow-[0_0_6px_rgba(103,232,249,0.8)]' : 'bg-slate-800'}`} />;
+          })}
+        </div>
+      </div>
+      <div className="mt-2">
+        <ProteusPinHeader labels={['GND', 'VCC', 'SCL', 'SDA']} tone="#38bdf8" />
+      </div>
+    </div>
+  );
+}
+
+function ProteusSensorGraphic({ devicePackage }: { devicePackage: DevicePackage }) {
+  const badges = devicePackage.kind === 'bmp180-sensor' ? ['Temp', 'Press'] : ['Temp', 'RH'];
+  return (
+    <div className="rounded-[18px] border border-emerald-300 bg-[#0f9f6e] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_10px_24px_rgba(15,23,42,0.18)]">
+      <div className="flex items-center justify-between px-1 pb-1">
+        <div className="h-2 w-2 rounded-full border border-emerald-100 bg-emerald-950" />
+        <div className="text-[8px] font-black uppercase tracking-[0.18em] text-emerald-50">{devicePackage.renodeBackend.model}</div>
+        <div className="h-2 w-2 rounded-full border border-emerald-100 bg-emerald-950" />
+      </div>
+      <div className="rounded-2xl border border-emerald-200/80 bg-emerald-50 p-3">
+        <div className="flex items-center gap-3">
+          <div className="relative grid h-14 w-14 place-items-center rounded-xl border border-slate-800 bg-slate-950 text-[9px] font-black uppercase tracking-[0.12em] text-emerald-200 shadow-lg">
+            IC
+            <div className="absolute -left-1 top-2 grid gap-1">
+              {Array.from({ length: 4 }).map((_, index) => <div key={index} className="h-1 w-1 rounded-full bg-slate-400" />)}
+            </div>
+            <div className="absolute -right-1 top-2 grid gap-1">
+              {Array.from({ length: 4 }).map((_, index) => <div key={index} className="h-1 w-1 rounded-full bg-slate-400" />)}
+            </div>
+          </div>
+          <div className="grid flex-1 gap-1.5">
+            {badges.map((badge) => (
+              <div key={badge} className="rounded-full border border-emerald-200 bg-white px-2 py-1 text-center text-[9px] font-bold uppercase tracking-[0.14em] text-emerald-700">
+                {badge}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="mt-2">
+        <ProteusPinHeader labels={['VCC', 'GND', 'SCL', 'SDA']} tone="#34d399" />
+      </div>
+    </div>
+  );
+}
+
+function ProteusRgbLedGraphic({ device, ledStates }: { device: DemoWorkbenchDevice; ledStates: Record<string, boolean> }) {
+  const rgbGlow = getRgbDeviceGlow(device, ledStates);
+  return (
+    <div className="rounded-[18px] border border-cyan-300 bg-cyan-100 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.65),0_10px_24px_rgba(15,23,42,0.16)]">
+      <div className="flex items-center gap-4">
+        <div className="relative h-16 w-16 rounded-full border border-white/90" style={{ background: rgbGlow.background, boxShadow: rgbGlow.glow }}>
+          <div className="absolute left-3 top-2 h-5 w-5 rounded-full bg-white/70 blur-[1px]" />
+        </div>
+        <div className="grid flex-1 gap-1.5">
+          {device.members.map((member) => (
+            <div key={member.id} className="flex items-center gap-2 rounded-full border border-cyan-200 bg-white px-2 py-1">
+              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: member.accentColor ?? '#06b6d4' }} />
+              <span className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-600">{member.endpointLabel}</span>
+              <span className="ml-auto text-[9px] font-semibold text-slate-400">{ledStates[member.id] ? 'ON' : 'OFF'}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="mt-3 flex justify-center gap-2">
+        {['R', 'G', 'B', 'COM'].map((label) => (
+          <div key={label} className="h-7 w-1.5 rounded-b-full bg-slate-400 shadow-sm" title={label} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProteusSingleEndpointGraphic({
+  devicePackage,
+  peripheral,
+  active,
+  pressed,
+}: {
+  devicePackage: DevicePackage;
+  peripheral: DemoPeripheral;
+  active: boolean;
+  pressed: boolean;
+}) {
+  const templateKind = getPeripheralTemplateKind(peripheral);
+  const accent = peripheral.accentColor ?? devicePackage.visual.accentColor;
+  if (peripheral.kind === 'button') {
+    return (
+      <div className="relative mx-auto h-28 w-32 text-[#7f0000]">
+        <div className="absolute left-5 top-1 text-lg font-semibold text-slate-950">{peripheral.label}</div>
+        <div className="absolute left-2 right-2 top-12 h-16">
+          <svg viewBox="0 0 128 64" className="h-full w-full overflow-visible">
+            <line x1="0" y1="32" x2="30" y2="32" stroke="currentColor" strokeWidth="3" />
+            <line x1="82" y1="32" x2="128" y2="32" stroke="currentColor" strokeWidth="3" />
+            <circle cx="38" cy="32" r="7" fill="#d1d0b5" stroke="currentColor" strokeWidth="3" />
+            <circle cx="74" cy="32" r="7" fill="#d1d0b5" stroke="currentColor" strokeWidth="3" />
+            <line x1="42" y1="26" x2={pressed ? 72 : 66} y2={pressed ? 31 : 16} stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
+            <rect x="46" y="0" width="32" height="17" fill="none" stroke="currentColor" strokeWidth="3" />
+            <circle cx="104" cy="6" r="7" fill="#0f172a" stroke="currentColor" strokeWidth="3" />
+            <text x="104" y="10" textAnchor="middle" fontSize="13" fontWeight="800" fill="#ef4444">1</text>
+          </svg>
+        </div>
+        <div className="absolute bottom-0 left-0 right-0 text-center text-sm font-medium text-slate-950">{devicePackage.title}</div>
+      </div>
+    );
+  }
+
+  if (templateKind === 'buzzer') {
+    return (
+      <div className="relative mx-auto h-32 w-32 text-[#7f0000]">
+        <div className="absolute left-4 top-1 text-xl font-medium text-slate-950">{peripheral.label}</div>
+        <div className="absolute left-0 right-0 top-12">
+          <svg viewBox="0 0 128 64" className="h-16 w-full overflow-visible">
+            <line x1="0" y1="32" x2="38" y2="32" stroke="currentColor" strokeWidth="3" />
+            <line x1="92" y1="32" x2="128" y2="32" stroke="currentColor" strokeWidth="3" />
+            <path d="M38 18 H56 L82 4 V60 L56 46 H38 Z" fill="#050505" stroke="currentColor" strokeWidth="4" strokeLinejoin="round" />
+            <path d="M88 22 C99 29 99 35 88 42" fill="none" stroke={active ? accent : 'currentColor'} strokeWidth="3" strokeLinecap="round" opacity={active ? 1 : 0.55} />
+            <path d="M96 14 C115 26 115 38 96 50" fill="none" stroke={active ? accent : 'currentColor'} strokeWidth="3" strokeLinecap="round" opacity={active ? 0.9 : 0.35} />
+          </svg>
+        </div>
+        <div className="absolute bottom-0 left-0 right-0 text-center text-sm font-medium text-slate-950">{devicePackage.title}</div>
+      </div>
+    );
+  }
+  return (
+    <div className="relative mx-auto h-32 w-32 text-[#7f0000]">
+      <div className="absolute left-4 top-1 text-2xl font-medium text-slate-950">{peripheral.label}</div>
+      <div className="absolute left-0 right-0 top-11">
+        <svg viewBox="0 0 128 70" className="h-[70px] w-full overflow-visible">
+          <line x1="0" y1="36" x2="38" y2="36" stroke="currentColor" strokeWidth="3" />
+          <line x1="90" y1="36" x2="128" y2="36" stroke="currentColor" strokeWidth="3" />
+          <circle cx="64" cy="36" r="27" fill={active ? '#3b0a0a' : '#050505'} stroke="currentColor" strokeWidth="4" />
+          <polygon points="51,20 51,52 74,36" fill="none" stroke="#ef4444" strokeWidth="4" strokeLinejoin="round" />
+          <line x1="75" y1="20" x2="75" y2="52" stroke="#ef4444" strokeWidth="4" />
+          <line x1="42" y1="52" x2="84" y2="20" stroke="#ef4444" strokeWidth="3" />
+          {active ? <circle cx="64" cy="36" r="35" fill="none" stroke={accent} strokeWidth="3" opacity="0.55" /> : null}
+        </svg>
+      </div>
+      <div className="absolute bottom-0 left-0 right-0 text-center text-sm font-medium text-slate-950">{devicePackage.title}</div>
+    </div>
+  );
+}
+
+function ProteusLibraryGraphic({ devicePackage }: { devicePackage: DevicePackage }) {
+  if (devicePackage.visual.icon === 'oled') {
+    return <ProteusOledGraphic />;
+  }
+  if (devicePackage.visual.icon === 'sensor') {
+    return <ProteusSensorGraphic devicePackage={devicePackage} />;
+  }
+  if (devicePackage.visual.icon === 'rgb-led') {
+    return (
+      <div className="rounded-[18px] border border-cyan-200 bg-cyan-50 p-3">
+        <div className="mx-auto h-16 w-16 rounded-full border border-white/90 shadow-lg" style={{ background: 'conic-gradient(#ef4444, #22c55e, #3b82f6, #ef4444)' }} />
+        <div className="mt-3 flex justify-center gap-2">
+          {['R', 'G', 'B'].map((label) => <span key={label} className="rounded-full bg-white px-2 py-1 text-[9px] font-bold text-cyan-700">{label}</span>)}
+        </div>
+      </div>
+    );
+  }
+
+  const mockPeripheral: DemoPeripheral = {
+    id: 'library-preview',
+    kind: devicePackage.visual.icon === 'button' ? 'button' : 'led',
+    label: devicePackage.title,
+    padId: null,
+    sourcePeripheralId: null,
+    behavior: createDefaultPeripheralBehavior(devicePackage.visual.icon === 'button' ? 'button' : devicePackage.visual.icon === 'buzzer' ? 'buzzer' : 'led'),
+    power: undefined,
+    templateKind: devicePackage.visual.icon === 'button' ? 'button' : devicePackage.visual.icon === 'buzzer' ? 'buzzer' : 'led',
+    groupId: null,
+    groupLabel: null,
+    endpointId: 'signal',
+    endpointLabel: devicePackage.visual.icon === 'buzzer' ? 'OUT' : 'SIG',
+    accentColor: devicePackage.visual.accentColor,
+  };
+  return <ProteusSingleEndpointGraphic devicePackage={devicePackage} peripheral={mockPeripheral} active={false} pressed={false} />;
 }
 
 function ToolBadge({ label, status }: { label: string; status: ToolingStatus | null }) {
@@ -2043,7 +2364,6 @@ function PeripheralLibraryCard({
   onDragStateChange: (kind: DevicePackageKind | null) => void;
 }) {
   const palette = getDevicePackagePalette(devicePackage);
-  const Icon = palette.icon;
 
   return (
     <div
@@ -2063,26 +2383,12 @@ function PeripheralLibraryCard({
         disabled ? 'cursor-not-allowed border-slate-800 bg-slate-900/50 text-slate-500' : `${palette.accent} cursor-grab active:cursor-grabbing`
       }`}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className={`rounded-2xl border px-3 py-2 ${disabled ? 'border-current/15 bg-black/10' : palette.ghost}`}>
-          <Icon size={18} />
-        </div>
-        <div className="rounded-full border border-current/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]">
-          Drag in
-        </div>
+      <div className="text-slate-900">
+        <ProteusLibraryGraphic devicePackage={devicePackage} />
       </div>
 
-      <div className="mt-4">
+      <div className="mt-3 text-center">
         <div className="text-sm font-semibold">{palette.title}</div>
-              <div className="mt-1 text-xs text-current/75">{palette.subtitle}</div>
-      </div>
-
-      <div className="mt-4 rounded-2xl border border-current/15 bg-black/10 px-3 py-2 text-[11px] text-current/75">
-        Drag this part into the workbench, or click below to spawn one instantly.
-      </div>
-
-      <div className="mt-2 rounded-2xl border border-current/15 bg-black/10 px-3 py-2 text-[10px] uppercase tracking-[0.16em] text-current/65">
-        Needs {getDevicePackageRequirementSummary(devicePackage.kind)}
       </div>
 
       <button
@@ -2482,19 +2788,7 @@ function BoardTopView({
     : null;
 
   return (
-    <div className="rounded-[30px] border border-slate-300 bg-[#f6f7fb] p-4 shadow-inner">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div>
-          <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Board Top View</div>
-          <div className="mt-1 text-sm text-slate-600">
-            Drag parts from the library into the workbench, then drag each visible endpoint terminal directly onto a live board hotspot.
-          </div>
-        </div>
-        <div className="rounded-full border border-slate-300 bg-white px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-slate-500">
-          Drag parts + endpoints
-        </div>
-      </div>
-
+    <div className="rounded-[30px] border border-slate-300 bg-[#f6f7fb] p-3 shadow-inner">
       <div
         className={`relative overflow-hidden rounded-[30px] border px-5 py-5 shadow-inner transition ${
           libraryDragKind ? 'border-cyan-400' : 'border-slate-300'
@@ -2506,13 +2800,6 @@ function BoardTopView({
             : artwork.surface,
         }}
       >
-        <div className="mb-4 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-slate-500">
-          <div className="rounded-full border border-white/80 bg-white/80 px-3 py-1">1. Drag a device in</div>
-          <div className="rounded-full border border-white/80 bg-white/80 px-3 py-1">2. Pull an endpoint</div>
-          <div className="rounded-full border border-white/80 bg-white/80 px-3 py-1">3. Drop on a cyan hotspot</div>
-          <div className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-cyan-700">Click a wire to rewire or delete</div>
-        </div>
-
         <div
           ref={surfaceRef}
           onPointerMove={trackPointerPreview}
@@ -2528,6 +2815,13 @@ function BoardTopView({
           className="relative mx-auto overflow-hidden rounded-[38px]"
           style={{ width: BOARD_CANVAS_WIDTH, minHeight: canvasHeight }}
         >
+          <div
+            className="pointer-events-none absolute inset-0 opacity-80"
+            style={{
+              backgroundImage: PROTEUS_GRID_BACKGROUND,
+              backgroundSize: '18px 18px',
+            }}
+          />
           <svg
             className="pointer-events-none absolute inset-0 z-20 h-full w-full"
             viewBox={`0 0 ${BOARD_CANVAS_WIDTH} ${canvasHeight}`}
@@ -2654,163 +2948,13 @@ function BoardTopView({
             </div>
           ))}
 
-          {board.connectors.leftMorpho ? (
-            <div className="absolute left-0 top-6 w-[108px]">
-              <MiniConnectorStrip connector={board.connectors.leftMorpho} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
-            </div>
-          ) : null}
-
-          <div className="absolute left-[128px] top-[50px] w-[90px]">
-            {board.connectors.left.map((connector) => (
-              <div key={connector.id} className="mb-3 last:mb-0">
-                <MiniConnectorStrip connector={connector} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
-              </div>
-            ))}
-          </div>
-
-          <div className="absolute right-[128px] top-[50px] w-[90px]">
-            {board.connectors.right.map((connector) => (
-              <div key={connector.id} className="mb-3 last:mb-0">
-                <MiniConnectorStrip connector={connector} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
-              </div>
-            ))}
-          </div>
-
-          {board.connectors.rightMorpho ? (
-            <div className="absolute right-0 top-6 w-[108px]">
-              <MiniConnectorStrip connector={board.connectors.rightMorpho} wiring={wiring} ledStates={ledStates} buttonStates={buttonStates} />
-            </div>
-          ) : null}
-
-          {Object.entries(board.visual.connectorFrames).map(([connectorId, frame]) => (
-            <div
-              key={connectorId}
-              className="pointer-events-none absolute text-[10px] font-semibold uppercase tracking-[0.24em] text-[#465dd7]"
-              style={{
-                left: frame.x + (frame.layout === 'dual' ? 22 : frame.width / 2 - 16),
-                top: frame.y - 14,
-              }}
-            >
-              {connectorId}
-            </div>
-          ))}
-
-          <div
-            className="absolute left-1/2 top-0 h-14 w-24 -translate-x-1/2 rounded-b-[18px] border shadow-md"
-            style={{
-              background: board.family === 'stm32f1' ? '#1d4ed8' : '#cbd5e1',
-              borderColor: artwork.pcbBorder,
-            }}
+          <ProteusMcuSymbolPreview
+            board={board}
+            visiblePads={visiblePads}
+            wiring={wiring}
+            hoveredPadId={hoveredPadId}
+            armedPeripheralId={armedPeripheralId}
           />
-          <div
-            className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2 rounded-full border px-3 py-1 text-[9px] font-semibold uppercase tracking-[0.18em]"
-            style={{
-              borderColor: artwork.pcbBorder,
-              background: 'rgba(15,23,42,0.2)',
-              color: artwork.text,
-            }}
-          >
-            {artwork.usbLabel}
-          </div>
-          <div className="absolute left-1/2 top-[72px] h-5 w-10 -translate-x-1/2 rounded-full border border-slate-500 bg-slate-900/80" />
-
-          <div className="absolute left-1/2 top-[124px] flex -translate-x-1/2 items-start gap-5">
-            <div
-              className="rounded-[26px] border px-4 py-3 shadow-sm"
-              style={{
-                borderColor: artwork.pcbBorder,
-                background: board.family === 'stm32h7' ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.2)',
-              }}
-            >
-              <div className="text-[11px] uppercase tracking-[0.2em]" style={{ color: artwork.text }}>
-                USER
-              </div>
-              <div className={`mt-2 h-12 w-12 rounded-full border ${Object.values(buttonStates).some(Boolean) ? 'border-fuchsia-300 bg-fuchsia-400 shadow-[0_0_16px_rgba(217,70,239,0.45)]' : 'border-slate-300 bg-slate-100'}`} />
-            </div>
-            <div
-              className="rounded-[26px] border px-4 py-3 shadow-sm"
-              style={{
-                borderColor: artwork.pcbBorder,
-                background: board.family === 'stm32h7' ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.2)',
-              }}
-            >
-              <div className="text-[11px] uppercase tracking-[0.2em]" style={{ color: artwork.text }}>
-                RESET
-              </div>
-              <div className="mt-2 h-12 w-12 rounded-full border border-slate-400 bg-slate-900/85" />
-            </div>
-            <div
-              className="rounded-[26px] border px-4 py-3 shadow-sm"
-              style={{
-                borderColor: artwork.pcbBorder,
-                background: board.family === 'stm32h7' ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.2)',
-              }}
-            >
-              <div className="text-[11px] uppercase tracking-[0.2em]" style={{ color: artwork.text }}>
-                {board.family === 'stm32f4' ? 'LD3 / LD4 / LD5 / LD6' : board.family === 'stm32f1' ? 'PC13 LED' : 'LD1 / LD2 / LD3'}
-              </div>
-              <div className="mt-2 flex gap-2">
-                <div className="h-4 w-4 rounded-full border border-emerald-300 bg-emerald-300/70" />
-                <div className="h-4 w-4 rounded-full border border-amber-300 bg-amber-300/70" />
-                <div className="h-4 w-4 rounded-full border border-rose-300 bg-rose-300/70" />
-                {board.family === 'stm32f4' ? <div className="h-4 w-4 rounded-full border border-blue-300 bg-blue-300/70" /> : null}
-              </div>
-            </div>
-          </div>
-
-          <div className="absolute left-1/2 top-[244px] grid w-[260px] -translate-x-1/2 gap-4">
-            <div className="mx-auto flex h-28 w-28 items-center justify-center rounded-[30px] border border-slate-700 bg-slate-900 shadow-[0_18px_36px_rgba(15,23,42,0.25)]">
-              <Cpu size={46} className="text-cyan-300" />
-            </div>
-            <div
-              className="rounded-[28px] border px-5 py-4 text-center shadow-sm"
-              style={{
-                borderColor: artwork.pcbBorder,
-                background: board.family === 'stm32h7' ? 'rgba(255,255,255,0.92)' : 'rgba(15,23,42,0.18)',
-              }}
-            >
-              <div className="text-xs uppercase tracking-[0.24em]" style={{ color: artwork.mutedText }}>
-                MCU
-              </div>
-              <div className="mt-1 text-xl font-semibold tracking-tight" style={{ color: board.family === 'stm32h7' ? '#0f172a' : artwork.text }}>
-                {artwork.chipLabel}
-              </div>
-              <div className="mt-1 text-sm" style={{ color: board.family === 'stm32h7' ? '#475569' : artwork.mutedText }}>
-                {board.runtime.renodePlatformPath}
-              </div>
-            </div>
-          </div>
-
-          <div className="pointer-events-none absolute left-[228px] top-[52px] text-[11px] font-semibold uppercase tracking-[0.28em]" style={{ color: artwork.text }}>
-            {artwork.railLeft}
-          </div>
-          <div className="pointer-events-none absolute right-[228px] top-[52px] text-[11px] font-semibold uppercase tracking-[0.28em]" style={{ color: artwork.text }}>
-            {artwork.railRight}
-          </div>
-          <div className="pointer-events-none absolute left-[18px] top-[156px] -rotate-90 text-[11px] font-semibold uppercase tracking-[0.28em]" style={{ color: artwork.text }}>
-            {artwork.sideLeft}
-          </div>
-          <div className="pointer-events-none absolute right-[12px] top-[156px] rotate-90 text-[11px] font-semibold uppercase tracking-[0.28em]" style={{ color: artwork.text }}>
-            {artwork.sideRight}
-          </div>
-          <div className="pointer-events-none absolute left-1/2 top-[258px] -translate-x-1/2 text-center">
-            <div className="text-sm font-semibold uppercase tracking-[0.32em]" style={{ color: artwork.mutedText }}>
-              {artwork.centerKicker}
-            </div>
-            <div className="mt-1 max-w-[260px] text-[28px] leading-none tracking-tight" style={{ color: artwork.text }}>
-              {artwork.centerTitle}
-            </div>
-            <div
-              className="mx-auto mt-2 w-max rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]"
-              style={{
-                borderColor: artwork.pcbBorder,
-                color: artwork.text,
-                background: board.family === 'stm32h7' ? 'rgba(255,255,255,0.72)' : 'rgba(15,23,42,0.18)',
-              }}
-            >
-              {artwork.badge}
-            </div>
-          </div>
 
           {visiblePads.map((pad) => {
             const anchor = getPadAnchor(pad, board);
@@ -2827,7 +2971,7 @@ function BoardTopView({
                   onPointerLeave={() => setHoveredPadId((current) => (current === pad.id ? null : current))}
                   disabled={simulationRunning || isPowerRail}
                   data-board-pad-id={pad.id}
-                  className={`absolute rounded-full border transition ${
+                  className={`absolute z-20 rounded-full border transition ${
                     simulationRunning
                       ? 'cursor-not-allowed border-slate-300/60 bg-white/70'
                       : isPowerRail
@@ -2835,10 +2979,10 @@ function BoardTopView({
                           ? 'cursor-default border-emerald-200 bg-emerald-400 shadow-[0_0_0_4px_rgba(34,197,94,0.18)]'
                           : 'cursor-default border-slate-200 bg-slate-500 shadow-[0_0_0_4px_rgba(100,116,139,0.18)]'
                         : occupant
-                        ? 'border-white/90 bg-white shadow-[0_0_0_4px_rgba(255,255,255,0.25)]'
+                        ? 'border-white/90 bg-cyan-300 shadow-[0_0_0_4px_rgba(14,165,233,0.22)]'
                         : armedPeripheralId
-                          ? 'border-cyan-300 bg-cyan-200/95 hover:scale-110 hover:bg-cyan-300'
-                          : 'border-slate-300 bg-white/90 hover:border-cyan-300 hover:bg-cyan-100'
+                          ? 'border-amber-200 bg-amber-300 hover:scale-110 hover:bg-amber-200'
+                          : 'border-[#8b0000] bg-[#d1d0b5] hover:scale-110 hover:border-cyan-400 hover:bg-cyan-100'
                   }`}
                   style={{
                     left: anchor.x - PAD_HOTSPOT_SIZE / 2,
@@ -2869,14 +3013,13 @@ function BoardTopView({
           {workbenchDevices.map((device, index) => {
             const frame = resolveCanvasPosition(device.id, index);
             const devicePackage = getDevicePackageForWorkbenchDevice(device);
-            const palette = getDevicePackagePalette(devicePackage);
             const isMultiEndpoint = device.members.length > 1;
 
             if (device.templateKind === 'ssd1306-oled') {
               return (
                 <div
                   key={device.id}
-                  className="absolute rounded-[24px] border border-sky-200 bg-sky-50/95 px-4 py-3 text-slate-900 shadow-lg transition"
+                  className="absolute px-2 py-2 text-slate-900 drop-shadow-[0_12px_18px_rgba(71,33,12,0.16)] transition"
                   style={{ left: frame.x, top: frame.y, width: PERIPHERAL_CARD_WIDTH + 42, minHeight: PERIPHERAL_CARD_HEIGHT + 64 }}
                 >
                   {device.members.map((member, endpointIndex) => {
@@ -2906,51 +3049,27 @@ function BoardTopView({
                     );
                   })}
 
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="rounded-full border border-sky-300 bg-sky-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-700">
-                      I2C display
-                    </div>
+                  <div className="flex justify-end">
                     <div
+                      title="Move device"
                       onPointerDown={(event) => beginPeripheralDrag(device.id, frame, event)}
                       onPointerMove={updatePeripheralDrag}
                       onPointerUp={endPeripheralDrag}
                       onPointerCancel={endPeripheralDrag}
-                      className={`rounded-full border border-current/25 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
-                        simulationRunning ? 'cursor-not-allowed opacity-50' : 'cursor-grab active:cursor-grabbing'
+                      className={`grid h-7 w-7 place-items-center rounded-full border border-slate-400/50 bg-white/75 shadow-sm ${
+                        simulationRunning ? 'cursor-not-allowed opacity-40' : 'cursor-grab active:cursor-grabbing'
                       }`}
                     >
-                      Drag
-                    </div>
-                  </div>
-
-                  <div className="mt-3 rounded-[18px] border border-slate-900 bg-slate-950 p-2 shadow-inner">
-                    <div className="grid gap-[1px]" style={{ gridTemplateColumns: 'repeat(16, minmax(0, 1fr))' }}>
-                      {Array.from({ length: 64 }).map((_, pixel) => (
-                        <div
-                          key={pixel}
-                          className={`h-1.5 rounded-[1px] ${(pixel + Math.floor(pixel / 16)) % 5 === 0 ? 'bg-sky-300' : 'bg-slate-800'}`}
-                        />
-                      ))}
+                      <span className="grid grid-cols-2 gap-0.5">
+                        {Array.from({ length: 4 }).map((_, dot) => (
+                          <span key={dot} className="h-1 w-1 rounded-full bg-slate-500" />
+                        ))}
+                      </span>
                     </div>
                   </div>
 
                   <div className="mt-3">
-                    <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">{palette.title}</div>
-                    <div className="mt-1 text-sm font-semibold">{device.label}</div>
-                    <div className="mt-1 text-xs text-slate-600">Address 0x3C, decoded by the I2C Transaction Broker.</div>
-                  </div>
-
-                  <div className="mt-3 grid gap-2">
-                    {device.members.map((member) => (
-                      <div key={member.id} className="rounded-2xl border border-sky-100 bg-white/80 px-3 py-2">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: member.accentColor ?? '#0284c7' }}>
-                          {member.endpointLabel}
-                        </div>
-                        <div className="mt-1 text-[11px] text-slate-600">
-                          {getPadDescription(member.padId, board, 'Wire this endpoint to a matching I2C pad')}
-                        </div>
-                      </div>
-                    ))}
+                    <ProteusOledGraphic live={simulationRunning} />
                   </div>
                 </div>
               );
@@ -2960,7 +3079,7 @@ function BoardTopView({
               return (
                 <div
                   key={device.id}
-                  className="absolute rounded-[24px] border border-emerald-200 bg-emerald-50/95 px-4 py-3 text-slate-900 shadow-lg transition"
+                  className="absolute px-2 py-2 text-slate-900 drop-shadow-[0_12px_18px_rgba(71,33,12,0.16)] transition"
                   style={{ left: frame.x, top: frame.y, width: PERIPHERAL_CARD_WIDTH + 42, minHeight: PERIPHERAL_CARD_HEIGHT + 48 }}
                 >
                   {device.members.map((member, endpointIndex) => {
@@ -2990,71 +3109,37 @@ function BoardTopView({
                     );
                   })}
 
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="rounded-full border border-emerald-300 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
-                      I2C sensor
-                    </div>
+                  <div className="flex justify-end">
                     <div
+                      title="Move device"
                       onPointerDown={(event) => beginPeripheralDrag(device.id, frame, event)}
                       onPointerMove={updatePeripheralDrag}
                       onPointerUp={endPeripheralDrag}
                       onPointerCancel={endPeripheralDrag}
-                      className={`rounded-full border border-current/25 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
-                        simulationRunning ? 'cursor-not-allowed opacity-50' : 'cursor-grab active:cursor-grabbing'
+                      className={`grid h-7 w-7 place-items-center rounded-full border border-slate-400/50 bg-white/75 shadow-sm ${
+                        simulationRunning ? 'cursor-not-allowed opacity-40' : 'cursor-grab active:cursor-grabbing'
                       }`}
                     >
-                      Drag
-                    </div>
-                  </div>
-
-                  <div className="mt-3 rounded-[18px] border border-emerald-300 bg-white p-3 shadow-inner">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="grid h-14 w-14 place-items-center rounded-2xl border border-emerald-200 bg-emerald-100 text-[11px] font-bold text-emerald-700">
-                        {devicePackage.renodeBackend.model.toUpperCase()}
-                      </div>
-                      <div className="flex-1">
-                        <div className="h-2 rounded-full bg-gradient-to-r from-emerald-300 via-teal-300 to-sky-300" />
-                        <div className="mt-2 grid grid-cols-2 gap-2 text-center text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                          {(devicePackage.kind === 'bmp180-sensor' ? ['Temp', 'Press'] : ['Temp', 'RH']).map((label) => (
-                            <div key={label} className="rounded-full bg-emerald-100 px-2 py-1">{label}</div>
-                          ))}
-                        </div>
-                      </div>
+                      <span className="grid grid-cols-2 gap-0.5">
+                        {Array.from({ length: 4 }).map((_, dot) => (
+                          <span key={dot} className="h-1 w-1 rounded-full bg-slate-500" />
+                        ))}
+                      </span>
                     </div>
                   </div>
 
                   <div className="mt-3">
-                    <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">{palette.title}</div>
-                    <div className="mt-1 text-sm font-semibold">{device.label}</div>
-                    <div className="mt-1 text-xs text-slate-600">
-                      Address 0x{(devicePackage.renodeBackend.address ?? devicePackage.protocol.defaultAddress ?? 0).toString(16).toUpperCase()},{' '}
-                      {devicePackage.renodeBackend.nativeRenodeType ?? 'Renode native sensor'}.
-                    </div>
-                  </div>
-
-                  <div className="mt-3 grid gap-2">
-                    {device.members.map((member) => (
-                      <div key={member.id} className="rounded-2xl border border-emerald-100 bg-white/80 px-3 py-2">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: member.accentColor ?? '#059669' }}>
-                          {member.endpointLabel}
-                        </div>
-                        <div className="mt-1 text-[11px] text-slate-600">
-                          {getPadDescription(member.padId, board, 'Wire this endpoint to a matching I2C pad')}
-                        </div>
-                      </div>
-                    ))}
+                    <ProteusSensorGraphic devicePackage={devicePackage} />
                   </div>
                 </div>
               );
             }
 
             if (isMultiEndpoint) {
-              const rgbGlow = getRgbDeviceGlow(device, ledStates);
-
               return (
                 <div
                   key={device.id}
-                  className="absolute rounded-[24px] border border-cyan-200 bg-cyan-50/95 px-4 py-3 text-slate-900 shadow-lg transition"
+                  className="absolute px-2 py-2 text-slate-900 drop-shadow-[0_12px_18px_rgba(71,33,12,0.16)] transition"
                   style={{ left: frame.x, top: frame.y, width: PERIPHERAL_CARD_WIDTH + 26, minHeight: PERIPHERAL_CARD_HEIGHT + 42 }}
                 >
                   {device.members.map((member, endpointIndex) => {
@@ -3084,85 +3169,45 @@ function BoardTopView({
                     );
                   })}
 
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="rounded-full border border-cyan-300 bg-cyan-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-700">
-                      Multi-endpoint
-                    </div>
+                  <div className="flex justify-end">
                     <div
+                      title="Move device"
                       onPointerDown={(event) => beginPeripheralDrag(device.id, frame, event)}
                       onPointerMove={updatePeripheralDrag}
                       onPointerUp={endPeripheralDrag}
                       onPointerCancel={endPeripheralDrag}
-                      className={`rounded-full border border-current/25 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
-                        simulationRunning ? 'cursor-not-allowed opacity-50' : 'cursor-grab active:cursor-grabbing'
+                      className={`grid h-7 w-7 place-items-center rounded-full border border-slate-400/50 bg-white/75 shadow-sm ${
+                        simulationRunning ? 'cursor-not-allowed opacity-40' : 'cursor-grab active:cursor-grabbing'
                       }`}
                     >
-                      Drag
+                      <span className="grid grid-cols-2 gap-0.5">
+                        {Array.from({ length: 4 }).map((_, dot) => (
+                          <span key={dot} className="h-1 w-1 rounded-full bg-slate-500" />
+                        ))}
+                      </span>
                     </div>
                   </div>
 
-                  <div className="mt-2 flex items-center gap-3">
-                    <div
-                      className="h-11 w-11 rounded-full border border-white/80"
-                      style={{
-                        background: rgbGlow.background,
-                        boxShadow: rgbGlow.glow,
-                      }}
-                    />
-                    <div>
-                      <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">{palette.title}</div>
-                      <div className="mt-1 text-sm font-semibold">{device.label}</div>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 space-y-2">
-                    {device.members.map((member) => {
-                      const active = Boolean(ledStates[member.id]);
-                      const controllerLabel = getPeripheralControllerLabel(member, wiring);
-
-                      return (
-                        <div key={member.id} className="rounded-2xl border border-slate-200 bg-white/80 px-3 py-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: member.accentColor ?? '#0f172a' }}>
-                              {member.endpointLabel}
-                            </div>
-                            <div className="text-[11px] text-slate-500">{active ? 'On' : controllerLabel}</div>
-                          </div>
-                          <div className="mt-1 text-[11px] text-slate-600">
-                            {getPadDescription(member.padId, board, 'Wire this channel to a GPIO pad')}
-                          </div>
-                        </div>
-                      );
-                    })}
+                  <div className="mt-3">
+                    <ProteusRgbLedGraphic device={device} ledStates={ledStates} />
                   </div>
                 </div>
               );
             }
 
             const peripheral = device.members[0];
-            const templateKind = getPeripheralTemplateKind(peripheral);
             const isButton = peripheral.kind === 'button';
             const active = isButton ? buttonStates[peripheral.id] : ledStates[peripheral.id];
-            const controllerLabel = peripheral.kind === 'led' ? getPeripheralControllerLabel(peripheral, wiring) : null;
             const endpointLabel = getPeripheralEndpointLabelText(peripheral);
             const endpointColor = peripheral.accentColor ?? getDevicePackageForPeripheral(peripheral).visual.accentColor ?? '#22d3ee';
-            const baseTone = isButton
-              ? active
-                ? 'border-fuchsia-300 bg-fuchsia-500/90 text-white'
-                : 'border-fuchsia-200 bg-fuchsia-50/95 text-slate-900'
-              : templateKind === 'buzzer'
-                ? active
-                  ? 'border-teal-200 bg-teal-300/95 text-slate-950'
-                  : 'border-teal-200 bg-teal-50/95 text-slate-900'
-                : active
-                  ? 'border-amber-200 bg-amber-300/95 text-slate-950'
-                  : 'border-amber-200 bg-amber-50/95 text-slate-900';
+            const padTitle = getPadDescription(peripheral.padId, board, `Wire ${endpointLabel} endpoint to a board pad`);
 
             return (
               <div
                 key={device.id}
-                className={`absolute rounded-[24px] border px-4 py-3 shadow-lg transition ${baseTone}`}
+                className="absolute px-2 py-2 text-slate-900 drop-shadow-[0_12px_18px_rgba(71,33,12,0.16)] transition"
                 style={{ left: frame.x, top: frame.y, width: PERIPHERAL_CARD_WIDTH, minHeight: PERIPHERAL_CARD_HEIGHT }}
+                title={padTitle}
               >
                 <div className="pointer-events-none absolute left-1/2 top-[-31px] -translate-x-1/2 rounded-full border border-cyan-200 bg-white px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-cyan-700 shadow-sm">
                   {endpointLabel}
@@ -3177,33 +3222,26 @@ function BoardTopView({
                   }`}
                   style={{ touchAction: 'none' }}
                   title={getPeripheralEndpointDragTitle(peripheral)}
-                >
-                  <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: endpointColor }} />
-                </button>
-                <div className="flex items-start justify-between gap-2">
-                  <div
-                    className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
-                      armedPeripheralId === peripheral.id ? 'border-cyan-300 bg-cyan-500/20 text-cyan-50' : 'border-current/25 bg-white/20 text-current/80'
-                    }`}
                   >
-                    {armedPeripheralId === peripheral.id ? `${endpointLabel} armed` : `${endpointLabel} terminal`}
-                  </div>
+                    <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: endpointColor }} />
+                  </button>
+                <div className="flex justify-end">
                   <div
+                    title="Move device"
                     onPointerDown={(event) => beginPeripheralDrag(device.id, frame, event)}
                     onPointerMove={updatePeripheralDrag}
                     onPointerUp={endPeripheralDrag}
                     onPointerCancel={endPeripheralDrag}
-                    className={`rounded-full border border-current/25 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
-                      simulationRunning ? 'cursor-not-allowed opacity-50' : 'cursor-grab active:cursor-grabbing'
+                    className={`grid h-7 w-7 place-items-center rounded-full border border-slate-400/50 bg-white/75 shadow-sm ${
+                      simulationRunning ? 'cursor-not-allowed opacity-40' : 'cursor-grab active:cursor-grabbing'
                     }`}
                   >
-                    Drag
+                    <span className="grid grid-cols-2 gap-0.5">
+                      {Array.from({ length: 4 }).map((_, dot) => (
+                        <span key={dot} className="h-1 w-1 rounded-full bg-slate-500" />
+                      ))}
+                    </span>
                   </div>
-                </div>
-                <div className="mt-2 text-[11px] uppercase tracking-[0.2em] text-current/70">{palette.title}</div>
-                <div className="mt-1 text-sm font-semibold">{device.label}</div>
-                <div className="mt-2 text-xs text-current/75">
-                  {getPadDescription(peripheral.padId, board, `Wire ${endpointLabel} endpoint to a board pad`)}
                 </div>
                 <div className="mt-3">
                   {isButton ? (
@@ -3214,26 +3252,22 @@ function BoardTopView({
                       onTouchStart={() => onPressPeripheral(peripheral.id, true)}
                       onTouchEnd={() => onPressPeripheral(peripheral.id, false)}
                       disabled={!simulationRunning || !peripheral.padId}
-                      className={`w-full rounded-2xl border px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] ${
-                        simulationRunning && peripheral.padId
-                          ? buttonStates[peripheral.id]
-                            ? 'border-fuchsia-300 bg-fuchsia-500 text-white'
-                            : 'border-current/25 bg-white/20 hover:bg-white/30'
-                          : 'cursor-not-allowed border-current/10 bg-black/5 text-current/45'
-                      }`}
+                      className={`block border-0 bg-transparent p-0 ${simulationRunning && peripheral.padId ? 'cursor-pointer' : 'cursor-not-allowed opacity-75'}`}
                     >
-                      {simulationRunning && peripheral.padId ? 'Hold To Drive' : 'Run To Press'}
+                      <ProteusSingleEndpointGraphic
+                        devicePackage={devicePackage}
+                        peripheral={peripheral}
+                        active={Boolean(active)}
+                        pressed={Boolean(active)}
+                      />
                     </button>
                   ) : (
-                    <div className="rounded-2xl border border-current/20 bg-white/20 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]">
-                      {templateKind === 'buzzer'
-                        ? active
-                          ? 'Buzzing'
-                          : controllerLabel ?? 'Idle'
-                        : active
-                          ? 'Glow On'
-                          : controllerLabel ?? 'Idle'}
-                    </div>
+                    <ProteusSingleEndpointGraphic
+                      devicePackage={devicePackage}
+                      peripheral={peripheral}
+                      active={Boolean(active)}
+                      pressed={false}
+                    />
                   )}
                 </div>
               </div>
@@ -3320,15 +3354,6 @@ function WiringWorkbench({
   const workbenchConnectors = useMemo(() => buildWorkbenchConnectorGroups(wiring, showFullPinout, board), [board, wiring, showFullPinout]);
   const boardPads = useMemo(() => getBoardPads(board), [board]);
   const hiddenPadCount = Math.max(0, board.connectors.selectablePads.length - workbenchConnectors.visibleSelectablePads);
-  const deviceCounts = useMemo(
-    () =>
-      DEVICE_PACKAGE_LIBRARY_ITEMS.map((libraryItem) => ({
-        packageKind: libraryItem.packageKind,
-        title: libraryItem.title,
-        count: countDevicePackageInstances(wiring, libraryItem.packageKind),
-      })),
-    [wiring]
-  );
   const visibleCanvasPads = useMemo(
     () =>
       workbenchConnectors.connectors
@@ -3341,12 +3366,7 @@ function WiringWorkbench({
     <div className="min-w-[1320px] space-y-6">
       <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
         <div className="rounded-[32px] border border-slate-800 bg-slate-950/70 p-5 shadow-xl">
-          <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Peripheral Library</div>
-          <div className="mt-3 text-sm text-slate-300">
-            Pull a part straight into the board canvas, then drag a named endpoint terminal to a hotspot just like Wokwi.
-          </div>
-
-          <div className="mt-5 grid gap-3">
+          <div className="grid gap-3">
             {DEVICE_PACKAGE_LIBRARY_ITEMS.map((libraryItem) => {
               const devicePackage = getDevicePackage(libraryItem.packageKind);
               return (
@@ -3361,125 +3381,40 @@ function WiringWorkbench({
               );
             })}
           </div>
-
-          <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-sm text-slate-300">
-            <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Armed Device</div>
-            <div className="mt-1 font-semibold text-white">
-              {armedPeripheralId
-                ? (() => {
-                    const peripheral = wiring.peripherals.find((candidate) => candidate.id === armedPeripheralId);
-                    return peripheral ? `${peripheral.label} ${getPeripheralEndpointLabelText(peripheral)}` : 'Unknown endpoint';
-                  })()
-                : 'None'}
-            </div>
-            <div className="mt-2 text-xs text-slate-400">
-              {armedPeripheralId
-                ? 'Drag the active endpoint terminal onto any matching hotspot, or click a free pad to complete the connection.'
-                : 'Start by dragging a library part into the workbench or clicking Add on a template card.'}
-            </div>
-          </div>
-
-          <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-sm text-slate-300">
-            <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Device Count</div>
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              {deviceCounts.map((item) => (
-                <div key={item.packageKind} className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
-                  <div className="truncate text-xs text-slate-500">{item.title}</div>
-                  <div className="mt-1 text-lg font-semibold text-white">{item.count}</div>
-                </div>
-              ))}
-              <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
-                <div className="text-xs text-slate-500">Free Pads</div>
-                <div className="mt-1 text-lg font-semibold text-white">
-                  {board.connectors.selectablePads.length - getConnectedPeripherals(wiring).length}
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
 
         <div className="rounded-[36px] border border-slate-800 bg-gradient-to-b from-slate-100 to-slate-200 p-5 text-slate-900 shadow-[0_24px_60px_rgba(15,23,42,0.55)]">
-          <div className="rounded-[28px] border border-slate-300 bg-white/85 p-4 shadow-inner">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <div className="text-xs uppercase tracking-[0.26em] text-slate-500">Board</div>
-                <div className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">{board.name}</div>
-                <div className="mt-2 max-w-3xl text-sm text-slate-600">{board.tagline}</div>
-              </div>
-              <div className="grid gap-2 text-right text-xs text-slate-500">
-                <div className="rounded-2xl border border-slate-300 bg-slate-100 px-3 py-1">Renode board file</div>
-                <div className="font-mono text-slate-700">{board.renodePlatformPath}</div>
-              </div>
-            </div>
-
-            <div className="mt-5 grid gap-3 md:grid-cols-4">
-              <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
-                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Selectable pads</div>
-                <div className="mt-1 text-2xl font-semibold text-slate-900">{board.connectors.selectablePads.length}</div>
-              </div>
-              <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
-                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Connected devices</div>
-                <div className="mt-1 text-2xl font-semibold text-slate-900">{getConnectedPeripherals(wiring).length}</div>
-              </div>
-              <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
-                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Compiler target</div>
-                <div className="mt-1 text-sm font-semibold text-slate-900">{board.compiler.gccArgs.join(' ')}</div>
-              </div>
-              <div className="rounded-2xl border border-slate-300 bg-white px-4 py-3">
-                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Board I/O</div>
-                <div className="mt-1 text-sm font-semibold text-slate-900">
-                  {showFullPinout ? 'Full connector map exposed' : 'Common pads first, full pinout on demand'}
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-              {board.visual.onboardFeatures.map((feature) => (
-                <div key={feature.label} className="rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">
-                  <span className="font-semibold text-slate-900">{feature.label}</span> · {feature.detail}
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-5">
-              <BoardTopView
-                board={board}
-                wiring={wiring}
-                ledStates={ledStates}
-                buttonStates={buttonStates}
-                peripheralPositions={peripheralPositions}
-                visiblePads={visibleCanvasPads}
-                armedPeripheralId={armedPeripheralId}
-                libraryDragKind={libraryDragKind}
-                workbenchDevices={workbenchDevices}
-                simulationRunning={simulationRunning}
-                onAssignPad={onAssign}
-                onAssignPadToPeripheral={onAssignPeripheralToPad}
-                onCreatePeripheral={onAddPeripheral}
-                onBeginWiring={onBeginWiring}
-                onDisconnectPeripheral={onDisconnectPeripheral}
-                onMovePeripheral={onMovePeripheral}
-                onPressPeripheral={onPressPeripheral}
-              />
-            </div>
-          </div>
+          <BoardTopView
+            board={board}
+            wiring={wiring}
+            ledStates={ledStates}
+            buttonStates={buttonStates}
+            peripheralPositions={peripheralPositions}
+            visiblePads={visibleCanvasPads}
+            armedPeripheralId={armedPeripheralId}
+            libraryDragKind={libraryDragKind}
+            workbenchDevices={workbenchDevices}
+            simulationRunning={simulationRunning}
+            onAssignPad={onAssign}
+            onAssignPadToPeripheral={onAssignPeripheralToPad}
+            onCreatePeripheral={onAddPeripheral}
+            onBeginWiring={onBeginWiring}
+            onDisconnectPeripheral={onDisconnectPeripheral}
+            onMovePeripheral={onMovePeripheral}
+            onPressPeripheral={onPressPeripheral}
+          />
         </div>
       </div>
 
       <div className="rounded-[32px] border border-slate-800 bg-slate-950/70 p-5 shadow-xl">
         <div className="flex items-center justify-between gap-4">
-          <div>
-            <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Peripheral Rack</div>
-            <div className="mt-2 text-sm text-slate-300">
-              Each card represents an external part. Add, wire, drive, and remove parts without touching the board definition itself.
-            </div>
-          </div>
-          <div className="text-xs uppercase tracking-[0.24em] text-slate-500">
-            {armedPeripheralId ? 'Drag the active endpoint to a hotspot or click a pad to finish' : 'Use any rack card for quick edits'}
+          <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Peripheral Rack</div>
+          <div className="rounded-full border border-slate-800 bg-slate-900/70 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+            {workbenchDevices.length} devices
           </div>
         </div>
 
-        <div className="mt-5 grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+        <div className="mt-4 grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
           {workbenchDevices.map((device) => {
             const devicePackage = getDevicePackageForWorkbenchDevice(device);
             if (device.members.length === 1) {
@@ -3708,15 +3643,10 @@ function WiringWorkbench({
         </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="grid gap-4">
         <div className="rounded-[32px] border border-slate-800 bg-slate-950/70 p-5 shadow-xl">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Pin Chooser</div>
-              <div className="mt-2 text-sm text-slate-300">
-                This view follows the Wokwi idea: only common teaching-friendly pads are shown by default, and any pad you already wired stays visible.
-              </div>
-            </div>
+          <div className="flex items-center justify-between gap-4">
+            <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Pin Chooser</div>
             <button
               onClick={onToggleFullPinout}
               className="inline-flex items-center gap-2 rounded-2xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs font-medium uppercase tracking-[0.18em] text-slate-200 transition hover:border-slate-500 hover:text-white"
@@ -3726,22 +3656,13 @@ function WiringWorkbench({
             </button>
           </div>
 
-          <div className="mt-4 grid gap-3 md:grid-cols-3">
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-              <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Visible pads</div>
-              <div className="mt-1 text-2xl font-semibold text-white">{workbenchConnectors.visibleSelectablePads}</div>
-            </div>
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-              <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Connected pads</div>
-              <div className="mt-1 text-2xl font-semibold text-white">{getConnectedPeripherals(wiring).length}</div>
-            </div>
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-              <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Hidden advanced pads</div>
-              <div className="mt-1 text-2xl font-semibold text-white">{showFullPinout ? 0 : hiddenPadCount}</div>
-            </div>
+          <div className="mt-4 flex flex-wrap gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+            <span className="rounded-full border border-slate-800 bg-slate-900/70 px-3 py-1">{workbenchConnectors.visibleSelectablePads} visible pads</span>
+            <span className="rounded-full border border-slate-800 bg-slate-900/70 px-3 py-1">{getConnectedPeripherals(wiring).length} connected</span>
+            <span className="rounded-full border border-slate-800 bg-slate-900/70 px-3 py-1">{showFullPinout ? 0 : hiddenPadCount} hidden</span>
           </div>
 
-          <div className="mt-5 grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
+          <div className="mt-4 grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
             {workbenchConnectors.connectors.map((connector) => (
               <div key={connector.id}>
                 {connector.layout === 'dual' ? (
@@ -3767,27 +3688,6 @@ function WiringWorkbench({
                 )}
               </div>
             ))}
-          </div>
-        </div>
-
-        <div className="rounded-[32px] border border-slate-800 bg-slate-950/70 p-5 shadow-xl">
-          <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Wokwi-like flow</div>
-          <div className="mt-4 grid gap-3 text-sm text-slate-300">
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-              1. Drag a <span className="font-semibold text-white">Button</span>, <span className="font-semibold text-white">LED</span>, <span className="font-semibold text-white">Buzzer</span>, <span className="font-semibold text-white">RGB LED</span>, <span className="font-semibold text-white">SSD1306 OLED</span>, or <span className="font-semibold text-white">SI7021 Sensor</span> template into the workbench.
-            </div>
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-              2. Pull a device <span className="font-semibold text-white">endpoint terminal</span> onto a cyan hotspot on the board.
-            </div>
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-              3. Use the default common pads first, or open the full pinout when you need more advanced GPIOs.
-            </div>
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-              4. Any pad you already connected stays visible, so the board never loses the context of your wiring.
-            </div>
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-              5. Optionally draw VCC/GND for readability, compile, start Renode, then press input cards to drive only the outputs you explicitly configured.
-            </div>
           </div>
         </div>
       </div>
