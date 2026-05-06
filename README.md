@@ -30,7 +30,7 @@ It keeps the visual workflow from the original prototype, but moves execution in
 - TCP JSONL Transaction Broker Bridge so native Renode plugins or external tools can inject bus transactions into Electron
 - SSD1306 OLED component template, I2C transaction decoding, and live framebuffer preview demo
 - Sensor Package schema v1 plus Sensor Package SDK v2 with reusable native Renode sensor metadata, monitor-control channels, firmware command metadata, and UI data-flow metadata
-- reusable Bus Sensor Runtime that discovers package-backed sensors from the runtime bus manifest, renders channel controls, applies native Renode values, and decodes bus transactions back into visual readings
+- Native Sensor Runtime v2 that discovers package-backed sensors from the Protocol Runtime Registry, exposes a per-device native readiness contract, renders channel controls, applies native Renode values, and decodes bus transactions back into visual readings when a codec exists
 - SI7021, BMP180, and catalog-generated BME280/HS3001/SHT45 sensor templates that can be emitted as native Renode peripherals on the selected I2C bus and controlled through Renode monitor properties
 - Renode C# Broker plugin skeleton for the next native in-process I2C/SPI integration stage
 - GPIO Monitor for live per-pin level, direction, source, and edge counts
@@ -39,7 +39,7 @@ It keeps the visual workflow from the original prototype, but moves execution in
 - auto-generated Renode `.repl` and `.resc`
 - local ARM GCC compilation
 - User Firmware Mode for importing an existing `.elf` while still reusing the visual wiring generated `.repl`, `.resc`, manifests, and runtime panels
-- F1/F4 User Firmware Validation Pack v1 with CubeMX pin-contract hints and `examples/firmware-cubemx/` onboarding notes
+- F1/F4 User Firmware Validation System v2 with CubeMX pin-contract hints, package-driven native I2C sensor contracts, generated HAL snippets, and `examples/firmware-cubemx/` onboarding notes
 - local Renode startup
 - bidirectional GPIO interaction through Renode's built-in `ExternalControlServer`
 - live log and GPIO state visualization
@@ -72,14 +72,14 @@ The current MVP has one validated Renode-backed board plus two Renode-verified e
 - SimulationClock snapshots attached to runtime `signal`, `uart`, `bus`, and `timeline` events
 - runtime bus manifest generation for board UART plus discovered I2C/SPI teaching pins and package-backed bus devices
 - Protocol Runtime Registry v1 derived from signal and bus manifests, so OLED displays, I2C sensors, UART terminal instruments, and GPIO endpoints are discovered through one protocol-oriented runtime layer
-- Bus Sensor Runtime state derived from Sensor Package SDK v2, so native sensor control panels are generated from reusable package channels instead of hard-coded SI7021 UI state
+- Native Sensor Runtime v2 state derived from Sensor Package SDK v2, Renode Native Peripheral Catalog channels, and Protocol Runtime Registry discovery, so native sensor control/readiness panels are generated from reusable package metadata instead of hard-coded SI7021 UI state
 - Bus Transaction Broker panel for UART, I2C, and future SPI protocol events
 - `local-wokwi-broker.json` runtime manifest written beside generated `.repl` / `.resc` files so native plugins can discover the broker endpoint
 - SSD1306 OLED preview fed by I2C transaction payloads
 - reusable Bus Sensor Runtime panel with configurable package channels, native Renode sensor control, generated I2C read/write timeline transactions, and native Renode sensor attachment in generated `.repl`
 - UART socket RX line buffering so firmware terminal output appears as complete lines in the transcript and Bus Transaction timeline
 - `Generated Demo` / `User Firmware` mode selector; the latter imports a user-provided `.elf` and loads it into Renode without forcing generated demo C code
-- CubeMX Contract panel in User Firmware Mode for the current F1/F4 wiring, covering Button -> LED, UART output, and SI7021 I2C read paths
+- User Firmware Validation v2 panel in User Firmware Mode for the current F1/F4 wiring, covering Button -> LED, UART output, SI7021 compatibility, and package-driven native I2C sensor read paths
 - live GPIO Monitor panel for pin state, last source, recent change time, and edge counts
 - live Logic Analyzer panel for input/output edge samples
 - local `arm-none-eabi-gcc` compilation with generated startup and linker files

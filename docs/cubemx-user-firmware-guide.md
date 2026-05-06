@@ -335,6 +335,35 @@ while (1)
 
 注意：这三个 catalog-generated 传感器当前不会自动生成完整 HAL 驱动代码，也不会伪造 UI 侧 I2C 读数。它们符合“MCU 固件通过 I2C 控制器访问 Renode 原生外设”的仿真逻辑；具体寄存器读写流程需要你在 User Firmware 中按器件数据手册实现。
 
+## User Firmware Validation v2 面板怎么看
+
+在 `User Firmware` 模式下，右侧会显示 `User Firmware Validation v2`。它不是编译器，也不会替你改 CubeMX 工程，而是把当前画布连线翻译成用户固件需要满足的合同：
+
+1. `Pin hints` 会列出当前连线对应的 CubeMX pin mode，例如 `GPIO_Input`、`GPIO_Output`、`USART2_TX/RX`、`I2C1_SCL/SDA`。
+2. `Native sensors` 会统计已经形成完整 I2C 合同的 Renode 原生传感器。
+3. 每个 native sensor contract 会显示 7-bit I2C 地址、Renode 类型、HAL handle、SCL/SDA 引脚和 codec 状态。
+4. `native controls` 表示 UI 滑块可以通过 Renode monitor property 写入仿真传感器。
+5. 如果显示 `uart validation` 或缺少 codec，说明 MCU 固件仍然可以通过 I2C 读 Renode 原生外设，但 UI 暂时不能直接把该器件 transaction 解码成漂亮读数，需要通过 UART 输出或后续补 codec 验证。
+
+当前 v2 验证覆盖：
+
+| 场景 | 验证含义 |
+| --- | --- |
+| `button-led` | 当前连线能推导出 GPIO 输入和 GPIO 输出的 CubeMX 配置 |
+| `uart-output` | 当前板型能推导出 USART2 TX/RX 配置 |
+| `si7021-i2c` | 保留 SI7021 兼容场景，方便学习最早的 sensor demo |
+| `native-sensor-i2c` | 任意 Renode 原生 I2C sensor package 连到 I2C1 后，都能生成地址、HAL handle、Renode native path 和运行时预期 |
+
+## Native Sensor Runtime v2 面板怎么看
+
+运行仿真后，Sensor Runtime 现在会按 package/runtime contract 展示，而不是只服务 SI7021：
+
+1. `Native ready` 表示有多少传感器已经有 Renode native path，用户 ELF 可以通过 MCU I2C 读。
+2. `Decoders` 表示有多少传感器已经有 UI 侧 protocol codec，可以把 I2C transaction 解码成温度、湿度、压力等读数。
+3. `Apply Channels To Native Renode Sensor` 会把滑块值写到 Renode 原生外设的 monitor property。
+4. `Read ...` 是 UI 侧 demo/timeline 辅助读，不等同于用户 ELF 真实读传感器；真实仿真仍以 MCU 固件 I2C 访问为准。
+5. `Native applies` 和 `Transactions` 用来帮助你判断“写入 Renode 原生传感器”和“总线 transaction 解码”是不是都在工作。
+
 ## 真实仿真逻辑注意点
 
 这些建议不是为了单纯满足 Button/LED demo，而是更符合正常单片机仿真和真实固件逻辑：

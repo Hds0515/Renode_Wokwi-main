@@ -59,6 +59,7 @@ const {
   createBusSensorReadTransactions,
   createBusSensorRuntimeState,
   getBusSensorRuntimeDevices,
+  summarizeNativeSensorRuntime,
   updateBusSensorChannelConfiguration,
 } = require('../src/lib/bus-sensor-runtime.ts');
 const {
@@ -412,7 +413,7 @@ function validateProjectExample(example) {
       );
     });
   assert(signalState.schemaVersion === 2, `${example.id} signal broker state should use schema v2.`);
-  assert(busSensorState.schemaVersion === BUS_SENSOR_RUNTIME_SCHEMA_VERSION, `${example.id} bus sensor runtime should use schema v1.`);
+  assert(busSensorState.schemaVersion === BUS_SENSOR_RUNTIME_SCHEMA_VERSION, `${example.id} bus sensor runtime should use schema v2.`);
   assert(SIGNAL_BROKER_SCHEMA_VERSION === 2, `${example.id} should compile against Signal Broker schema v2.`);
   assert(RUNTIME_TIMELINE_SCHEMA_VERSION === 1, `${example.id} should compile against runtime timeline schema v1.`);
   assert(signalManifest.length === signalDefinitions.length, `${example.id} runtime signal manifest size mismatch.`);
@@ -526,7 +527,14 @@ function validateProjectExample(example) {
 
     const runtimeSensorDevice = busSensorDevices.find((device) => device.componentId === sensor.componentId);
     assert(runtimeSensorDevice, `${example.id} SI7021 should be discoverable by Bus Sensor Runtime.`);
+    assert(runtimeSensorDevice.nativeRuntime.schemaVersion === BUS_SENSOR_RUNTIME_SCHEMA_VERSION, `${example.id} SI7021 Native Sensor Runtime should use schema v2.`);
+    assert(runtimeSensorDevice.nativeRuntime.readiness === 'ready', `${example.id} SI7021 Native Sensor Runtime should be fully ready.`);
+    assert(runtimeSensorDevice.nativeRuntime.canApplyNativeControls, `${example.id} SI7021 should allow native sensor controls.`);
+    assert(runtimeSensorDevice.nativeRuntime.canReadThroughUserFirmware, `${example.id} SI7021 should be readable by user firmware over I2C.`);
+    assert(runtimeSensorDevice.nativeRuntime.canDecodeTransactions, `${example.id} SI7021 should decode I2C transactions through a codec.`);
     assert(runtimeSensorDevice.channels.some((channel) => channel.id === 'temperature'), `${example.id} Bus Sensor Runtime should expose temperature channel.`);
+    const nativeSensorSummary = summarizeNativeSensorRuntime(busSensorState, busSensorDevices);
+    assert(nativeSensorSummary.nativeReadyCount >= 1, `${example.id} Native Sensor Runtime summary should count SI7021 as native-ready.`);
     const configuredSensorState = updateBusSensorChannelConfiguration(
       busSensorState,
       runtimeSensorDevice.id,
@@ -669,6 +677,11 @@ function validateBmp180NativePackageFixture() {
   const busSensorDevices = getBusSensorRuntimeDevices(busManifest);
   const runtimeSensorDevice = busSensorDevices.find((device) => device.model === 'bmp180');
   assert(runtimeSensorDevice, 'BMP180 fixture should be discoverable by Bus Sensor Runtime.');
+  assert(runtimeSensorDevice.nativeRuntime.schemaVersion === BUS_SENSOR_RUNTIME_SCHEMA_VERSION, 'BMP180 Native Sensor Runtime should use schema v2.');
+  assert(runtimeSensorDevice.nativeRuntime.readiness === 'ready', 'BMP180 Native Sensor Runtime should be fully ready.');
+  assert(runtimeSensorDevice.nativeRuntime.canApplyNativeControls, 'BMP180 should allow native sensor controls.');
+  assert(runtimeSensorDevice.nativeRuntime.canReadThroughUserFirmware, 'BMP180 should be readable by user firmware over I2C.');
+  assert(runtimeSensorDevice.nativeRuntime.canDecodeTransactions, 'BMP180 should decode I2C transactions through a reusable codec.');
   assert(runtimeSensorDevice.channels.some((channel) => channel.id === 'pressure'), 'BMP180 fixture should expose the pressure channel.');
 
   const initialSensorState = createBusSensorRuntimeState(busSensorDevices);
@@ -768,6 +781,11 @@ function validateGeneratedNativePeripheralFixture(kind, catalogId) {
   const busSensorDevices = getBusSensorRuntimeDevices(busManifest);
   const runtimeSensorDevice = busSensorDevices.find((device) => device.model === catalogId);
   assert(runtimeSensorDevice, `${kind} should be discoverable by the generic Bus Sensor Runtime.`);
+  assert(runtimeSensorDevice.nativeRuntime.schemaVersion === BUS_SENSOR_RUNTIME_SCHEMA_VERSION, `${kind} Native Sensor Runtime should use schema v2.`);
+  assert(runtimeSensorDevice.nativeRuntime.readiness === 'needs-codec', `${kind} Native Sensor Runtime should flag the missing protocol codec explicitly.`);
+  assert(runtimeSensorDevice.nativeRuntime.canApplyNativeControls, `${kind} should allow native property controls through the generic runtime.`);
+  assert(runtimeSensorDevice.nativeRuntime.canReadThroughUserFirmware, `${kind} should be readable by user firmware over native MCU I2C.`);
+  assert(!runtimeSensorDevice.nativeRuntime.canDecodeTransactions, `${kind} should not claim UI transaction decoding before a codec exists.`);
   assert(runtimeSensorDevice.nativeCatalogId === catalogId, `${kind} runtime device should preserve the native catalog id.`);
   assert(runtimeSensorDevice.channels.length === catalog.control.channels.length, `${kind} runtime device should expose catalog channels.`);
 

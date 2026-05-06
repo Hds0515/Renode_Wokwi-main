@@ -134,6 +134,7 @@ import {
   createNativeSensorControlRequest,
   formatSensorChannelValue,
   getBusSensorRuntimeDevicesFromProtocolRegistry,
+  summarizeNativeSensorRuntime,
   syncBusSensorRuntimeDevices,
   updateBusSensorChannelConfiguration,
 } from './lib/bus-sensor-runtime';
@@ -813,14 +814,19 @@ function StatusPill({ active, label }: { active: boolean; label: string }) {
 }
 
 function CubeMxValidationPanel({ pack }: { pack: CubeMxValidationPack }) {
+  const readyNativeContracts = pack.nativeSensorContracts.filter((contract) => contract.ready);
+  const snippets = pack.snippets.filter((snippet) =>
+    snippet.id === 'button-led' || snippet.id === 'uart-output' || (snippet.id === 'native-sensor-i2c' && pack.nativeSensorContracts.length > 0)
+  );
+
   return (
     <div className="mt-3 rounded-2xl border border-sky-500/20 bg-sky-500/5 p-3">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-xs uppercase tracking-[0.24em] text-sky-200/80">CubeMX Contract</div>
+          <div className="text-xs uppercase tracking-[0.24em] text-sky-200/80">User Firmware Validation v{pack.schemaVersion}</div>
           <div className="mt-1 text-xs leading-5 text-slate-300">
             Target <span className="font-semibold text-white">{pack.cubeMxTarget}</span> with{' '}
-            <span className="font-semibold text-white">{pack.toolchain}</span>. Use the same pins in CubeMX that are wired on this canvas.
+            <span className="font-semibold text-white">{pack.toolchain}</span>. Keep CubeMX pins, HAL handles, and I2C addresses aligned with the current wiring.
           </div>
         </div>
         <span
@@ -832,6 +838,21 @@ function CubeMxValidationPanel({ pack }: { pack: CubeMxValidationPack }) {
         >
           {pack.family}
         </span>
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-3">
+        <div className="rounded-2xl border border-sky-500/20 bg-black/20 px-3 py-2 text-xs text-slate-300">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-sky-200/60">Pin hints</div>
+          <div className="mt-1 text-lg font-semibold text-white">{pack.pinHints.length}</div>
+        </div>
+        <div className="rounded-2xl border border-sky-500/20 bg-black/20 px-3 py-2 text-xs text-slate-300">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-sky-200/60">Native sensors</div>
+          <div className="mt-1 text-lg font-semibold text-white">{readyNativeContracts.length}/{pack.nativeSensorContracts.length}</div>
+        </div>
+        <div className="rounded-2xl border border-sky-500/20 bg-black/20 px-3 py-2 text-xs text-slate-300">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-sky-200/60">CubeMX target</div>
+          <div className="mt-1 truncate font-semibold text-white">{pack.cubeMxProjectTarget}</div>
+        </div>
       </div>
 
       <div className="mt-3 grid gap-2">
@@ -854,7 +875,7 @@ function CubeMxValidationPanel({ pack }: { pack: CubeMxValidationPack }) {
       <div className="mt-3 grid gap-2">
         {pack.pinHints.length === 0 ? (
           <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-400">
-            Wire a Button, LED, SI7021, or use the board UART to see exact CubeMX pin-mode hints here.
+            Wire GPIO, UART, or any native I2C sensor package to see exact CubeMX pin-mode hints here.
           </div>
         ) : (
           pack.pinHints.slice(0, 10).map((hint) => (
@@ -873,17 +894,53 @@ function CubeMxValidationPanel({ pack }: { pack: CubeMxValidationPack }) {
         )}
       </div>
 
+      {pack.nativeSensorContracts.length > 0 ? (
+        <div className="mt-3 grid gap-2">
+          {pack.nativeSensorContracts.map((contract) => (
+            <div
+              key={contract.id}
+              className={`rounded-2xl border px-3 py-2 text-xs ${
+                contract.ready ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-100' : 'border-amber-500/25 bg-amber-500/10 text-amber-100'
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-white">{contract.devicePackageTitle}</span>
+                <span className="rounded-full bg-black/25 px-2 py-0.5 font-mono text-[10px]">
+                  {contract.busName} 0x{contract.address.toString(16).toUpperCase()}
+                </span>
+              </div>
+              <div className="mt-1 text-slate-300">
+                {contract.scl?.mcuPinId ?? 'SCL not wired'} / {contract.sda?.mcuPinId ?? 'SDA not wired'} · {contract.nativeRenodeType ?? contract.renodeBackendType}
+              </div>
+              <div className="mt-1 text-slate-400">{contract.expectedResult}</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <span className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[10px] uppercase tracking-[0.16em]">
+                  {contract.canApplyNativeControls ? 'native controls' : 'no native controls'}
+                </span>
+                <span className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[10px] uppercase tracking-[0.16em]">
+                  {contract.canDecodeTransactions ? contract.transactionCodec : 'uart validation'}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       {pack.warnings.length > 0 ? (
         <div className="mt-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
           {pack.warnings[0]}
         </div>
       ) : null}
 
-      <div className="mt-3 rounded-2xl border border-slate-800 bg-slate-950/70 p-3">
-        <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Minimal HAL loop</div>
-        <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-5 text-slate-300">
-          {pack.snippets.find((snippet) => snippet.id === 'button-led')?.source}
-        </pre>
+      <div className="mt-3 grid gap-2">
+        {snippets.map((snippet) => (
+          <div key={snippet.id} className="rounded-2xl border border-slate-800 bg-slate-950/70 p-3">
+            <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">{snippet.title}</div>
+            <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-5 text-slate-300">
+              {snippet.source}
+            </pre>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -1412,12 +1469,33 @@ function BusSensorRuntimePanel({
     return null;
   }
 
+  const summary = summarizeNativeSensorRuntime(state, devices);
+
   return (
     <div className="mt-4 rounded-3xl border border-emerald-900/70 bg-emerald-950/30 p-3">
       <div>
-        <div className="text-xs uppercase tracking-[0.24em] text-emerald-300/70">Bus Sensor Runtime</div>
+        <div className="text-xs uppercase tracking-[0.24em] text-emerald-300/70">Native Sensor Runtime v{summary.schemaVersion}</div>
         <div className="mt-1 text-sm text-emerald-50/80">
-          Reusable sensor packages expose channels, Renode native controls, firmware reads, and Bus Timeline transactions.
+          Package-driven sensors expose Renode native controls, user-firmware I2C reads, and optional transaction decoders through one runtime contract.
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-4">
+        <div className="rounded-2xl border border-emerald-500/20 bg-black/20 px-3 py-2 text-xs">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-emerald-300/60">Devices</div>
+          <div className="mt-1 text-lg font-semibold text-white">{summary.deviceCount}</div>
+        </div>
+        <div className="rounded-2xl border border-emerald-500/20 bg-black/20 px-3 py-2 text-xs">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-emerald-300/60">Native ready</div>
+          <div className="mt-1 text-lg font-semibold text-white">{summary.nativeReadyCount}</div>
+        </div>
+        <div className="rounded-2xl border border-emerald-500/20 bg-black/20 px-3 py-2 text-xs">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-emerald-300/60">Decoders</div>
+          <div className="mt-1 text-lg font-semibold text-white">{summary.decodableCount}</div>
+        </div>
+        <div className="rounded-2xl border border-emerald-500/20 bg-black/20 px-3 py-2 text-xs">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-emerald-300/60">Applies / reads</div>
+          <div className="mt-1 text-lg font-semibold text-white">{summary.appliedCount} / {summary.transactionCount}</div>
         </div>
       </div>
 
@@ -1428,7 +1506,7 @@ function BusSensorRuntimePanel({
             return null;
           }
           const canRead = simulationRunning;
-          const canApplyNative = canRead && Boolean(device.nativeRenodePath);
+          const canApplyNative = canRead && device.nativeRuntime.canApplyNativeControls;
 
           return (
             <div key={device.id} className="rounded-[24px] border border-emerald-500/25 bg-black/20 p-3">
@@ -1441,12 +1519,30 @@ function BusSensorRuntimePanel({
                   {device.nativeRenodePath ? (
                     <div className="mt-1 font-mono text-[10px] text-emerald-200/70">{device.nativeRenodePath}</div>
                   ) : null}
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <span className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] text-emerald-100/80">
+                      {device.nativeRuntime.attachment}
+                    </span>
+                    <span className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] text-emerald-100/80">
+                      {device.nativeRuntime.readiness}
+                    </span>
+                    <span className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] text-emerald-100/80">
+                      {device.nativeRuntime.canDecodeTransactions ? device.transactionCodec : 'uart/user firmware'}
+                    </span>
+                  </div>
                 </div>
                 <div className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
                   canRead ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-100' : 'border-slate-700 bg-slate-950 text-slate-500'
                 }`}>
                   {canRead ? 'ready' : 'waiting'}
                 </div>
+              </div>
+
+              <div className="mt-3 rounded-2xl border border-emerald-500/15 bg-black/20 px-3 py-2 text-xs text-emerald-50/75">
+                <div>{device.nativeRuntime.expectedResult}</div>
+                {device.nativeRuntime.reasons.length > 0 ? (
+                  <div className="mt-1 text-emerald-100/50">{device.nativeRuntime.reasons[0]}</div>
+                ) : null}
               </div>
 
               <div className="mt-3 grid gap-3">
@@ -1500,6 +1596,10 @@ function BusSensorRuntimePanel({
                 <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
                   <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Transactions</div>
                   <div className="mt-1 font-semibold text-white">{deviceState.transactionCount}</div>
+                </div>
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Native applies</div>
+                  <div className="mt-1 font-semibold text-white">{deviceState.nativeApplyCount}</div>
                 </div>
               </div>
             </div>

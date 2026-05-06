@@ -57,6 +57,19 @@ const {
   getDevicePackagePinForPeripheral,
   getDevicePackageRequirementSummary,
 } = require('../src/lib/device-package-native-runtime.ts');
+const { BOARD_SCHEMAS } = require('../src/lib/boards.ts');
+const { createPeripheralTemplate } = require('../src/lib/firmware.ts');
+const { createNetlistFromWiring } = require('../src/lib/netlist.ts');
+const { createRuntimeBusManifest } = require('../src/lib/runtime-timeline.ts');
+const { createProtocolRuntimeRegistry } = require('../src/lib/protocol-runtime-registry.ts');
+const {
+  BUS_SENSOR_RUNTIME_SCHEMA_VERSION,
+  applyNativeSensorControlValues,
+  createBusSensorReadTransactions,
+  createBusSensorRuntimeState,
+  getBusSensorRuntimeDevicesFromProtocolRegistry,
+  summarizeNativeSensorRuntime,
+} = require('../src/lib/bus-sensor-runtime.ts');
 
 function assert(condition, message) {
   if (!condition) {
@@ -168,6 +181,72 @@ function validateDevicePackageNativeRuntime() {
   });
 }
 
+function findPadIdByMcuPin(board, mcuPinId) {
+  const pad = board.connectors.all.flatMap((connector) => connector.pins).find((candidate) => candidate.mcuPinId === mcuPinId);
+  assert(pad, `${board.name} should expose ${mcuPinId} for Native Sensor Runtime validation.`);
+  return pad.id;
+}
+
+function createI2cSensorFixture(kind) {
+  const board = BOARD_SCHEMAS.find((candidate) => candidate.id === 'stm32f103-gpio-lab');
+  assert(board, 'Native Sensor Runtime v2 fixture needs the STM32F103 GPIO Lab board.');
+  const i2c = board.runtime.i2c?.[0];
+  assert(i2c, `${board.name} should expose I2C runtime metadata.`);
+  const peripherals = createPeripheralTemplate(kind, 1).map((peripheral) => ({
+    ...peripheral,
+    padId: peripheral.endpointId === 'scl' ? findPadIdByMcuPin(board, i2c.sclPinId) : findPadIdByMcuPin(board, i2c.sdaPinId),
+  }));
+  return {
+    board,
+    netlist: createNetlistFromWiring({ peripherals }, board),
+  };
+}
+
+function validateNativeSensorRuntimeV2() {
+  assert(BUS_SENSOR_RUNTIME_SCHEMA_VERSION === 2, 'Native Sensor Runtime should use Bus Sensor Runtime schema v2.');
+
+  [
+    { kind: 'si7021-sensor', expectedReadiness: 'ready', expectedDecoder: true },
+    { kind: 'bmp180-sensor', expectedReadiness: 'ready', expectedDecoder: true },
+    { kind: 'bme280-sensor', expectedReadiness: 'needs-codec', expectedDecoder: false },
+  ].forEach((fixture) => {
+    const { board, netlist } = createI2cSensorFixture(fixture.kind);
+    const busManifest = createRuntimeBusManifest(board, netlist);
+    const protocolRuntimeRegistry = createProtocolRuntimeRegistry({ board, busManifest });
+    const devices = getBusSensorRuntimeDevicesFromProtocolRegistry(protocolRuntimeRegistry);
+    const runtimeDevice = devices.find((device) => device.devicePackageKind === fixture.kind);
+    assert(runtimeDevice, `${fixture.kind} should be discoverable through Protocol Runtime Registry -> Native Sensor Runtime.`);
+    assert(runtimeDevice.nativeRuntime.schemaVersion === BUS_SENSOR_RUNTIME_SCHEMA_VERSION, `${fixture.kind} native runtime contract schema mismatch.`);
+    assert(runtimeDevice.nativeRuntime.attachment === 'renode-native', `${fixture.kind} should attach to a native Renode peripheral path.`);
+    assert(runtimeDevice.nativeRuntime.readiness === fixture.expectedReadiness, `${fixture.kind} native runtime readiness mismatch.`);
+    assert(runtimeDevice.nativeRuntime.canApplyNativeControls, `${fixture.kind} should allow UI channel values to be applied to Renode native properties.`);
+    assert(runtimeDevice.nativeRuntime.canReadThroughUserFirmware, `${fixture.kind} should be readable by user firmware through MCU I2C.`);
+    assert(runtimeDevice.nativeRuntime.canDecodeTransactions === fixture.expectedDecoder, `${fixture.kind} decoder readiness mismatch.`);
+
+    const initialState = createBusSensorRuntimeState(devices);
+    const summary = summarizeNativeSensorRuntime(initialState, devices);
+    assert(summary.schemaVersion === BUS_SENSOR_RUNTIME_SCHEMA_VERSION, `${fixture.kind} summary schema mismatch.`);
+    assert(summary.nativeReadyCount >= 1, `${fixture.kind} summary should count the native firmware read path.`);
+
+    const state = initialState.devices[runtimeDevice.id];
+    const firstChannel = Object.values(state.channels)[0];
+    const applied = applyNativeSensorControlValues(initialState, runtimeDevice.nativeRenodePath, {
+      [firstChannel.id]: firstChannel.configuredValue,
+    });
+    assert(applied.devices[runtimeDevice.id].nativeApplyCount === 1, `${fixture.kind} should track native apply count.`);
+    assert(
+      typeof applied.devices[runtimeDevice.id].lastNativeApplyValues[firstChannel.id] === 'number',
+      `${fixture.kind} should keep the last applied native channel value.`
+    );
+
+    const transactions = createBusSensorReadTransactions(runtimeDevice, state, firstChannel.id);
+    assert(
+      fixture.expectedDecoder ? transactions.length > 0 : transactions.length === 0,
+      `${fixture.kind} transaction creation should reflect codec availability.`
+    );
+  });
+}
+
 function main() {
   const report = validateDevicePackageCatalogConformance({
     catalog: DEVICE_PACKAGE_CATALOG,
@@ -186,6 +265,7 @@ function main() {
   validateRenodeNativePeripheralCatalog();
   validateSensorProtocolCodecRegistry();
   validateDevicePackageNativeRuntime();
+  validateNativeSensorRuntimeV2();
   console.log(
     `Device Package conformance completed: ${report.packageCount} package(s), ${SENSOR_PROTOCOL_CODECS.length} sensor protocol codec(s), ${report.warningCount} warning(s).`
   );

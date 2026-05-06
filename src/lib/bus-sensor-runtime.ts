@@ -23,7 +23,22 @@ import {
 } from './sensor-protocol-codecs';
 import { findRenodeNativePeripheralCatalogEntry } from './renode-native-peripheral-catalog';
 
-export const BUS_SENSOR_RUNTIME_SCHEMA_VERSION = 1;
+export const BUS_SENSOR_RUNTIME_SCHEMA_VERSION = 2;
+
+export type NativeSensorRuntimeAttachment = 'renode-native' | 'broker-only' | 'visual-only';
+export type NativeSensorRuntimeReadiness = 'ready' | 'needs-native-path' | 'needs-codec' | 'not-native';
+
+export type NativeSensorRuntimeContract = {
+  schemaVersion: typeof BUS_SENSOR_RUNTIME_SCHEMA_VERSION;
+  attachment: NativeSensorRuntimeAttachment;
+  readiness: NativeSensorRuntimeReadiness;
+  canApplyNativeControls: boolean;
+  canDecodeTransactions: boolean;
+  canReadThroughUserFirmware: boolean;
+  expectedRenodePath: string | null;
+  expectedResult: string;
+  reasons: string[];
+};
 
 export type RuntimeBusSensorDevice = {
   id: string;
@@ -47,6 +62,7 @@ export type RuntimeBusSensorDevice = {
   package: RuntimeBusSensorPackageMetadata;
   channels: readonly RuntimeBusSensorChannelDefinition[];
   transactionCodec: SensorTransactionCodec | null;
+  nativeRuntime: NativeSensorRuntimeContract;
 };
 
 export type RuntimeBusSensorChannelDefinition = SensorPackageSdkChannel | {
@@ -95,8 +111,13 @@ export type BusSensorRuntimeDeviceState = {
   busLabel: string;
   address: number;
   nativeRenodePath: string | null;
+  nativeRuntime: NativeSensorRuntimeContract;
   channels: Record<string, BusSensorRuntimeChannelState>;
   transactionCount: number;
+  nativeApplyCount: number;
+  lastNativeApplyHostTimeMs: number | null;
+  lastNativeApplyValues: Record<string, number>;
+  lastBusReadHostTimeMs: number | null;
   updatedAtVirtualTimeNs: number | null;
   protocolState: unknown | null;
 };
@@ -115,9 +136,13 @@ export type NativeSensorControlChannelRequest = {
 };
 
 export type NativeSensorControlRequestPayload = {
+  schemaVersion: typeof BUS_SENSOR_RUNTIME_SCHEMA_VERSION;
+  deviceId: string;
+  componentId: string;
   path: string;
   sensorPackage?: SensorPackageKind;
   nativeCatalogId?: string | null;
+  runtimeContract: NativeSensorRuntimeContract;
   channels: NativeSensorControlChannelRequest[];
 };
 
@@ -162,6 +187,33 @@ function createRuntimeSensorDevice(device: ProtocolRuntimeDevice): RuntimeBusSen
       transactionCodec: null,
     },
   };
+  const transactionCodec = packageMetadata.busRuntime?.transactionCodec ?? null;
+  const hasCodec = Boolean(transactionCodec && findSensorProtocolCodec(transactionCodec));
+  const hasNativePath = Boolean(device.nativeRenodePath);
+  const canApplyNativeControls = Boolean(hasNativePath && (device.nativeControlTransport || controlChannels.length > 0));
+  const attachment: NativeSensorRuntimeAttachment = hasNativePath
+    ? 'renode-native'
+    : device.nativeControlTransport || device.nativeRenodeName
+      ? 'broker-only'
+      : 'visual-only';
+  const reasons = [
+    hasNativePath ? `Renode path ${device.nativeRenodePath} is available.` : 'No native Renode monitor path was generated for this sensor.',
+    canApplyNativeControls ? 'Native monitor property controls can be applied while simulation is running.' : 'Native monitor property controls are not available for this sensor.',
+    hasCodec ? `Protocol codec ${transactionCodec} can decode I2C reads.` : 'No protocol codec is registered yet; rely on UART/user firmware output for read validation.',
+  ];
+  const nativeRuntime: NativeSensorRuntimeContract = {
+    schemaVersion: BUS_SENSOR_RUNTIME_SCHEMA_VERSION,
+    attachment,
+    readiness: hasNativePath ? (hasCodec ? 'ready' : 'needs-codec') : device.nativeControlTransport ? 'needs-native-path' : 'not-native',
+    canApplyNativeControls,
+    canDecodeTransactions: hasCodec,
+    canReadThroughUserFirmware: hasNativePath,
+    expectedRenodePath: device.nativeRenodePath ?? null,
+    expectedResult: hasCodec
+      ? 'User firmware can read the native sensor through MCU I2C and the UI can decode matching bus transactions.'
+      : 'User firmware can read the native sensor through MCU I2C; add a protocol codec for UI-side transaction decoding.',
+    reasons,
+  };
 
   return [
     {
@@ -185,7 +237,8 @@ function createRuntimeSensorDevice(device: ProtocolRuntimeDevice): RuntimeBusSen
       busLabel: device.busLabel ?? 'I2C Visual Bus',
       package: packageMetadata,
       channels,
-      transactionCodec: packageMetadata.busRuntime?.transactionCodec ?? null,
+      transactionCodec,
+      nativeRuntime,
     },
   ];
 }
@@ -232,8 +285,13 @@ function createDeviceState(device: RuntimeBusSensorDevice): BusSensorRuntimeDevi
     busLabel: device.busLabel,
     address: device.address ?? device.package.protocol.defaultAddress,
     nativeRenodePath: device.nativeRenodePath ?? null,
+    nativeRuntime: device.nativeRuntime,
     channels: Object.fromEntries(device.channels.map((channel) => [channel.id, createChannelState(channel)])),
     transactionCount: 0,
+    nativeApplyCount: 0,
+    lastNativeApplyHostTimeMs: null,
+    lastNativeApplyValues: {},
+    lastBusReadHostTimeMs: null,
     updatedAtVirtualTimeNs: null,
     protocolState: createProtocolState(device),
   };
@@ -298,6 +356,10 @@ export function syncBusSensorRuntimeDevices(
           ...fresh,
           channels,
           transactionCount: current.transactionCount,
+          nativeApplyCount: current.nativeApplyCount,
+          lastNativeApplyHostTimeMs: current.lastNativeApplyHostTimeMs,
+          lastNativeApplyValues: current.lastNativeApplyValues,
+          lastBusReadHostTimeMs: current.lastBusReadHostTimeMs,
           updatedAtVirtualTimeNs: current.updatedAtVirtualTimeNs,
           protocolState: current.protocolState ?? fresh.protocolState,
         },
@@ -353,9 +415,13 @@ export function createNativeSensorControlRequest(
   }
 
   return {
+    schemaVersion: BUS_SENSOR_RUNTIME_SCHEMA_VERSION,
+    deviceId: device.id,
+    componentId: device.componentId,
     path: device.nativeRenodePath,
     sensorPackage: device.sensorPackage,
     nativeCatalogId: device.nativeCatalogId,
+    runtimeContract: device.nativeRuntime,
     channels: Object.values(state.channels).map((channel) => ({
       id: channel.id,
       renodeProperty: channel.renodeProperty,
@@ -382,16 +448,19 @@ export function applyNativeSensorControlValues(
 
   const [deviceId, device] = entry;
   const channels = { ...device.channels };
+  const appliedValues: Record<string, number> = {};
   Object.entries(values).forEach(([channelId, value]) => {
     const channel = channels[channelId];
     if (!channel || value === null || typeof value === 'undefined') {
       return;
     }
+    const nextValue = clamp(value, channel.minimum, channel.maximum);
     channels[channelId] = {
       ...channel,
-      configuredValue: clamp(value, channel.minimum, channel.maximum),
-      lastReadValue: clamp(value, channel.minimum, channel.maximum),
+      configuredValue: nextValue,
+      lastReadValue: nextValue,
     };
+    appliedValues[channelId] = nextValue;
   });
 
   return {
@@ -401,6 +470,12 @@ export function applyNativeSensorControlValues(
       [deviceId]: {
         ...device,
         channels,
+        nativeApplyCount: device.nativeApplyCount + 1,
+        lastNativeApplyHostTimeMs: Date.now(),
+        lastNativeApplyValues: {
+          ...device.lastNativeApplyValues,
+          ...appliedValues,
+        },
       },
     },
   };
@@ -437,6 +512,7 @@ function applyCodecRuntimeEvent(
     channels,
     protocolState: result.state,
     transactionCount: result.transactionCount,
+    lastBusReadHostTimeMs: Object.keys(result.readings).length > 0 ? Date.now() : device.lastBusReadHostTimeMs,
     updatedAtVirtualTimeNs: result.updatedAtVirtualTimeNs,
   };
 }
@@ -511,4 +587,25 @@ export function formatSensorChannelValue(channel: BusSensorRuntimeChannelState, 
     return `0x${Math.trunc(value).toString(16).toUpperCase()}`;
   }
   return `${value.toFixed(channel.precision)}${suffix}`;
+}
+
+export function summarizeNativeSensorRuntime(
+  state: BusSensorRuntimeState,
+  devices: readonly RuntimeBusSensorDevice[]
+): {
+  schemaVersion: typeof BUS_SENSOR_RUNTIME_SCHEMA_VERSION;
+  deviceCount: number;
+  nativeReadyCount: number;
+  decodableCount: number;
+  appliedCount: number;
+  transactionCount: number;
+} {
+  return {
+    schemaVersion: BUS_SENSOR_RUNTIME_SCHEMA_VERSION,
+    deviceCount: devices.length,
+    nativeReadyCount: devices.filter((device) => device.nativeRuntime.canReadThroughUserFirmware).length,
+    decodableCount: devices.filter((device) => device.nativeRuntime.canDecodeTransactions).length,
+    appliedCount: Object.values(state.devices).reduce((total, device) => total + device.nativeApplyCount, 0),
+    transactionCount: Object.values(state.devices).reduce((total, device) => total + device.transactionCount, 0),
+  };
 }

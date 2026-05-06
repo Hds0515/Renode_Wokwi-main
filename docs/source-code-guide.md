@@ -301,6 +301,7 @@ Renode 已有的传感器优先复用 native peripheral。Renode 没有的传感
 
 ```bash
 npm run lint
+npm run validate:cubemx
 npm run validate:devices
 npm run validate:netlist
 npm run build
@@ -317,13 +318,46 @@ npm run smoke:i2c
 脚本含义：
 
 - `validate-device-packages.cjs`: 校验 Device Package、sensor SDK、native catalog 和 protocol codec。
+- `validate-cubemx-pack.cjs`: 校验 User Firmware Validation v2、CubeMX pin hints、native sensor contracts 和 HAL snippet。
 - `validate-netlist.cjs`: 校验 Netlist/IR、package-native Renode manifest、Renode Backend Compiler、Protocol Runtime Registry 和示例项目。
 - `validate-boards.cjs`: 校验板型 schema、Renode platform path、编译和启动链路。
 - `smoke-si7021-native.cjs`: 验证 SI7021 native Renode sensor 闭环。
 - `smoke-i2c-demo.cjs`: 验证 SSD1306 I2C transaction 和 OLED framebuffer。
 - `smoke-broker-bridge.cjs`: 验证 Signal Broker/GPIO 桥接。
 
-## 13. 当前项目边界
+## 13. User Firmware Validation System v2 和 Native Sensor Runtime v2
+
+这次新增的两个 v2 能力，目标是把“用户导入 ELF 后如何证明连线、CubeMX 配置、Renode 原生传感器和 UI 可视化是一致的”做成结构化系统，而不是靠口头说明。
+
+`src/lib/cubemx-validation.ts` 负责 User Firmware Validation System v2：
+
+- `createCubeMxValidationPack(board, wiring)`: 根据当前板型和画布连线生成验证包。
+- `USER_FIRMWARE_VALIDATION_SCHEMA_VERSION = 2`: 当前验证包版本。
+- `pinHints`: 给 CubeMX 的 GPIO/UART/I2C 引脚模式提示。
+- `scenarios`: 判断 Button->LED、UART output、SI7021 compatibility、native sensor I2C read 是否 ready。
+- `nativeSensorContracts`: 对每个 Renode 原生 I2C 传感器生成地址、HAL handle、SCL/SDA、Renode 类型、codec 状态和预期结果。
+- `snippets`: 生成非阻塞/限频 HAL 示例片段，用来提醒用户固件不要用 `HAL_MAX_DELAY` 卡住 GPIO 轮询。
+
+`src/lib/bus-sensor-runtime.ts` 负责 Native Sensor Runtime v2：
+
+- `BUS_SENSOR_RUNTIME_SCHEMA_VERSION = 2`: 当前传感器运行时状态版本。
+- `RuntimeBusSensorDevice.nativeRuntime`: 每个传感器都有一个 runtime contract。
+- `attachment`: 表示它是 Renode native、broker-only 还是 visual-only。
+- `readiness`: 表示是否完整 ready、缺 Renode path、缺 codec，或者不是 native sensor。
+- `canApplyNativeControls`: UI 滑块是否能写入 Renode monitor property。
+- `canReadThroughUserFirmware`: 用户 ELF 是否能通过 MCU I2C 读到 Renode 原生外设。
+- `canDecodeTransactions`: UI 是否已有协议 codec 能把 I2C transaction 解码成读数。
+- `summarizeNativeSensorRuntime()`: 给前端面板和验证脚本汇总 native-ready、codec、apply、transaction 数量。
+
+验证入口：
+
+- `scripts/validate-cubemx-pack.cjs`: 验证 F1/F4 的 User Firmware Validation v2，覆盖 Button/LED、UART、SI7021、BMP180、BME280。
+- `scripts/validate-device-packages.cjs`: 验证 Native Sensor Runtime v2 contract，确认 SI7021/BMP180 是完整 ready，BME280 能 native-control 但明确提示缺少协议 codec。
+- `scripts/validate-netlist.cjs`: 继续验证示例项目和 Netlist/Renode 生成链路，并断言传感器运行时 schema v2。
+
+理解这个边界很重要：Renode 原生传感器能被用户 ELF 通过真实 MCU I2C 控制器访问；UI 侧是否能把 transaction 解码成漂亮读数，取决于是否已经给该器件实现了 protocol codec。
+
+## 14. 当前项目边界
 
 已经具备：
 
