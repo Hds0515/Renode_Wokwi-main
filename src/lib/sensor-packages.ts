@@ -16,7 +16,7 @@ export const SENSOR_PACKAGE_SDK_CATALOG_VERSION = 1;
 export type SensorPackageKind = 'si7021-sensor' | 'bmp180-sensor';
 export type SensorBusProtocol = 'i2c';
 export type SensorChannelKind = string;
-export type SensorChannelUnit = 'celsius' | 'percent-rh' | 'pascal' | 'raw';
+export type SensorChannelUnit = 'celsius' | 'percent-rh' | 'pascal' | 'raw' | 'hex';
 export type SensorControlTransport = 'renode-monitor-property';
 export type SensorTransactionCodec = 'si70xx-compatible' | 'bmp180-compatible' | (string & {});
 

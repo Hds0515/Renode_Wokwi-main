@@ -53,6 +53,7 @@ type RuntimeBusManifestEntry = {
       renodeProperty: string;
       minimum: number;
       maximum: number;
+      defaultValue?: number;
       step: number;
     }>;
     nativeRenodeName?: string | null;

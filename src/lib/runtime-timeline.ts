@@ -17,6 +17,11 @@ import {
   getSensorPackageSdk,
 } from './sensor-packages';
 import type { SensorPackageKind } from './sensor-packages';
+import {
+  buildRenodeNativePeripheralName,
+  buildRenodeNativePeripheralPath,
+  findRenodeNativePeripheralCatalogEntry,
+} from './renode-native-peripheral-catalog';
 
 export const SIMULATION_CLOCK_SCHEMA_VERSION = 1;
 export const RUNTIME_TIMELINE_SCHEMA_VERSION = 1;
@@ -57,6 +62,7 @@ export type RuntimeBusDeviceManifestEntry = {
   label: string;
   address: number | null;
   model: string;
+  nativeCatalogId?: string | null;
   sensorPackage?: SensorPackageKind;
   sensorPackageTitle?: string;
   sensorPackageSdkSchemaVersion?: number;
@@ -68,6 +74,7 @@ export type RuntimeBusDeviceManifestEntry = {
     renodeProperty: string;
     minimum: number;
     maximum: number;
+    defaultValue?: number;
     step: number;
   }>;
   nativeRenodeName?: string | null;
@@ -335,6 +342,9 @@ function collectI2cDevicesFromNetlist(board: BoardSchema, netlist: CircuitNetlis
       }
       const sensorPackage = findSensorPackage(devicePackage.renodeBackend.sensorPackage);
       const sensorPackageSdk = sensorPackage ? getSensorPackageSdk(sensorPackage.kind) : null;
+      const nativeCatalogEntry = findRenodeNativePeripheralCatalogEntry(
+        devicePackage.renodeBackend.nativeCatalogId ?? sensorPackage?.native.nativeCatalogId
+      );
       const model = devicePackage.renodeBackend.model ?? 'generic-i2c';
       const sclNet = netlist.nets.find(
         (net) => net.kind === 'i2c' && net.connections.some((connection) => connection.componentId === component.id && connection.pinId === 'scl')
@@ -346,8 +356,33 @@ function collectI2cDevicesFromNetlist(board: BoardSchema, netlist: CircuitNetlis
         inferI2cBusIdFromPad(board, sclNet?.metadata?.padId) ??
         inferI2cBusIdFromPad(board, sdaNet?.metadata?.padId) ??
         normalizeBusId('i2c', 'visual');
-      const nativeRenodeName = sensorPackage ? buildRenodeSensorPeripheralName(sensorPackage.kind, component.id) : null;
+      const nativeRenodeName = sensorPackage
+        ? buildRenodeSensorPeripheralName(sensorPackage.kind, component.id)
+        : nativeCatalogEntry
+          ? buildRenodeNativePeripheralName(nativeCatalogEntry, component.id)
+          : null;
       const renodeBusName = getRenodePeripheralNameFromBusId('i2c', busId);
+      const controlChannels =
+        sensorPackageSdk?.channels.map((channel) => ({
+          id: channel.id,
+          label: channel.label,
+          unit: channel.unit,
+          renodeProperty: channel.renodeProperty,
+          minimum: channel.minimum,
+          maximum: channel.maximum,
+          defaultValue: channel.defaultValue,
+          step: channel.step,
+        })) ??
+        nativeCatalogEntry?.control.channels.map((channel) => ({
+          id: channel.id,
+          label: channel.label,
+          unit: channel.unit,
+          renodeProperty: channel.renodeProperty,
+          minimum: channel.minimum,
+          maximum: channel.maximum,
+          defaultValue: channel.defaultValue,
+          step: channel.step,
+        }));
       const devices = devicesByBusId.get(busId) ?? [];
       devices.push({
         id: `${component.id}:${model}`,
@@ -356,25 +391,20 @@ function collectI2cDevicesFromNetlist(board: BoardSchema, netlist: CircuitNetlis
         devicePackageKind: devicePackage.kind,
         devicePackageSchemaVersion: devicePackage.schemaVersion,
         label: component.label,
-        address: sensorPackage ? sensorPackage.native.defaultAddress : devicePackage.renodeBackend.address ?? null,
+        address: sensorPackage ? sensorPackage.native.defaultAddress : nativeCatalogEntry?.defaultAddress ?? devicePackage.renodeBackend.address ?? null,
         model,
+        nativeCatalogId: nativeCatalogEntry?.id ?? sensorPackage?.native.nativeCatalogId ?? null,
         sensorPackage: sensorPackage?.kind,
         sensorPackageTitle: sensorPackageSdk?.title,
         sensorPackageSdkSchemaVersion: sensorPackageSdk?.schemaVersion,
-        nativeControlTransport: sensorPackageSdk?.native.sdkControl.transport ?? null,
-        controlChannels: sensorPackageSdk?.channels.map((channel) => ({
-          id: channel.id,
-          label: channel.label,
-          unit: channel.unit,
-          renodeProperty: channel.renodeProperty,
-          minimum: channel.minimum,
-          maximum: channel.maximum,
-          step: channel.step,
-        })),
+        nativeControlTransport: sensorPackageSdk?.native.sdkControl.transport ?? nativeCatalogEntry?.control.transport ?? null,
+        controlChannels,
         nativeRenodeName,
         nativeRenodePath:
           sensorPackage && renodeBusName && nativeRenodeName
             ? buildRenodeSensorPath(sensorPackage.kind, renodeBusName, nativeRenodeName)
+            : nativeCatalogEntry && renodeBusName && nativeRenodeName
+              ? buildRenodeNativePeripheralPath(nativeCatalogEntry, renodeBusName, nativeRenodeName)
             : null,
       });
       devicesByBusId.set(busId, devices);

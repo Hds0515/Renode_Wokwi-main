@@ -41,23 +41,29 @@ const DEVICE_LIBRARY_ORDER: Record<DemoPeripheralTemplateKind, number> = {
   'ssd1306-oled': 100,
   'si7021-sensor': 200,
   'bmp180-sensor': 210,
+  'bme280-sensor': 220,
+  'hs3001-sensor': 230,
+  'sht45-sensor': 240,
 };
 
 function iconForComponent(kind: DemoPeripheralTemplateKind): DevicePackage['visual']['icon'] {
   if (kind === 'ssd1306-oled') {
     return 'oled';
   }
-  if (kind === 'si7021-sensor' || kind === 'bmp180-sensor') {
+  if (kind.endsWith('-sensor')) {
     return 'sensor';
   }
-  return kind;
+  if (kind === 'button' || kind === 'led' || kind === 'buzzer' || kind === 'rgb-led') {
+    return kind;
+  }
+  return 'sensor';
 }
 
 function groupForComponent(kind: DemoPeripheralTemplateKind): DevicePackage['visual']['library']['group'] {
   if (kind === 'ssd1306-oled') {
     return 'Bus Displays';
   }
-  if (kind === 'si7021-sensor' || kind === 'bmp180-sensor') {
+  if (kind.endsWith('-sensor')) {
     return 'Sensors';
   }
   return 'GPIO';

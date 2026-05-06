@@ -15,6 +15,7 @@ import {
 } from './device-package-types';
 import { findSensorProtocolCodec } from './sensor-protocol-codecs';
 import { getSensorPackageSdk, isSensorPackageKind } from './sensor-packages';
+import { findRenodeNativePeripheralCatalogEntry } from './renode-native-peripheral-catalog';
 
 export const DEVICE_PACKAGE_CONFORMANCE_SCHEMA_VERSION = 1;
 
@@ -137,7 +138,14 @@ function validateBackend(devicePackage: DevicePackage, issues: DevicePackageConf
   if (devicePackage.renodeBackend.type === 'renode-native-sensor' || devicePackage.renodeBackend.type === 'renode-native-peripheral') {
     assertPackage(issues, devicePackage, devicePackage.renodeBackend.manifest === 'runtime-bus-manifest', 'backend-manifest-mismatch', 'Native sensors must emit runtime-bus-manifest.');
     assertPackage(issues, devicePackage, Boolean(devicePackage.renodeBackend.nativeRenodeType), 'backend-incomplete', 'Native sensors must declare the Renode peripheral type.');
-    assertPackage(issues, devicePackage, isSensorPackageKind(devicePackage.renodeBackend.sensorPackage), 'sensor-sdk-mismatch', 'Native sensor backend must reference a known sensor package.');
+    const nativeCatalogEntry = findRenodeNativePeripheralCatalogEntry(devicePackage.renodeBackend.nativeCatalogId);
+    assertPackage(
+      issues,
+      devicePackage,
+      isSensorPackageKind(devicePackage.renodeBackend.sensorPackage) || Boolean(nativeCatalogEntry),
+      'sensor-sdk-mismatch',
+      'Native sensor backend must reference either a known sensor package or a Renode native catalog entry.'
+    );
 
     if (isSensorPackageKind(devicePackage.renodeBackend.sensorPackage)) {
       const sensorSdk = getSensorPackageSdk(devicePackage.renodeBackend.sensorPackage);
@@ -154,6 +162,21 @@ function validateBackend(devicePackage: DevicePackage, issues: DevicePackageConf
         Boolean(findSensorProtocolCodec(sensorSdk.busRuntime.transactionCodec)),
         'sensor-codec-missing',
         `Missing protocol codec ${sensorSdk.busRuntime.transactionCodec}.`
+      );
+    } else if (nativeCatalogEntry) {
+      assertPackage(
+        issues,
+        devicePackage,
+        nativeCatalogEntry.defaultAddress === devicePackage.renodeBackend.address,
+        'sensor-sdk-mismatch',
+        'Device package address must match the native catalog default address.'
+      );
+      assertPackage(
+        issues,
+        devicePackage,
+        nativeCatalogEntry.renodeType === devicePackage.renodeBackend.nativeRenodeType,
+        'backend-incomplete',
+        'Device package nativeRenodeType must match the Renode native catalog entry.'
       );
     }
   }

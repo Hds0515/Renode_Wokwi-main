@@ -52,6 +52,7 @@ src/lib/ssd1306.ts
 src/lib/si70xx.ts
 src/lib/bmp180.ts
 src/lib/renode-native-peripheral-catalog.ts
+src/lib/renode-native-device-package-generator.ts
 
 本地执行层
 electron/main.cjs
@@ -75,7 +76,7 @@ const circuitNetlist = useMemo(() => createNetlistFromWiring(wiring, selectedBoa
 
 - `createNetlistFromWiring()`: 把 UI 的 `DemoWiring` 转成统一 `CircuitNetlist`。
 - `createBoardComponent()`: 把开发板可见引脚变成 board component。
-- `createComponentInstanceFromDevice()`: 把 LED、按钮、OLED、SI7021、BMP180 等工作区元件变成 package-native component，并写入 `devicePackageKind`、pin role、protocol、Renode backend。
+- `createComponentInstanceFromDevice()`: 把 LED、按钮、OLED、SI7021、BMP180、BME280、HS3001、SHT45 等工作区元件变成 package-native component，并写入 `devicePackageKind`、pin role、protocol、Renode backend。
 - `signalNets`: 把 GPIO/I2C/SPI/UART 端点连接到 MCU pad，并把 net 的 protocol/backend metadata 保留下来。
 
 注意：当前项目不再生成外部 VCC/GND 可视化连线，也不会把 VCC/GND 作为项目保存信息写进 Netlist/IR。真正会影响 Renode 仿真的仍然是 GPIO/I2C/UART/SPI 等数字协议连接。
@@ -147,6 +148,7 @@ window.localWokwi.onSimulationEvent(...)
 - `packages/devices/bmp180/index.ts`
 - `packages/devices/ssd1306/index.ts`
 - `packages/devices/uart-terminal/index.ts`
+- `src/lib/renode-native-device-package-generator.ts`
 
 每个 Device Package 主要描述八类信息：
 
@@ -220,7 +222,8 @@ Renode Backend Compiler 入口在 `src/lib/device-package-renode-backend-compile
 传感器相关文件：
 
 - `src/lib/sensor-packages.ts`: 传感器 SDK 元数据，例如 SI7021 的 Renode 类型、地址、通道、属性名。
-- `src/lib/renode-native-peripheral-catalog.ts`: Renode 原生外设 catalog，把 `si70xx`、`bmp180` 这类条目映射到真实 Renode 类型、默认地址、monitor 属性和源码参考。
+- `src/lib/renode-native-peripheral-catalog.ts`: Renode 原生外设 catalog v2，把 `si70xx`、`bmp180`、`bme280`、`hs3001`、`sht45` 这类条目映射到真实 Renode 类型、默认地址、monitor 属性、自动生成 Device Package 所需的 visual/runtime/validation 元数据和源码参考。
+- `src/lib/renode-native-device-package-generator.ts`: 自动 Device Package 生成器，把 catalog entry 转成 `DevicePackageSource`，让 BME280/HS3001/SHT45 这类 Renode 已有原生模型不需要手写一个独立 package 文件。
 - `src/lib/bus-sensor-runtime.ts`: 通用传感器运行时状态和控制逻辑，不直接写死某一个传感器协议。
 - `src/lib/sensor-protocol-codecs.ts`: 传感器协议 codec registry，负责按 package 中声明的 codec 找到对应解析器。
 - `src/lib/si70xx.ts`: SI70xx 协议 codec 的底层工具，负责命令、raw 数据、温湿度转换。
@@ -256,6 +259,20 @@ BMP180 的闭环目前是：
 
 注意：BMP180 的生成 demo 固件暂时只提示“已挂载 native peripheral”，不生成完整 BMP180 校准/补偿算法；这一步更适合在 User Firmware Mode 用 CubeMX/HAL 或裸机驱动验证。
 
+BME280/HS3001/SHT45 的闭环现在是 catalog-generated：
+
+```text
+Renode Native Peripheral Catalog v2
+-> 自动生成 DevicePackageSource
+-> packages/devices/index.ts 汇入 generated-native sources
+-> 用户从元件库拖入 BME280/HS3001/SHT45 并连接 SCL/SDA
+-> Netlist/Renode Backend Compiler 按 nativeCatalogId 生成 I2C native peripheral
+-> Runtime Bus Manifest 暴露 nativeRenodePath 和 controlChannels
+-> Bus Sensor Runtime 根据 catalog channels 渲染通用控制面板
+```
+
+这些 generated-native 传感器当前先验证“真实 Renode 原生外设挂载 + monitor property 控制 + UI 通道可视化”。它们不会伪造 MCU 读数；如果需要像 SI7021/BMP180 一样在 UI 侧解码具体 I2C transaction，需要继续给对应协议添加 codec。
+
 ## 7. 前端应该怎么修改
 
 主要区域在 `src/App.tsx`：
@@ -277,12 +294,13 @@ BMP180 的闭环目前是：
 新增一个 I2C 传感器时：
 
 1. 先在 `src/lib/renode-native-peripheral-catalog.ts` 添加 Renode 原生条目，记录 `renodeType`、默认地址、monitor 属性和源码/Robot 参考。
-2. 在 `src/lib/sensor-packages.ts` 添加 sensor package 和 channel 元数据，尽量从 catalog 复用 native metadata。
-3. 在 `packages/devices/<sensor>/index.ts` 添加 Device Package。
-4. 如果协议与 SI70xx/BMP180 不同，在 `src/lib/<codec>.ts` 或 `src/lib/sensor-protocol-codecs.ts` 添加 codec，并注册到 `SENSOR_PROTOCOL_CODECS`。
-5. 不要在 `src/lib/bus-sensor-runtime.ts` 写新的传感器分支；它应该通过 codec registry 自动调用对应的 transaction decode。
-6. 确认 `src/lib/runtime-timeline.ts` 能把它加入 runtime bus manifest。
-7. 如果要 MCU 真正读到数据，在 `src/lib/firmware.ts` 生成对应固件读写逻辑，或优先用 User Firmware Mode 上传 `.elf`。
+2. 如果 Renode 已有原生模型，优先在 `src/lib/renode-native-peripheral-catalog.ts` 增加 catalog entry。
+3. 如果只需要 native monitor 控制和通用可视化，启用 catalog 的 generated package metadata 即可，由 `src/lib/renode-native-device-package-generator.ts` 自动生成 Device Package。
+4. 如果需要保存为手写包或保留特殊逻辑，再在 `packages/devices/<sensor>/index.ts` 添加独立 Device Package。
+5. 如果协议与 SI70xx/BMP180 不同，在 `src/lib/<codec>.ts` 或 `src/lib/sensor-protocol-codecs.ts` 添加 codec，并注册到 `SENSOR_PROTOCOL_CODECS`。
+6. 不要在 `src/lib/bus-sensor-runtime.ts` 写新的传感器分支；它应该优先通过 catalog channels 渲染控制，通过 codec registry 自动调用 transaction decode。
+7. 确认 `src/lib/runtime-timeline.ts` 能把它加入 runtime bus manifest。
+8. 如果要 MCU 真正读到数据，在 `src/lib/firmware.ts` 生成对应固件读写逻辑，或优先用 User Firmware Mode 上传 `.elf`。
 8. 如果 Renode 已支持该传感器，在 `.repl` 中挂 native peripheral。
 9. 如果 Renode 不支持，准备 C# peripheral 或 broker-based MVP。
 9. 给 `scripts/validate-device-packages.cjs`、`scripts/validate-netlist.cjs` 或 smoke script 加验证。
@@ -306,7 +324,7 @@ BMP180 的闭环目前是：
 验证脚本在 `scripts/`：
 
 - `validate-device-packages.cjs`: 校验 Device Package 是否能完整描述 visual、pins、Renode backend、runtime panel、event parser、sensor SDK、Renode native catalog 和 protocol codec。
-- `validate-netlist.cjs`: 校验 Netlist/IR、组件包、传感器包、Device Package、package-native Renode manifest、Renode Backend Compiler、Protocol Runtime Registry、示例项目，并额外合成 BMP180 I2C fixture 验证 `Sensors.BMP180` 生成链路。
+- `validate-netlist.cjs`: 校验 Netlist/IR、组件包、传感器包、Device Package、package-native Renode manifest、Renode Backend Compiler、Protocol Runtime Registry、示例项目，并额外合成 BMP180/BME280/HS3001/SHT45 I2C fixture 验证 native catalog 与自动 package 生成链路。
 - `validate-boards.cjs`: 校验板型 schema、Renode platform path、编译和启动链路。
 - `smoke-si7021-native.cjs`: 验证 SI7021 native Renode sensor 闭环。
 - `smoke-i2c-demo.cjs`: 验证 SSD1306 I2C transaction 和 OLED framebuffer。
@@ -342,6 +360,7 @@ npm run smoke:i2c
 - GPIO、UART、I2C 运行事件可视化。
 - SI7021 native Renode sensor 闭环。
 - BMP180 native Renode peripheral catalog/package 验证链路。
+- BME280/HS3001/SHT45 catalog-generated Device Package 验证链路。
 - SSD1306 transaction 到 framebuffer 预览。
 - Device Package Compiler 和 Protocol Runtime Registry。
 
@@ -364,7 +383,7 @@ npm run smoke:i2c
 当前项目的 demo 固件不是写死“某个按键控制某个 LED”，而是根据这几类数据动态生成：
 
 1. `wiring / Netlist`
-用户在画布上把 Button、LED、OLED、SI7021、BMP180 等外设连到哪个 MCU 引脚，先变成 `CircuitNetlist`，再生成 `main.c / board.repl / manifest`。
+用户在画布上把 Button、LED、OLED、SI7021、BMP180、BME280、HS3001、SHT45 等外设连到哪个 MCU 引脚，先变成 `CircuitNetlist`，再生成 `main.c / board.repl / manifest`。
 源码入口：[src/lib/netlist.ts](F:/YL/Renode_Wokwi-main/src/lib/netlist.ts:770)
 
 2. 板型 schema

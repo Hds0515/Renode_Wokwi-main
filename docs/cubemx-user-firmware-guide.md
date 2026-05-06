@@ -22,6 +22,7 @@
 - UART 输出到本项目右侧 UART Terminal。
 - SI7021 通过 MCU I2C 控制器读取 Renode native `Sensors.SI70xx`。
 - BMP180 通过 MCU I2C 控制器读取 Renode native `Sensors.BMP180`。
+- BME280、HS3001、SHT45 可先作为 Renode native catalog-generated 传感器挂载和调参，再用 User Firmware 编写对应 I2C 驱动验证。
 
 ## 通用步骤
 
@@ -94,7 +95,7 @@ HAL_UART_Transmit(&huart2, (uint8_t *)msg, sizeof(msg) - 1, 10);
 
 ## I2C1 引脚
 
-SI7021 和 BMP180 当前都走 `I2C1`。
+SI7021、BMP180、BME280、HS3001、SHT45 当前都走 `I2C1`。
 
 | 板型 | SCL | SDA | CubeMX 配置 |
 | --- | --- | --- | --- |
@@ -154,7 +155,7 @@ static int32_t si7021_temperature_centi(const uint8_t raw[2])
 
 ## BMP180 用法
 
-BMP180 是本项目新增的 Renode native peripheral package。它通过 `Renode Native Peripheral Catalog v1` 映射到 Renode 原生模型：
+BMP180 是本项目新增的 Renode native peripheral package。它通过 `Renode Native Peripheral Catalog v2` 映射到 Renode 原生模型：
 
 ```text
 Sensors.BMP180 @ i2cX 0x77
@@ -313,6 +314,26 @@ while (1)
 ```
 
 如果只连接了 SI7021 或只连接了 BMP180，就删除另一个传感器的读取函数调用。
+
+## Catalog-generated 原生传感器
+
+本项目现在还支持从 `Renode Native Peripheral Catalog v2` 自动生成 Device Package 的三个原生传感器：
+
+| 画布元件 | Renode 原生类型 | 7-bit 地址 | 可调 Monitor 属性 |
+| --- | --- | --- | --- |
+| `BME280 Sensor` | `I2C.BME280` | `0x76` | `Temperature`、`Humidity`、`Pressure` |
+| `HS3001 Sensor` | `Sensors.HS3001` | `0x44` | `Temperature`、`Humidity` |
+| `SHT45 Sensor` | `I2C.SHT45` | `0x44` | `Temperature`、`Humidity`、`SerialNumber` |
+
+使用方式和 BMP180 类似：
+
+1. 在画布拖入对应传感器。
+2. 将 `SCL`、`SDA` 连到当前板型的 `I2C1_SCL`、`I2C1_SDA`。
+3. 选择 `User Firmware` 模式导入你用 CubeMX/IDE 编译出的 `.elf`。
+4. 启动仿真后，右侧 Sensor Runtime 会根据 catalog channel 自动生成滑块。
+5. 点击 `Apply Channels To Native Renode Sensor` 会把数值写入 Renode 原生外设的 monitor property。
+
+注意：这三个 catalog-generated 传感器当前不会自动生成完整 HAL 驱动代码，也不会伪造 UI 侧 I2C 读数。它们符合“MCU 固件通过 I2C 控制器访问 Renode 原生外设”的仿真逻辑；具体寄存器读写流程需要你在 User Firmware 中按器件数据手册实现。
 
 ## 真实仿真逻辑注意点
 

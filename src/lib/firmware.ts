@@ -243,7 +243,10 @@ export type DemoPeripheralTemplateKind =
   | 'rgb-led'
   | 'ssd1306-oled'
   | 'si7021-sensor'
-  | 'bmp180-sensor';
+  | 'bmp180-sensor'
+  | 'bme280-sensor'
+  | 'hs3001-sensor'
+  | 'sht45-sensor';
 
 export type DemoPeripheralTemplateEndpointDefinition = {
   id: string;
@@ -578,6 +581,108 @@ export const DEMO_PERIPHERAL_TEMPLATES: readonly DemoPeripheralTemplateDefinitio
         label: 'SDA',
         kind: 'i2c',
         accentColor: '#f97316',
+        defaultSignalLabel: 'SDA',
+        direction: 'bidirectional',
+        requiredCapabilities: ['gpio', 'i2c-sda'],
+      },
+    ],
+  },
+  {
+    kind: 'bme280-sensor',
+    title: 'BME280 Sensor',
+    subtitle: 'I2C temperature/humidity/pressure',
+    description: 'A Renode native BME280 I2C environmental sensor endpoint generated from the native peripheral catalog.',
+    labelPrefix: 'BME280',
+    accentColor: '#a855f7',
+    category: 'sensor',
+    behavior: {
+      role: 'i2c-sensor',
+      powerRequired: false,
+      defaultController: null,
+    },
+    endpoints: [
+      {
+        id: 'scl',
+        label: 'SCL',
+        kind: 'i2c',
+        accentColor: '#c084fc',
+        defaultSignalLabel: 'SCL',
+        direction: 'bidirectional',
+        requiredCapabilities: ['gpio', 'i2c-scl'],
+      },
+      {
+        id: 'sda',
+        label: 'SDA',
+        kind: 'i2c',
+        accentColor: '#a855f7',
+        defaultSignalLabel: 'SDA',
+        direction: 'bidirectional',
+        requiredCapabilities: ['gpio', 'i2c-sda'],
+      },
+    ],
+  },
+  {
+    kind: 'hs3001-sensor',
+    title: 'HS3001 Sensor',
+    subtitle: 'I2C temperature/humidity',
+    description: 'A Renode native HS3001 I2C temperature and humidity sensor endpoint generated from the native peripheral catalog.',
+    labelPrefix: 'HS3001',
+    accentColor: '#22c55e',
+    category: 'sensor',
+    behavior: {
+      role: 'i2c-sensor',
+      powerRequired: false,
+      defaultController: null,
+    },
+    endpoints: [
+      {
+        id: 'scl',
+        label: 'SCL',
+        kind: 'i2c',
+        accentColor: '#86efac',
+        defaultSignalLabel: 'SCL',
+        direction: 'bidirectional',
+        requiredCapabilities: ['gpio', 'i2c-scl'],
+      },
+      {
+        id: 'sda',
+        label: 'SDA',
+        kind: 'i2c',
+        accentColor: '#22c55e',
+        defaultSignalLabel: 'SDA',
+        direction: 'bidirectional',
+        requiredCapabilities: ['gpio', 'i2c-sda'],
+      },
+    ],
+  },
+  {
+    kind: 'sht45-sensor',
+    title: 'SHT45 Sensor',
+    subtitle: 'I2C temperature/humidity',
+    description: 'A Renode native SHT45 I2C temperature and humidity sensor endpoint generated from the native peripheral catalog.',
+    labelPrefix: 'SHT45',
+    accentColor: '#14b8a6',
+    category: 'sensor',
+    behavior: {
+      role: 'i2c-sensor',
+      powerRequired: false,
+      defaultController: null,
+    },
+    endpoints: [
+      {
+        id: 'scl',
+        label: 'SCL',
+        kind: 'i2c',
+        accentColor: '#5eead4',
+        defaultSignalLabel: 'SCL',
+        direction: 'bidirectional',
+        requiredCapabilities: ['gpio', 'i2c-scl'],
+      },
+      {
+        id: 'sda',
+        label: 'SDA',
+        kind: 'i2c',
+        accentColor: '#14b8a6',
         defaultSignalLabel: 'SDA',
         direction: 'bidirectional',
         requiredCapabilities: ['gpio', 'i2c-sda'],

@@ -43,7 +43,12 @@ const {
   RENODE_NATIVE_PERIPHERAL_CATALOG_SCHEMA_VERSION,
   RENODE_NATIVE_PERIPHERAL_CATALOG,
   getRenodeNativePeripheralCatalogEntry,
+  getGeneratedRenodeNativePeripheralCatalogEntries,
 } = require('../src/lib/renode-native-peripheral-catalog.ts');
+const {
+  RENODE_NATIVE_DEVICE_PACKAGE_GENERATOR_VERSION,
+  GENERATED_RENODE_NATIVE_DEVICE_PACKAGE_SOURCES,
+} = require('../src/lib/renode-native-device-package-generator.ts');
 const {
   DEVICE_PACKAGE_NATIVE_RUNTIME_SCHEMA_VERSION,
   countDevicePackageInstances,
@@ -80,11 +85,25 @@ function validateRepresentativeDevices() {
   assert(uart.validationFixture.representative === 'uart-instrument', 'UART Terminal must represent the virtual instrument fixture.');
   assert(uart.renodeBackend.type === 'virtual-uart-terminal', 'UART Terminal must use the virtual UART backend.');
   assert(uart.runtimePanel.eventParsers.includes('uart-line-buffer'), 'UART Terminal must parse UART line buffers.');
+
+  ['bme280-sensor', 'hs3001-sensor', 'sht45-sensor'].forEach((kind) => {
+    const generated = getDevicePackage(kind);
+    assert(generated.compiler.source === 'independent-package', `${kind} must be compiled from a generated Device Package source.`);
+    assert(generated.renodeBackend.type === 'renode-native-peripheral', `${kind} must use the generic native Renode peripheral backend.`);
+    assert(generated.runtimePanel.controls.includes('sensor-control'), `${kind} must expose generic sensor controls from catalog channels.`);
+    assert(generated.runtimePanel.eventParsers.includes('bus-transaction'), `${kind} must enter the unified bus transaction event stream.`);
+  });
 }
 
 function validateRenodeNativePeripheralCatalog() {
-  assert(RENODE_NATIVE_PERIPHERAL_CATALOG_SCHEMA_VERSION === 1, 'Renode Native Peripheral Catalog should use schema v1.');
-  assert(RENODE_NATIVE_PERIPHERAL_CATALOG.entries.length >= 2, 'Expected SI70xx and BMP180 native peripheral catalog entries.');
+  assert(RENODE_NATIVE_PERIPHERAL_CATALOG_SCHEMA_VERSION === 2, 'Renode Native Peripheral Catalog should use schema v2.');
+  assert(RENODE_NATIVE_PERIPHERAL_CATALOG.entries.length >= 5, 'Expected SI70xx, BMP180, BME280, HS3001, and SHT45 native catalog entries.');
+  assert(RENODE_NATIVE_DEVICE_PACKAGE_GENERATOR_VERSION === 1, 'Renode Native Device Package Generator should use version v1.');
+  assert(GENERATED_RENODE_NATIVE_DEVICE_PACKAGE_SOURCES.length >= 3, 'Expected at least three catalog-generated native Device Package sources.');
+  assert(
+    getGeneratedRenodeNativePeripheralCatalogEntries().length >= 5,
+    'Catalog should mark native peripheral entries as eligible for Device Package generation.'
+  );
 
   const bmp180 = getRenodeNativePeripheralCatalogEntry('bmp180');
   assert(bmp180.renodeType === 'Sensors.BMP180', 'BMP180 catalog entry should map to Renode Sensors.BMP180.');
@@ -94,6 +113,19 @@ function validateRenodeNativePeripheralCatalog() {
       bmp180.control.channels.some((channel) => channel.renodeProperty === 'UncompensatedPressure'),
     'BMP180 catalog entry should expose Renode Temperature and UncompensatedPressure controls.'
   );
+
+  const bme280 = getRenodeNativePeripheralCatalogEntry('bme280');
+  assert(bme280.renodeType === 'I2C.BME280', 'BME280 catalog entry should map to Renode I2C.BME280.');
+  assert(bme280.defaultAddress === 0x76, 'BME280 catalog entry should use I2C address 0x76.');
+  assert(bme280.control.channels.some((channel) => channel.renodeProperty === 'Pressure'), 'BME280 should expose pressure control.');
+
+  const hs3001 = getRenodeNativePeripheralCatalogEntry('hs3001');
+  assert(hs3001.renodeType === 'Sensors.HS3001', 'HS3001 catalog entry should map to Renode Sensors.HS3001.');
+  assert(hs3001.defaultAddress === 0x44, 'HS3001 catalog entry should use I2C address 0x44.');
+
+  const sht45 = getRenodeNativePeripheralCatalogEntry('sht45');
+  assert(sht45.renodeType === 'I2C.SHT45', 'SHT45 catalog entry should map to Renode I2C.SHT45.');
+  assert(sht45.control.channels.some((channel) => channel.renodeProperty === 'SerialNumber'), 'SHT45 should expose serial number control.');
 }
 
 function validateSensorProtocolCodecRegistry() {

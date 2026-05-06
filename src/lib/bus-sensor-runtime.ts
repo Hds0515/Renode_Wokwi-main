@@ -11,7 +11,7 @@ import {
   getSensorPackageSdk,
   isSensorPackageKind,
 } from './sensor-packages';
-import type { SensorChannelKind, SensorPackageKind, SensorPackageSdk, SensorPackageSdkChannel } from './sensor-packages';
+import type { SensorChannelKind, SensorPackageKind, SensorPackageSdk, SensorPackageSdkChannel, SensorTransactionCodec } from './sensor-packages';
 import {
   createProtocolRuntimeRegistry,
   getProtocolRuntimeSensorDevices,
@@ -19,8 +19,9 @@ import {
 import type { ProtocolRuntimeDevice, ProtocolRuntimeRegistry } from './protocol-runtime-registry';
 import {
   SensorProtocolBrokerTransaction,
-  getSensorProtocolCodec,
+  findSensorProtocolCodec,
 } from './sensor-protocol-codecs';
+import { findRenodeNativePeripheralCatalogEntry } from './renode-native-peripheral-catalog';
 
 export const BUS_SENSOR_RUNTIME_SCHEMA_VERSION = 1;
 
@@ -33,23 +34,47 @@ export type RuntimeBusSensorDevice = {
   label: string;
   address: number | null;
   model: string;
-  sensorPackage: SensorPackageKind;
+  sensorPackage?: SensorPackageKind;
   sensorPackageTitle?: string;
   sensorPackageSdkSchemaVersion?: number;
+  nativeCatalogId?: string | null;
   nativeControlTransport?: string | null;
   controlChannels?: ProtocolRuntimeDevice['controlChannels'];
   nativeRenodeName?: string | null;
   nativeRenodePath?: string | null;
   busId: string;
   busLabel: string;
-  package: SensorPackageSdk;
-  channels: readonly SensorPackageSdkChannel[];
+  package: RuntimeBusSensorPackageMetadata;
+  channels: readonly RuntimeBusSensorChannelDefinition[];
+  transactionCodec: SensorTransactionCodec | null;
+};
+
+export type RuntimeBusSensorChannelDefinition = SensorPackageSdkChannel | {
+  id: string;
+  label: string;
+  unit: SensorPackageSdkChannel['unit'] | 'pascal' | 'raw' | 'hex' | string;
+  minimum: number;
+  maximum: number;
+  defaultValue: number;
+  step: number;
+  renodeProperty: string;
+  ui: {
+    precision: number;
+  };
+};
+
+export type RuntimeBusSensorPackageMetadata = Pick<SensorPackageSdk, 'title' | 'protocol'> & {
+  kind: string;
+  nativeCatalogId?: string | null;
+  busRuntime?: {
+    transactionCodec?: SensorTransactionCodec | null;
+  };
 };
 
 export type BusSensorRuntimeChannelState = {
   id: SensorChannelKind;
   label: string;
-  unit: SensorPackageSdkChannel['unit'];
+  unit: string;
   minimum: number;
   maximum: number;
   step: number;
@@ -64,7 +89,8 @@ export type BusSensorRuntimeDeviceState = {
   deviceId: string;
   componentId: string;
   label: string;
-  sensorPackage: SensorPackageKind;
+  sensorPackage?: SensorPackageKind;
+  nativeCatalogId?: string | null;
   busId: string;
   busLabel: string;
   address: number;
@@ -90,7 +116,8 @@ export type NativeSensorControlChannelRequest = {
 
 export type NativeSensorControlRequestPayload = {
   path: string;
-  sensorPackage: SensorPackageKind;
+  sensorPackage?: SensorPackageKind;
+  nativeCatalogId?: string | null;
   channels: NativeSensorControlChannelRequest[];
 };
 
@@ -102,11 +129,40 @@ export type BusSensorBrokerTransaction = SensorProtocolBrokerTransaction;
  * bridge from "I2C device discovered" to "render sliders and decode reads".
  */
 function createRuntimeSensorDevice(device: ProtocolRuntimeDevice): RuntimeBusSensorDevice[] {
-  if (device.protocol !== 'i2c' || !isSensorPackageKind(device.sensorPackage)) {
+  if (device.protocol !== 'i2c' || device.role !== 'sensor') {
     return [];
   }
 
-  const sensorPackage = getSensorPackageSdk(device.sensorPackage);
+  const sensorPackage = isSensorPackageKind(device.sensorPackage) ? getSensorPackageSdk(device.sensorPackage) : null;
+  const catalogEntry = findRenodeNativePeripheralCatalogEntry(device.nativeCatalogId);
+  const controlChannels = device.controlChannels ?? catalogEntry?.control.channels ?? [];
+  if (!sensorPackage && controlChannels.length === 0) {
+    return [];
+  }
+  const channels: readonly RuntimeBusSensorChannelDefinition[] = sensorPackage
+    ? sensorPackage.channels
+    : controlChannels.map((channel) => ({
+        ...channel,
+        defaultValue: channel.defaultValue ?? (channel.minimum <= 0 && channel.maximum >= 0 ? 0 : channel.minimum),
+        ui: {
+          precision: channel.step < 1 ? 1 : 0,
+        },
+      }));
+  const packageMetadata: RuntimeBusSensorPackageMetadata = sensorPackage ?? {
+    kind: device.devicePackageKind ?? device.nativeCatalogId ?? device.model,
+    title: catalogEntry?.devicePackage.title ?? device.label,
+    nativeCatalogId: catalogEntry?.id ?? device.nativeCatalogId,
+    protocol: {
+      bus: 'i2c',
+      addressMode: 'seven-bit',
+      defaultAddress: device.address ?? catalogEntry?.defaultAddress ?? 0,
+      transactionModel: 'mcu-initiated-reads',
+    },
+    busRuntime: {
+      transactionCodec: null,
+    },
+  };
+
   return [
     {
       id: device.id,
@@ -117,17 +173,19 @@ function createRuntimeSensorDevice(device: ProtocolRuntimeDevice): RuntimeBusSen
       label: device.label,
       address: device.address,
       model: device.model,
-      sensorPackage: device.sensorPackage,
+      ...(sensorPackage ? { sensorPackage: sensorPackage.kind } : {}),
       sensorPackageTitle: device.sensorPackageTitle,
       sensorPackageSdkSchemaVersion: device.sensorPackageSdkSchemaVersion,
+      nativeCatalogId: catalogEntry?.id ?? device.nativeCatalogId,
       nativeControlTransport: device.nativeControlTransport,
       controlChannels: device.controlChannels,
       nativeRenodeName: device.nativeRenodeName,
       nativeRenodePath: device.nativeRenodePath,
       busId: device.busId ?? 'i2c:visual',
       busLabel: device.busLabel ?? 'I2C Visual Bus',
-      package: sensorPackage,
-      channels: sensorPackage.channels,
+      package: packageMetadata,
+      channels,
+      transactionCodec: packageMetadata.busRuntime?.transactionCodec ?? null,
     },
   ];
 }
@@ -140,7 +198,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, numericValue));
 }
 
-function createChannelState(channel: SensorPackageSdkChannel): BusSensorRuntimeChannelState {
+function createChannelState(channel: RuntimeBusSensorChannelDefinition): BusSensorRuntimeChannelState {
   return {
     id: channel.id,
     label: channel.label,
@@ -158,9 +216,8 @@ function createChannelState(channel: SensorPackageSdkChannel): BusSensorRuntimeC
 function createProtocolState(device: RuntimeBusSensorDevice): unknown | null {
   // Each sensor codec owns protocol-specific rolling state. More codecs can add
   // their own state objects without changing the React panel contract.
-  return getSensorProtocolCodec(device.package.busRuntime.transactionCodec).createInitialState(
-    device.address ?? device.package.protocol.defaultAddress
-  );
+  const codec = device.transactionCodec ? findSensorProtocolCodec(device.transactionCodec) : null;
+  return codec ? codec.createInitialState(device.address ?? device.package.protocol.defaultAddress) : null;
 }
 
 function createDeviceState(device: RuntimeBusSensorDevice): BusSensorRuntimeDeviceState {
@@ -170,6 +227,7 @@ function createDeviceState(device: RuntimeBusSensorDevice): BusSensorRuntimeDevi
     componentId: device.componentId,
     label: device.label,
     sensorPackage: device.sensorPackage,
+    nativeCatalogId: device.nativeCatalogId ?? null,
     busId: device.busId,
     busLabel: device.busLabel,
     address: device.address ?? device.package.protocol.defaultAddress,
@@ -297,6 +355,7 @@ export function createNativeSensorControlRequest(
   return {
     path: device.nativeRenodePath,
     sensorPackage: device.sensorPackage,
+    nativeCatalogId: device.nativeCatalogId,
     channels: Object.values(state.channels).map((channel) => ({
       id: channel.id,
       renodeProperty: channel.renodeProperty,
@@ -352,7 +411,11 @@ function applyCodecRuntimeEvent(
   device: BusSensorRuntimeDeviceState,
   event: RuntimeBusTimelineEvent
 ): BusSensorRuntimeDeviceState {
-  const result = getSensorProtocolCodec(runtimeDevice.package.busRuntime.transactionCodec).applyEvent({
+  const codec = runtimeDevice.transactionCodec ? findSensorProtocolCodec(runtimeDevice.transactionCodec) : null;
+  if (!codec) {
+    return device;
+  }
+  const result = codec.applyEvent({
     state: device.protocolState,
     address: device.address,
     event,
@@ -418,7 +481,11 @@ export function createBusSensorReadTransactions(
 ): BusSensorBrokerTransaction[] {
   // UI-triggered reads are timeline/demo helpers. Real MCU reads still happen
   // inside Renode through the generated/user firmware and native sensor model.
-  return getSensorProtocolCodec(device.package.busRuntime.transactionCodec).createReadTransactions({
+  const codec = device.transactionCodec ? findSensorProtocolCodec(device.transactionCodec) : null;
+  if (!codec) {
+    return [];
+  }
+  return codec.createReadTransactions({
     busId: device.busId,
     busLabel: device.busLabel,
     componentId: device.componentId,
@@ -432,6 +499,16 @@ export function formatSensorChannelValue(channel: BusSensorRuntimeChannelState, 
   if (value === null) {
     return 'none';
   }
-  const suffix = channel.unit === 'celsius' ? ' C' : channel.unit === 'percent-rh' ? ' %RH' : '';
+  const suffix =
+    channel.unit === 'celsius'
+      ? ' C'
+      : channel.unit === 'percent-rh'
+        ? ' %RH'
+        : channel.unit === 'pascal'
+          ? ' Pa'
+          : '';
+  if (channel.unit === 'hex') {
+    return `0x${Math.trunc(value).toString(16).toUpperCase()}`;
+  }
   return `${value.toFixed(channel.precision)}${suffix}`;
 }

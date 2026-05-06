@@ -63,6 +63,7 @@ export type ProtocolRuntimeDevice = {
   sensorPackage?: SensorPackageKind;
   sensorPackageTitle?: string;
   sensorPackageSdkSchemaVersion?: number;
+  nativeCatalogId?: string | null;
   nativeControlTransport?: string | null;
   controlChannels?: RuntimeBusDeviceManifestEntry['controlChannels'];
   nativeRenodeName?: string | null;
@@ -175,6 +176,10 @@ function classifyBusDevice(device: RuntimeBusDeviceManifestEntry): ProtocolRunti
   if (isSensorPackageKind(device.sensorPackage)) {
     return 'sensor';
   }
+  const devicePackage = findDevicePackage(device.devicePackageKind);
+  if (devicePackage?.category === 'sensor') {
+    return 'sensor';
+  }
   if (device.model === 'ssd1306') {
     return 'display';
   }
@@ -213,6 +218,7 @@ function createBusDevice(entry: RuntimeBusManifestEntry, device: RuntimeBusDevic
     ...(isSensorPackageKind(device.sensorPackage) ? { sensorPackage: device.sensorPackage } : {}),
     sensorPackageTitle: device.sensorPackageTitle,
     sensorPackageSdkSchemaVersion: device.sensorPackageSdkSchemaVersion,
+    nativeCatalogId: device.nativeCatalogId,
     nativeControlTransport: device.nativeControlTransport,
     controlChannels: device.controlChannels,
     nativeRenodeName: device.nativeRenodeName,
@@ -380,7 +386,7 @@ export function getProtocolRuntimeDevicesByModel(
 }
 
 export function getProtocolRuntimeSensorDevices(registry: ProtocolRuntimeRegistry): ProtocolRuntimeDevice[] {
-  return registry.devices.filter((device) => device.role === 'sensor' && isSensorPackageKind(device.sensorPackage));
+  return registry.devices.filter((device) => device.role === 'sensor');
 }
 
 export function getProtocolRuntimeDevicesByProtocol(
